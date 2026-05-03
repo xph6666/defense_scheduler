@@ -4,7 +4,7 @@ import type { ScheduleConflict } from '../types/conflict'
 import { getScheduleResult } from '../utils/scheduleStorage'
 import { checkConflictsMock } from '../utils/conflictMock'
 
-const USE_MOCK = true
+const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
 const getConflictsKey = (defenseType: DefenseType) => `schedule_conflicts_${defenseType}`
 const getCheckedAtKey = (defenseType: DefenseType) => `schedule_conflicts_checked_at_${defenseType}`

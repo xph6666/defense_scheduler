@@ -31,3 +31,8 @@ __pycache__/
 db.sqlite3 
 .idea/ 
 .DS_Store 
+
+# Test Data and Env
+.env
+*.xlsx
+generate_large_test_data.py

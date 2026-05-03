@@ -6,15 +6,21 @@ import { mockClassrooms } from '../utils/mockData'
 let classroomsData = [...mockClassrooms]
 let nextId = 6
 
+const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+
 export const listClassrooms = async () => {
-  // return request.get('/classrooms')
+  if (!USE_MOCK) {
+    return request.get('/rooms/') as Promise<Classroom[]>
+  }
   return new Promise<Classroom[]>(resolve => {
     setTimeout(() => resolve([...classroomsData]), 300)
   })
 }
 
 export const createClassroom = async (data: Omit<Classroom, 'id'>) => {
-  // return request.post('/classrooms', data)
+  if (!USE_MOCK) {
+    return request.post('/rooms/', data) as Promise<Classroom>
+  }
   return new Promise<Classroom>(resolve => {
     setTimeout(() => {
       const newClassroom = { ...data, id: nextId++ }
@@ -25,7 +31,9 @@ export const createClassroom = async (data: Omit<Classroom, 'id'>) => {
 }
 
 export const updateClassroom = async (id: number, data: Partial<Classroom>) => {
-  // return request.put(`/classrooms/${id}`, data)
+  if (!USE_MOCK) {
+    return request.put(`/rooms/${id}/`, data) as Promise<Classroom>
+  }
   return new Promise<Classroom>((resolve, reject) => {
     setTimeout(() => {
       const index = classroomsData.findIndex(t => t.id === id)
@@ -40,7 +48,9 @@ export const updateClassroom = async (id: number, data: Partial<Classroom>) => {
 }
 
 export const deleteClassroom = async (id: number) => {
-  // return request.delete(`/classrooms/${id}`)
+  if (!USE_MOCK) {
+    return request.delete(`/rooms/${id}/`)
+  }
   return new Promise<void>((resolve, reject) => {
     setTimeout(() => {
       const index = classroomsData.findIndex(t => t.id === id)
@@ -50,6 +60,35 @@ export const deleteClassroom = async (id: number) => {
       } else {
         reject(new Error('Classroom not found'))
       }
+    }, 300)
+  })
+}
+
+export const importClassrooms = async (file: File) => {
+  if (!USE_MOCK) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post('/rooms/import_data/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  }
+  return new Promise<{ message: string }>(resolve => {
+    setTimeout(() => {
+      resolve({ message: 'Mock: 导入成功（Mock 模式下仅模拟）' })
+    }, 500)
+  })
+}
+
+export const batchDeleteClassrooms = async (ids: number[]) => {
+  if (!USE_MOCK) {
+    return request.post('/rooms/batch_delete/', { ids })
+  }
+  return new Promise<{ message: string }>(resolve => {
+    setTimeout(() => {
+      classroomsData = classroomsData.filter(t => !ids.includes(t.id))
+      resolve({ message: `Mock: 成功删除 ${ids.length} 条数据` })
     }, 300)
   })
 }

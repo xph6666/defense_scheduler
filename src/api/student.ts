@@ -6,15 +6,21 @@ import { mockStudents } from '../utils/mockData'
 let studentsData = [...mockStudents]
 let nextId = 31
 
+const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+
 export const listStudents = async () => {
-  // return request.get('/students')
+  if (!USE_MOCK) {
+    return request.get('/students/') as Promise<Student[]>
+  }
   return new Promise<Student[]>(resolve => {
     setTimeout(() => resolve([...studentsData]), 300)
   })
 }
 
 export const createStudent = async (data: Omit<Student, 'id'>) => {
-  // return request.post('/students', data)
+  if (!USE_MOCK) {
+    return request.post('/students/', data) as Promise<Student>
+  }
   return new Promise<Student>(resolve => {
     setTimeout(() => {
       const newStudent = { ...data, id: nextId++ }
@@ -25,7 +31,9 @@ export const createStudent = async (data: Omit<Student, 'id'>) => {
 }
 
 export const updateStudent = async (id: number, data: Partial<Student>) => {
-  // return request.put(`/students/${id}`, data)
+  if (!USE_MOCK) {
+    return request.put(`/students/${id}/`, data) as Promise<Student>
+  }
   return new Promise<Student>((resolve, reject) => {
     setTimeout(() => {
       const index = studentsData.findIndex(t => t.id === id)
@@ -40,7 +48,9 @@ export const updateStudent = async (id: number, data: Partial<Student>) => {
 }
 
 export const deleteStudent = async (id: number) => {
-  // return request.delete(`/students/${id}`)
+  if (!USE_MOCK) {
+    return request.delete(`/students/${id}/`)
+  }
   return new Promise<void>((resolve, reject) => {
     setTimeout(() => {
       const index = studentsData.findIndex(t => t.id === id)
@@ -50,6 +60,35 @@ export const deleteStudent = async (id: number) => {
       } else {
         reject(new Error('Student not found'))
       }
+    }, 300)
+  })
+}
+
+export const importStudents = async (file: File) => {
+  if (!USE_MOCK) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return request.post('/students/import_data/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+  }
+  return new Promise<{ message: string }>(resolve => {
+    setTimeout(() => {
+      resolve({ message: 'Mock: 导入成功（Mock 模式下仅模拟）' })
+    }, 500)
+  })
+}
+
+export const batchDeleteStudents = async (ids: number[]) => {
+  if (!USE_MOCK) {
+    return request.post('/students/batch_delete/', { ids })
+  }
+  return new Promise<{ message: string }>(resolve => {
+    setTimeout(() => {
+      studentsData = studentsData.filter(t => !ids.includes(t.id))
+      resolve({ message: `Mock: 成功删除 ${ids.length} 条数据` })
     }, 300)
   })
 }

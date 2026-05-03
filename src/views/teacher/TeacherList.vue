@@ -25,17 +25,37 @@
     </el-form>
 
     <!-- Toolbar -->
-    <div class="mb-4 flex gap-2">
-      <el-button type="primary" @click="handleAdd">
-        <el-icon class="mr-1"><Plus /></el-icon>新增
-      </el-button>
-      <el-button type="success" @click="importVisible = true">
-        <el-icon class="mr-1"><Upload /></el-icon>导入
-      </el-button>
+    <div class="mb-4 flex justify-between items-center">
+      <div class="flex gap-2">
+        <el-button type="primary" @click="handleAdd">
+          <el-icon class="mr-1"><Plus /></el-icon>新增
+        </el-button>
+        <el-button type="success" @click="importVisible = true">
+          <el-icon class="mr-1"><Upload /></el-icon>导入
+        </el-button>
+        <el-button 
+          type="danger" 
+          :disabled="!selectedIds.length" 
+          @click="handleBatchDelete"
+          :loading="batchDeleteLoading"
+        >
+          <el-icon class="mr-1"><Delete /></el-icon>批量删除
+        </el-button>
+      </div>
+      <div v-if="selectedIds.length" class="text-sm text-gray-500">
+        已选择 {{ selectedIds.length }} 项
+      </div>
     </div>
 
     <!-- Table -->
-    <el-table :data="tableData" v-loading="loading" border style="width: 100%">
+    <el-table 
+      :data="tableData" 
+      v-loading="loading" 
+      border 
+      style="width: 100%"
+      @selection-change="handleSelectionChange"
+    >
+      <el-table-column type="selection" width="55" />
       <el-table-column prop="name" label="姓名" width="100" />
       <el-table-column prop="college" label="所属学院" width="150" />
       <el-table-column prop="isExternal" label="是否外院" width="100">
@@ -130,7 +150,7 @@
       </template>
     </el-dialog>
 
-    <ImportDialog v-model="importVisible" />
+    <ImportDialog v-model="importVisible" type="teacher" @success="fetchData" />
   </div>
 </template>
 
@@ -138,19 +158,51 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { Search, Plus, Upload } from '@element-plus/icons-vue'
+import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
-import { listTeachers, createTeacher, updateTeacher, deleteTeacher } from '../../api/teacher'
+import { listTeachers, createTeacher, updateTeacher, deleteTeacher, batchDeleteTeachers } from '../../api/teacher'
 import type { Teacher } from '../../types/teacher'
 
 const loading = ref(false)
 const submitLoading = ref(false)
+const batchDeleteLoading = ref(false)
 const dialogVisible = ref(false)
 const importVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()
 const tableData = ref<Teacher[]>([])
 const allData = ref<Teacher[]>([])
+const selectedIds = ref<number[]>([])
+
+const handleSelectionChange = (selection: Teacher[]) => {
+  selectedIds.value = selection.map(item => item.id)
+}
+
+const handleBatchDelete = () => {
+  if (!selectedIds.value.length) return
+  
+  ElMessageBox.confirm(
+    `确定要批量删除已选中的 ${selectedIds.value.length} 名教师吗？`,
+    '批量删除警告',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }
+  ).then(async () => {
+    batchDeleteLoading.value = true
+    try {
+      await batchDeleteTeachers(selectedIds.value)
+      ElMessage.success('批量删除成功')
+      selectedIds.value = []
+      fetchData()
+    } catch (error) {
+      ElMessage.error('批量删除失败')
+    } finally {
+      batchDeleteLoading.value = false
+    }
+  }).catch(() => {})
+}
 
 const searchForm = reactive({
   name: '',

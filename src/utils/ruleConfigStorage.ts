@@ -3,7 +3,7 @@ import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 const STORAGE_KEY_PREFIX = 'rule_config_'
 
 export function getDefaultRuleConfig(defenseType: DefenseType): RuleConfig {
-  const base = {
+  const base: RuleConfig = {
     defenseType,
     enabled: true,
     startDate: new Date().toISOString().split('T')[0],

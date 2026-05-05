@@ -3,7 +3,7 @@
     <div class="flex items-center justify-between">
       <div>
         <h2 class="text-2xl font-bold text-gray-800">P0 前端自测清单</h2>
-        <p class="text-sm text-gray-500 mt-1">用于在提交前检查基础数据管理、排期生成、人工调整、冲突检测和导出流程是否正常。</p>
+        <p class="text-sm text-gray-500 mt-1">用于在提交前检查基础数据管理、排期生成、人工调整、冲突检测和导出流程是否正常；状态仅保存在当前浏览器本地。</p>
       </div>
       <div class="flex items-center gap-4">
         <div class="text-right">

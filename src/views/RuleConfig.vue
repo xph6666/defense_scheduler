@@ -41,7 +41,7 @@ import PageSection from '../components/PageSection.vue'
 import RuleConfigForm from '../components/RuleConfigForm.vue'
 import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 import { getDefaultRuleConfig } from '../utils/ruleConfigStorage'
-import { addOperationLog } from '../utils/operationLogStorage'
+import { createOperationLog } from '../api/operationLog'
 import { getRuleConfig, saveRuleConfig } from '../api/ruleConfig'
 
 const activeType = ref<DefenseType>('预答辩')
@@ -63,11 +63,15 @@ const loadConfigs = async () => {
 const handleSave = async (config: RuleConfig) => {
   try {
     configs[config.defenseType] = await saveRuleConfig(config)
-    addOperationLog({
-      type: '保存规则配置',
-      module: '规则配置',
-      description: `修改并保存了 [${config.defenseType}] 的规则配置`
-    })
+    try {
+      await createOperationLog({
+        type: '保存规则配置',
+        module: '规则配置',
+        description: `修改并保存了 [${config.defenseType}] 的规则配置`
+      })
+    } catch {
+      ElMessage.warning('配置已保存，但操作日志写入失败')
+    }
     ElMessage.success(`${config.defenseType} 配置保存成功`)
   } catch (e) {
     const message = e instanceof Error ? e.message : '配置保存失败，请稍后重试'
@@ -81,11 +85,15 @@ const handleReset = async (type: string) => {
     const defenseType = type as DefenseType
     const defaultConfig = getDefaultRuleConfig(defenseType)
     configs[defenseType] = await saveRuleConfig(defaultConfig)
-    addOperationLog({
-      type: '重置规则配置',
-      module: '规则配置',
-      description: `恢复了 [${type}] 的默认规则配置`
-    })
+    try {
+      await createOperationLog({
+        type: '重置规则配置',
+        module: '规则配置',
+        description: `恢复了 [${type}] 的默认规则配置`
+      })
+    } catch {
+      ElMessage.warning('默认配置已恢复，但操作日志写入失败')
+    }
     ElMessage.success(`${type} 已恢复默认配置`)
   } catch (e) {
     if (e instanceof Error) {

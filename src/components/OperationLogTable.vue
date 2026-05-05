@@ -1,5 +1,14 @@
 <template>
   <div class="operation-log-table">
+    <el-alert
+      v-if="errorMsg"
+      class="mb-4"
+      type="warning"
+      :closable="false"
+      show-icon
+      :title="errorMsg"
+    />
+
     <div class="mb-4 flex items-center justify-between">
       <div class="flex gap-4">
         <el-select v-model="filterType" placeholder="操作类型" clearable size="small" style="width: 140px" @change="handleFilter">
@@ -13,7 +22,7 @@
       <el-button type="danger" link size="small" @click="handleClear">清空日志</el-button>
     </div>
 
-    <el-table :data="displayLogs" border stripe style="width: 100%" size="small">
+    <el-table v-loading="loading" :data="displayLogs" border stripe style="width: 100%" size="small">
       <el-table-column prop="createdAt" label="操作时间" width="180" />
       <el-table-column prop="type" label="操作类型" width="120">
         <template #default="{ row }">
@@ -45,20 +54,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import type { OperationLog, OperationType } from '../types/operationLog'
-import { getOperationLogs, clearOperationLogs } from '../utils/operationLogStorage'
+import { clearRemoteOperationLogs, isOperationLogMockMode, listOperationLogs } from '../api/operationLog'
 
 const props = defineProps<{
   limit?: number
 }>()
 
-const allLogs = ref<OperationLog[]>(getOperationLogs())
+const allLogs = ref<OperationLog[]>([])
 const filterType = ref('')
 const filterResult = ref('')
 const currentPage = ref(1)
 const pageSize = ref(15)
+const loading = ref(false)
+const errorMsg = ref('')
 
 const types: OperationType[] = [
   '生成排期', '刷新排期', '人工调整', '冲突检测', '导出结果',
@@ -75,7 +86,7 @@ const filteredLogs = computed(() => {
 
 const displayLogs = computed(() => {
   if (props.limit) return filteredLogs.value.slice(0, props.limit)
-  
+
   const start = (currentPage.value - 1) * pageSize.value
   const end = start + pageSize.value
   return filteredLogs.value.slice(start, end)
@@ -96,17 +107,39 @@ const handleFilter = () => {
   currentPage.value = 1
 }
 
-const handleClear = () => {
-  ElMessageBox.confirm('确定要清空所有操作日志吗？', '确认清空').then(() => {
-    clearOperationLogs()
+const loadLogs = async () => {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    allLogs.value = await listOperationLogs()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '操作日志加载失败'
     allLogs.value = []
-    ElMessage.success('日志已清空')
-  })
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleClear = () => {
+  ElMessageBox.confirm('确定要清空所有操作日志吗？', '确认清空').then(async () => {
+    try {
+      await clearRemoteOperationLogs()
+      allLogs.value = []
+      ElMessage.success('日志已清空')
+    } catch (e) {
+      const fallback = isOperationLogMockMode() ? '日志清空失败' : '清空日志需后端接口支持'
+      ElMessage.warning(e instanceof Error ? e.message : fallback)
+    }
+  }).catch(() => undefined)
 }
 
 const refresh = () => {
-  allLogs.value = getOperationLogs()
+  loadLogs()
 }
+
+onMounted(() => {
+  loadLogs()
+})
 
 defineExpose({ refresh })
 </script>

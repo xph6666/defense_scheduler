@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import type { ExportOptions } from '../types/export'
 

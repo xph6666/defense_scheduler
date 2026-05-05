@@ -18,6 +18,13 @@ export function getDefaultChecklist(): TestChecklistItem[] {
     { id: 28, module: '规则配置', title: '三类答辩规则独立', description: '修改预答辩规则，确认不影响正式答辩规则', expectedResult: '配置互不干扰', status: 'pending' },
     { id: 29, module: '排期展示', title: '可以展示软约束评分', description: '生成排期后查看右侧评分面板', expectedResult: '展示综合得分及分项详情', status: 'pending' },
     { id: 30, module: '操作日志', title: '生成排期后新增日志', description: '执行生成排期操作后进入日志页', expectedResult: '能看到刚才的操作记录', status: 'pending' },
-    { id: 31, module: '操作日志', title: '可以清空操作日志', description: '点击清空日志按钮', expectedResult: '列表被清空', status: 'pending' }
+    { id: 31, module: '操作日志', title: '可以清空操作日志', description: '点击清空日志按钮', expectedResult: '列表被清空', status: 'pending' },
+    { id: 40, module: '第七周联调准备', title: 'Mock 模式默认开启', description: '检查 .env 中 VITE_USE_MOCK 的值', expectedResult: '本地开发默认启用 Mock 模式', status: 'pending' },
+    { id: 41, module: '第七周联调准备', title: '规则配置菜单可访问', description: '从侧边栏点击规则配置', expectedResult: '跳转到规则配置中心且页面无报错', status: 'pending' },
+    { id: 42, module: '第七周联调准备', title: '操作日志菜单可访问', description: '从侧边栏点击操作日志', expectedResult: '跳转到操作日志页面且页面无报错', status: 'pending' },
+    { id: 43, module: '第七周联调准备', title: '演示指南按钮可跳转', description: '进入演示指南并点击规则配置、操作日志按钮', expectedResult: '按钮跳转目标页面正确', status: 'pending' },
+    { id: 44, module: '第七周联调准备', title: 'Mock 导出流程可完成', description: 'Mock 模式下点击导出排期结果', expectedResult: '生成可下载的导出文件', status: 'pending' },
+    { id: 45, module: '第七周联调准备', title: '联调环境变量可确认', description: '联调前检查 VITE_API_BASE_URL 与 VITE_USE_MOCK', expectedResult: '接口地址明确，关闭 Mock 后可连接后端', status: 'pending' },
+    { id: 46, module: '第七周联调准备', title: '首页重置按钮可用', description: '在首页点击重置演示数据按钮', expectedResult: '弹窗确认后可重置演示数据并刷新概览', status: 'pending' }
   ]
 }

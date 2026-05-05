@@ -1,11 +1,14 @@
 import { STORAGE_KEYS } from './storageKeys'
 import { mockTeachers, mockStudents, mockClassrooms } from './mockData'
 
+const defenseTypes = ['预答辩', '正式答辩', '中期答辩'] as const
+
 export function resetDemoData() {
   seedTeachers()
   seedStudents()
   seedClassrooms()
   clearScheduleResults()
+  clearConflictChecks()
   localStorage.removeItem(STORAGE_KEYS.lastExportTime)
 }
 
@@ -22,8 +25,14 @@ export function seedClassrooms() {
 }
 
 export function clearScheduleResults() {
-  ['预答辩', '正式答辩', '中期答辩'].forEach(type => {
+  defenseTypes.forEach(type => {
     localStorage.removeItem(STORAGE_KEYS.scheduleResult(type))
     localStorage.removeItem(STORAGE_KEYS.scheduleConflicts(type))
+  })
+}
+
+export function clearConflictChecks() {
+  defenseTypes.forEach(type => {
+    localStorage.removeItem(`schedule_conflicts_checked_at_${type}`)
   })
 }

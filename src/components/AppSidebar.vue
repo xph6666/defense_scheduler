@@ -28,6 +28,22 @@
         <el-icon><Calendar /></el-icon>
         <span>排期结果</span>
       </el-menu-item>
+      <el-menu-item index="/rule-config">
+        <el-icon><Setting /></el-icon>
+        <span>规则配置</span>
+      </el-menu-item>
+      <el-menu-item index="/operation-log">
+        <el-icon><Document /></el-icon>
+        <span>操作日志</span>
+      </el-menu-item>
+      <el-menu-item index="/demo-guide">
+        <el-icon><Guide /></el-icon>
+        <span>演示指南</span>
+      </el-menu-item>
+      <el-menu-item index="/acceptance-test">
+        <el-icon><CircleCheck /></el-icon>
+        <span>验收测试</span>
+      </el-menu-item>
     </el-menu>
   </div>
 </template>
@@ -35,7 +51,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { DataBoard, Avatar, User, OfficeBuilding, Calendar } from '@element-plus/icons-vue'
+import { DataBoard, Avatar, User, OfficeBuilding, Calendar, Setting, Document, Guide, CircleCheck } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const activeMenu = computed(() => route.path)

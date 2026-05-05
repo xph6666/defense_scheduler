@@ -26,7 +26,7 @@
       type="error"
       :closable="false"
       show-icon
-      title="排期生成失败，请稍后重试。"
+      :title="errorMsg"
     />
 
     <div class="bg-white p-6 rounded-lg shadow-sm">
@@ -109,8 +109,8 @@ import ConflictPanel from '../../components/ConflictPanel.vue'
 import ConflictDetailDialog from '../../components/ConflictDetailDialog.vue'
 import type { DefenseType, ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher } from '../../types/schedule'
 import { generateSchedule, getScheduleResults } from '../../api/schedule'
-import { updateScheduleGroupInStorage } from '../../utils/scheduleStorage'
 import { checkScheduleConflicts, readLocalConflicts } from '../../api/conflict'
+import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
 import { getGroupConflictCount, getGroupStatus } from '../../utils/conflictMock'
 import { listTeachers } from '../../api/teacher'
@@ -181,6 +181,10 @@ const fetchResult = async () => {
   try {
     result.value = await getScheduleResults(defenseType.value)
     await handleCheckConflicts()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '排期结果加载失败'
+    result.value = null
+    conflicts.value = []
   } finally {
     loading.value = false
   }
@@ -210,6 +214,9 @@ const handleCheckConflicts = async () => {
   conflictLoading.value = true
   try {
     conflicts.value = await checkScheduleConflicts(defenseType.value)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : '冲突检测失败'
+    ElMessage.error(message)
   } finally {
     conflictLoading.value = false
   }
@@ -219,15 +226,17 @@ const handleSaveAdjust = async (groupData: ScheduleGroup) => {
   if (!result.value) return
   adjustSaving.value = true
   try {
-    const updated = updateScheduleGroupInStorage(defenseType.value, groupData.id, groupData)
-    if (!updated) {
-      ElMessage.error('保存失败：未找到对应排期数据')
-      return
-    }
-    result.value = updated
+    await updateScheduleGroup({
+      defenseType: defenseType.value,
+      groupId: groupData.id,
+      groupData
+    })
     adjustVisible.value = false
     ElMessage.success('调整保存成功')
-    await handleCheckConflicts()
+    await fetchResult()
+  } catch (e) {
+    const message = e instanceof Error ? e.message : '保存失败，请稍后重试'
+    ElMessage.error(message)
   } finally {
     adjustSaving.value = false
   }
@@ -238,7 +247,10 @@ watch(defenseType, async () => {
 })
 
 onMounted(() => {
-  loadOptions()
+  loadOptions().catch(e => {
+    const message = e instanceof Error ? e.message : '调整选项加载失败'
+    ElMessage.error(message)
+  })
   const local = readLocalConflicts(defenseType.value)
   conflicts.value = local.conflicts
   fetchResult()

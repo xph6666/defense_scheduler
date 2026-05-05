@@ -176,33 +176,51 @@ const loadOptions = async () => {
 }
 
 const fetchResult = async () => {
+  const currentDefenseType = defenseType.value
   loading.value = true
   errorMsg.value = ''
   try {
-    result.value = await getScheduleResults(defenseType.value)
-    await handleCheckConflicts()
+    const scheduleResult = await getScheduleResults(currentDefenseType)
+    if (currentDefenseType !== defenseType.value) return
+    result.value = scheduleResult
+    await handleCheckConflicts(currentDefenseType)
   } catch (e) {
+    if (currentDefenseType !== defenseType.value) return
     errorMsg.value = e instanceof Error ? e.message : '排期结果加载失败'
     result.value = null
     conflicts.value = []
+    currentConflict.value = null
   } finally {
-    loading.value = false
+    if (currentDefenseType === defenseType.value) {
+      loading.value = false
+    }
   }
 }
 
 const handleGenerate = async () => {
+  const currentDefenseType = defenseType.value
   loading.value = true
   errorMsg.value = ''
+  conflicts.value = []
+  currentConflict.value = null
   try {
-    await generateSchedule(defenseType.value)
+    await generateSchedule(currentDefenseType)
+    if (currentDefenseType !== defenseType.value) return
+    const scheduleResult = await getScheduleResults(currentDefenseType)
+    if (currentDefenseType !== defenseType.value) return
+    result.value = scheduleResult
     ElMessage.success('排期生成成功')
-    result.value = await getScheduleResults(defenseType.value)
-    await handleCheckConflicts()
+    await handleCheckConflicts(currentDefenseType)
   } catch (e) {
+    if (currentDefenseType !== defenseType.value) return
     errorMsg.value = '生成失败'
+    conflicts.value = []
+    currentConflict.value = null
     ElMessage.error('排期生成失败，请稍后重试。')
   } finally {
-    loading.value = false
+    if (currentDefenseType === defenseType.value) {
+      loading.value = false
+    }
   }
 }
 
@@ -210,15 +228,28 @@ const handleRefresh = async () => {
   await fetchResult()
 }
 
-const handleCheckConflicts = async () => {
+const handleCheckConflicts = async (targetDefenseType: DefenseType = defenseType.value) => {
+  if (!result.value) {
+    conflicts.value = []
+    currentConflict.value = null
+    return
+  }
+
   conflictLoading.value = true
   try {
-    conflicts.value = await checkScheduleConflicts(defenseType.value)
+    const nextConflicts = await checkScheduleConflicts(targetDefenseType)
+    if (targetDefenseType !== defenseType.value) return
+    conflicts.value = nextConflicts
   } catch (e) {
+    if (targetDefenseType !== defenseType.value) return
+    conflicts.value = []
+    currentConflict.value = null
     const message = e instanceof Error ? e.message : '冲突检测失败'
     ElMessage.error(message)
   } finally {
-    conflictLoading.value = false
+    if (targetDefenseType === defenseType.value) {
+      conflictLoading.value = false
+    }
   }
 }
 
@@ -243,6 +274,9 @@ const handleSaveAdjust = async (groupData: ScheduleGroup) => {
 }
 
 watch(defenseType, async () => {
+  result.value = null
+  conflicts.value = []
+  currentConflict.value = null
   await fetchResult()
 })
 

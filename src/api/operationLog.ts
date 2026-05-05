@@ -1,8 +1,16 @@
 import request from './request'
-import type { OperationLog } from '../types/operationLog'
-import { clearOperationLogs, getOperationLogs } from '../utils/operationLogStorage'
+import type { OperationLog, OperationType } from '../types/operationLog'
+import { addOperationLog, clearOperationLogs, getOperationLogs } from '../utils/operationLogStorage'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+
+interface CreateOperationLogPayload {
+  type: OperationType
+  module: string
+  description: string
+  result?: '成功' | '失败'
+  operator?: string
+}
 
 export async function listOperationLogs() {
   if (USE_MOCK) {
@@ -10,6 +18,15 @@ export async function listOperationLogs() {
   }
 
   return request.get('/operation-logs/') as Promise<OperationLog[]>
+}
+
+export async function createOperationLog(payload: CreateOperationLogPayload) {
+  if (USE_MOCK) {
+    addOperationLog(payload)
+    return
+  }
+
+  return request.post('/operation-logs/', payload) as Promise<OperationLog>
 }
 
 export async function clearRemoteOperationLogs() {

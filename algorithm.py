@@ -87,21 +87,6 @@ def generate_schedule(
 ) -> Dict[str, List[dict]]:
     """
     Generate defense groups and return conflicts for unmet constraints.
-
-    This Week 1-2 skeleton focuses on:
-    1. Input normalization / validation
-    2. Candidate slot construction
-    3. Student grouping
-    4. Greedy room + teacher assignment hooks
-    5. Deterministic conflict reporting
-
-    Notes for integration:
-    - The current interface document uses `teachers.available_time` to mean
-      *unavailable* time, while `rooms.available_time` means *available* time.
-      This file preserves that assumption.
-    - When a full feasible solution is not found, the function returns partial
-      groups together with conflict records instead of raising, unless inputs
-      are invalid.
     """
     parsed_teachers = [parse_teacher(t) for t in teachers]
     parsed_students = [parse_student(s) for s in students]
@@ -628,7 +613,6 @@ def parse_room_available_slots(
     return [slot for slot in candidate_slots if start <= slot.start < end]
 
 
-
 def parse_time_range(raw: str) -> TimeRange:
     """
     Parse either of these formats:
@@ -659,7 +643,6 @@ def parse_time_range(raw: str) -> TimeRange:
     if end <= start:
         raise SchedulingError(f"invalid time range (end <= start): {raw}")
     return TimeRange(start=start, end=end)
-
 
 
 def is_resource_available(existing_ranges: Sequence[TimeRange], target: TimeRange) -> bool:

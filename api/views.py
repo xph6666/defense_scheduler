@@ -5,27 +5,115 @@ from rest_framework import status
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.http import HttpResponse
+import pandas as pd
+import json
 from .models import Teacher, Student, Room, ScheduleVersion, Group
 from .serializers import TeacherSerializer, StudentSerializer, RoomSerializer, ScheduleVersionSerializer
 
 
-# 原有的 ViewSet
-class TeacherViewSet(ModelViewSet):
+class ImportMixin:
+    @action(detail=False, methods=['post'])
+    def import_data(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': '未提供文件'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file)
+            elif file.name.endswith(('.xls', '.xlsx')):
+                df = pd.read_excel(file)
+            else:
+                return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            df.columns = [c.strip() for c in df.columns]
+            df = df.where(pd.notnull(df), None)
+            data_list = df.to_dict(orient='records')
+            
+            success_count = 0
+            errors = []
+            
+            for index, row in enumerate(data_list):
+                try:
+                    processed_row = {}
+                    for k, v in row.items():
+                        processed_row[k] = v
+                        snake_k = ''.join(['_' + i.lower() if i.isupper() else i for i in k]).lstrip('_')
+                        if snake_k not in processed_row:
+                            processed_row[snake_k] = v
+
+                    json_fields = ['roles', 'available_types', 'availableTypes', 'defense_types', 'defenseTypes']
+                    for field in json_fields:
+                        if field in processed_row and isinstance(processed_row[field], str):
+                            val = processed_row[field].strip()
+                            if not val:
+                                processed_row[field] = []
+                            elif (val.startswith('[') and val.endswith(']')) or (val.startswith('{') and val.endswith('}')):
+                                try:
+                                    processed_row[field] = json.loads(val.replace("'", '"'))
+                                except:
+                                    processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
+                            else:
+                                processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
+                    
+                    bool_fields = ['isExternal', 'is_external']
+                    for field in bool_fields:
+                        if field in processed_row and isinstance(processed_row[field], str):
+                            processed_row[field] = processed_row[field].lower() in ['true', '1', '是', 'yes']
+
+                    serializer = self.get_serializer(data=processed_row)
+                    if serializer.is_valid():
+                        serializer.save()
+                        success_count += 1
+                    else:
+                        errors.append(f"行 {index + 2}: {serializer.errors}")
+                except Exception as e:
+                    errors.append(f"行 {index + 2}: {str(e)}")
+            
+            if success_count == 0 and errors:
+                return Response({
+                    'message': f'导入失败，请检查文件格式。',
+                    'errors': errors[:5]
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({
+                'message': f'成功导入 {success_count} 条数据',
+                'errors': errors
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({'error': f'解析文件失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['post'])
+    def batch_delete(self, request):
+        ids = request.data.get('ids', [])
+        if not ids:
+            return Response({'error': '未提供待删除的 ID 列表'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            queryset = self.get_queryset().filter(id__in=ids)
+            count = queryset.count()
+            queryset.delete()
+            return Response({'message': f'成功删除 {count} 条数据'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': f'删除失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class TeacherViewSet(ImportMixin, ModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
 
 
-class StudentViewSet(ModelViewSet):
+class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
 
 
-class RoomViewSet(ModelViewSet):
+class RoomViewSet(ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
 
 
-# 排期视图
 class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
@@ -33,12 +121,10 @@ class ScheduleViewSet(GenericViewSet):
     @action(detail=False, methods=['post'])
     def generate(self, request):
         """一键生成排期"""
-        # 1. 从数据库提取数据
         teachers = Teacher.objects.all().values()
         students = Student.objects.all().values()
         rooms = Room.objects.all().values()
 
-        # 2. 获取规则参数
         rules = request.data.get('rules', {
             'defense_type': 'pre',
             'start_date': '2025-05-10',
@@ -46,7 +132,6 @@ class ScheduleViewSet(GenericViewSet):
             'avoid_holiday': True,
         })
 
-        # 3. 组装输入数据
         input_data = {
             'teachers': list(teachers),
             'students': list(students),
@@ -54,15 +139,14 @@ class ScheduleViewSet(GenericViewSet):
             'rules': rules
         }
 
-        # 4. 调用算法
         try:
             from algorithm import generate_schedule
             result = generate_schedule(**input_data)
         except ImportError:
-            # 算法模块未就绪时使用内置模拟数据
             result = self._mock_schedule_result(input_data)
 
-        # 5. 保存排期版本
+        ScheduleVersion.objects.filter(defense_type=rules['defense_type']).update(is_current=False)
+        
         version_num = ScheduleVersion.objects.filter(defense_type=rules['defense_type']).count() + 1
         schedule_version = ScheduleVersion.objects.create(
             version=version_num,
@@ -71,7 +155,6 @@ class ScheduleViewSet(GenericViewSet):
             is_current=True
         )
 
-        # 6. 保存分组数据
         for group_data in result.get('groups', []):
             group = Group.objects.create(
                 schedule_version=schedule_version,
@@ -82,21 +165,16 @@ class ScheduleViewSet(GenericViewSet):
                 chair_id=group_data.get('chair_id'),
                 secretary_id=group_data.get('secretary_id')
             )
-            # 处理多对多关系
             for expert_id in group_data.get('expert_ids', []):
                 group.experts.through.objects.create(group_id=group.id, teacher_id=expert_id)
             for student_id in group_data.get('student_ids', []):
                 group.students.through.objects.create(group_id=group.id, student_id=student_id)
 
-        # 7. 返回结果
-        return Response({
-            'schedule_version_id': schedule_version.id,
-            'groups': result.get('groups', []),
-            'conflicts': result.get('conflicts', [])
-        }, status=status.HTTP_201_CREATED)
+        request.query_params._mutable = True
+        request.query_params['defense_type'] = rules['defense_type']
+        return self.current(request)
 
     def _mock_schedule_result(self, input_data):
-        """模拟算法返回（算法未就绪时使用）"""
         return {
             'groups': [
                 {
@@ -123,23 +201,50 @@ class ScheduleViewSet(GenericViewSet):
         ).first()
 
         if not schedule_version:
-            return Response({'groups': [], 'message': '暂无排期结果'})
-
-        groups = schedule_version.groups.all()
-        result = []
-        for group in groups:
-            result.append({
-                'group_id': group.group_id,
-                'time': group.time,
-                'room': group.room.name if group.room else None,
-                'campus': group.campus,
-                'chair': group.chair.name if group.chair else None,
-                'experts': [t.name for t in group.experts.all()],
-                'secretary': group.secretary.name if group.secretary else None,
-                'students': [s.name for s in group.students.all()]
+            return Response({
+                'defenseType': defense_type,
+                'generatedAt': '',
+                'groups': [],
+                'message': '暂无排期结果'
             })
 
-        return Response({'groups': result})
+        groups = schedule_version.groups.all()
+        formatted_groups = []
+        for group in groups:
+            time_parts = group.time.split(' ')
+            date = time_parts[0] if len(time_parts) > 0 else ''
+            time_range = time_parts[1] if len(time_parts) > 1 else ''
+
+            formatted_groups.append({
+                'id': group.id,
+                'defenseType': schedule_version.get_defense_type_display(),
+                'groupName': group.group_id,
+                'campus': group.campus,
+                'classroom': group.room.name if group.room else '未分配',
+                'date': date,
+                'timeRange': time_range,
+                'chairman': group.chair.name if group.chair else None,
+                'secretary': group.secretary.name if group.secretary else '未分配',
+                'teachers': [
+                    {'id': t.id, 'name': t.name, 'title': t.title, 'roles': getattr(t, 'roles', [])}
+                    for t in group.experts.all()
+                ],
+                'students': [
+                    {
+                        'id': s.id, 
+                        'name': s.name, 
+                        'studentType': s.type,
+                        'mentorName': s.supervisor.name if s.supervisor else ''
+                    }
+                    for s in group.students.all()
+                ]
+            })
+
+        return Response({
+            'defenseType': schedule_version.get_defense_type_display(),
+            'generatedAt': schedule_version.created_at.strftime('%Y-%m-%d %H:%M'),
+            'groups': formatted_groups
+        })
 
     @action(detail=False, methods=['post'])
     def adjust(self, request):
@@ -176,24 +281,14 @@ class ScheduleViewSet(GenericViewSet):
         if not schedule_version:
             return Response({'error': '暂无排期结果可导出'}, status=404)
 
-        # 创建工作簿
         wb = Workbook()
-
-        # 删除默认 sheet
         default_sheet = wb.active
         wb.remove(default_sheet)
 
-        # 获取所有组
         groups = schedule_version.groups.all()
 
-        # 颜色池（用于导师学生同色）
         colors = [
-            'FFB3B3',  # 浅红
-            'B3FFB3',  # 浅绿
-            'B3B3FF',  # 浅蓝
-            'FFFFB3',  # 浅黄
-            'FFB3FF',  # 浅紫
-            'B3FFFF',  # 浅青
+            'FFB3B3', 'B3FFB3', 'B3B3FF', 'FFFFB3', 'FFB3FF', 'B3FFFF',
         ]
 
         supervisor_color_map = {}
@@ -202,20 +297,17 @@ class ScheduleViewSet(GenericViewSet):
         for group in groups:
             sheet = wb.create_sheet(title=f"组{group.group_id}")
 
-            # 设置列宽
             sheet.column_dimensions['A'].width = 15
             sheet.column_dimensions['B'].width = 20
             sheet.column_dimensions['C'].width = 15
             sheet.column_dimensions['D'].width = 25
 
-            # 标题行
             title_font = Font(bold=True, size=14)
             title_cell = sheet['A1']
             title_cell.value = f"答辩排期表 - {group.group_id}"
             title_cell.font = title_font
             sheet.merge_cells('A1:D1')
 
-            # 基本信息（从第3行开始）
             row = 3
             info_data = [
                 ('时间', group.time),
@@ -231,14 +323,12 @@ class ScheduleViewSet(GenericViewSet):
                 sheet[f'A{row}'].font = Font(bold=True)
                 row += 1
 
-            # 专家列表
             sheet[f'A{row}'] = '专家'
             sheet[f'A{row}'].font = Font(bold=True)
             expert_names = [e.name for e in group.experts.all()]
             sheet[f'B{row}'] = '、'.join(expert_names) if expert_names else '未分配'
             row += 2
 
-            # 学生表头
             headers = ['学生姓名', '学生类型', '导师姓名', '导师职称']
             for col, header in enumerate(headers, 1):
                 cell = sheet.cell(row=row, column=col, value=header)
@@ -247,9 +337,7 @@ class ScheduleViewSet(GenericViewSet):
 
             row += 1
 
-            # 学生数据
             for student in group.students.all():
-                # 分配导师颜色
                 if student.supervisor_id not in supervisor_color_map:
                     supervisor_color_map[student.supervisor_id] = colors[color_index % len(colors)]
                     color_index += 1
@@ -257,27 +345,22 @@ class ScheduleViewSet(GenericViewSet):
                 color = supervisor_color_map[student.supervisor_id]
                 fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
 
-                # 学生姓名
                 cell = sheet.cell(row=row, column=1, value=student.name)
                 cell.fill = fill
 
-                # 学生类型
                 cell = sheet.cell(row=row, column=2, value=student.get_type_display())
                 cell.fill = fill
 
-                # 导师姓名
                 supervisor_name = student.supervisor.name if student.supervisor else '未分配'
                 cell = sheet.cell(row=row, column=3, value=supervisor_name)
                 cell.fill = fill
 
-                # 导师职称
                 supervisor_title = student.supervisor.title if student.supervisor else ''
                 cell = sheet.cell(row=row, column=4, value=supervisor_title)
                 cell.fill = fill
 
                 row += 1
 
-            # 添加边框
             thin_border = Border(
                 left=Side(style='thin'),
                 right=Side(style='thin'),
@@ -291,7 +374,6 @@ class ScheduleViewSet(GenericViewSet):
                     cell.border = thin_border
                     cell.alignment = Alignment(horizontal='center', vertical='center')
 
-        # 创建 HTTP 响应
         response = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
@@ -299,8 +381,8 @@ class ScheduleViewSet(GenericViewSet):
 
         wb.save(response)
         return response
+
     def _move_student(self, request):
-        """移动学生到另一个组"""
         student_id = request.data.get('student_id')
         from_group_id = request.data.get('from_group_id')
         to_group_id = request.data.get('to_group_id')
@@ -312,12 +394,9 @@ class ScheduleViewSet(GenericViewSet):
             from_group = Group.objects.get(id=from_group_id)
             to_group = Group.objects.get(id=to_group_id)
 
-            # 从原组移除学生
             from_group.students.remove(student_id)
-            # 添加到新组
             to_group.students.add(student_id)
 
-            # 重新检测冲突
             conflicts = self._check_conflicts(from_group.schedule_version)
 
             return Response({
@@ -331,7 +410,6 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': str(e)}, status=400)
 
     def _change_expert(self, request):
-        """更换专家"""
         group_id = request.data.get('group_id')
         old_expert_id = request.data.get('old_expert_id')
         new_expert_id = request.data.get('new_expert_id')
@@ -355,7 +433,6 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=404)
 
     def _change_chair(self, request):
-        """更换主席/组长"""
         group_id = request.data.get('group_id')
         new_chair_id = request.data.get('new_chair_id')
 
@@ -378,7 +455,6 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=404)
 
     def _change_secretary(self, request):
-        """更换秘书"""
         group_id = request.data.get('group_id')
         new_secretary_id = request.data.get('new_secretary_id')
 
@@ -401,7 +477,6 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=404)
 
     def _change_time(self, request):
-        """修改组的时间"""
         group_id = request.data.get('group_id')
         new_time = request.data.get('new_time')
 
@@ -424,7 +499,6 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=404)
 
     def _change_room(self, request):
-        """修改组使用的教室"""
         group_id = request.data.get('group_id')
         new_room_id = request.data.get('new_room_id')
 
@@ -447,15 +521,12 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=404)
 
     def _check_conflicts(self, schedule_version):
-        """检测一个排期版本的所有冲突"""
         conflicts = []
         groups = schedule_version.groups.all()
 
-        # 1. 教师时间冲突：同一教师在同一时间出现在多个组
         teacher_time_map = {}
 
         for group in groups:
-            # 检查主席
             if group.chair:
                 key = (group.chair.id, group.time)
                 if key in teacher_time_map:
@@ -470,7 +541,6 @@ class ScheduleViewSet(GenericViewSet):
                 else:
                     teacher_time_map[key] = group.id
 
-            # 检查专家
             for expert in group.experts.all():
                 key = (expert.id, group.time)
                 if key in teacher_time_map:
@@ -485,7 +555,6 @@ class ScheduleViewSet(GenericViewSet):
                 else:
                     teacher_time_map[key] = group.id
 
-            # 检查秘书
             if group.secretary:
                 key = (group.secretary.id, group.time)
                 if key in teacher_time_map:
@@ -500,7 +569,6 @@ class ScheduleViewSet(GenericViewSet):
                 else:
                     teacher_time_map[key] = group.id
 
-        # 2. 教室冲突：同一教室同一时间多个组
         room_time_map = {}
         for group in groups:
             if group.room:
@@ -517,7 +585,6 @@ class ScheduleViewSet(GenericViewSet):
                 else:
                     room_time_map[key] = group.id
 
-        # 3. 秘书规则冲突：秘书和学生不能在同一组
         for group in groups:
             if group.secretary:
                 secretary_id = group.secretary.id

@@ -2,6 +2,9 @@ from rest_framework.viewsets import ModelViewSet, GenericViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from django.http import HttpResponse
 from .models import Teacher, Student, Room, ScheduleVersion, Group
 from .serializers import TeacherSerializer, StudentSerializer, RoomSerializer, ScheduleVersionSerializer
 
@@ -161,6 +164,141 @@ class ScheduleViewSet(GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        """导出当前排期为 Excel 文件"""
+        defense_type = request.query_params.get('defense_type', 'pre')
+        schedule_version = ScheduleVersion.objects.filter(
+            defense_type=defense_type,
+            is_current=True
+        ).first()
+
+        if not schedule_version:
+            return Response({'error': '暂无排期结果可导出'}, status=404)
+
+        # 创建工作簿
+        wb = Workbook()
+
+        # 删除默认 sheet
+        default_sheet = wb.active
+        wb.remove(default_sheet)
+
+        # 获取所有组
+        groups = schedule_version.groups.all()
+
+        # 颜色池（用于导师学生同色）
+        colors = [
+            'FFB3B3',  # 浅红
+            'B3FFB3',  # 浅绿
+            'B3B3FF',  # 浅蓝
+            'FFFFB3',  # 浅黄
+            'FFB3FF',  # 浅紫
+            'B3FFFF',  # 浅青
+        ]
+
+        supervisor_color_map = {}
+        color_index = 0
+
+        for group in groups:
+            sheet = wb.create_sheet(title=f"组{group.group_id}")
+
+            # 设置列宽
+            sheet.column_dimensions['A'].width = 15
+            sheet.column_dimensions['B'].width = 20
+            sheet.column_dimensions['C'].width = 15
+            sheet.column_dimensions['D'].width = 25
+
+            # 标题行
+            title_font = Font(bold=True, size=14)
+            title_cell = sheet['A1']
+            title_cell.value = f"答辩排期表 - {group.group_id}"
+            title_cell.font = title_font
+            sheet.merge_cells('A1:D1')
+
+            # 基本信息（从第3行开始）
+            row = 3
+            info_data = [
+                ('时间', group.time),
+                ('教室', group.room.name if group.room else '未分配'),
+                ('校区', group.campus),
+                ('主席/组长', group.chair.name if group.chair else '未分配'),
+                ('秘书', group.secretary.name if group.secretary else '未分配'),
+            ]
+
+            for label, value in info_data:
+                sheet[f'A{row}'] = label
+                sheet[f'B{row}'] = value
+                sheet[f'A{row}'].font = Font(bold=True)
+                row += 1
+
+            # 专家列表
+            sheet[f'A{row}'] = '专家'
+            sheet[f'A{row}'].font = Font(bold=True)
+            expert_names = [e.name for e in group.experts.all()]
+            sheet[f'B{row}'] = '、'.join(expert_names) if expert_names else '未分配'
+            row += 2
+
+            # 学生表头
+            headers = ['学生姓名', '学生类型', '导师姓名', '导师职称']
+            for col, header in enumerate(headers, 1):
+                cell = sheet.cell(row=row, column=col, value=header)
+                cell.font = Font(bold=True, color='FFFFFF')
+                cell.fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+
+            row += 1
+
+            # 学生数据
+            for student in group.students.all():
+                # 分配导师颜色
+                if student.supervisor_id not in supervisor_color_map:
+                    supervisor_color_map[student.supervisor_id] = colors[color_index % len(colors)]
+                    color_index += 1
+
+                color = supervisor_color_map[student.supervisor_id]
+                fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
+
+                # 学生姓名
+                cell = sheet.cell(row=row, column=1, value=student.name)
+                cell.fill = fill
+
+                # 学生类型
+                cell = sheet.cell(row=row, column=2, value=student.get_type_display())
+                cell.fill = fill
+
+                # 导师姓名
+                supervisor_name = student.supervisor.name if student.supervisor else '未分配'
+                cell = sheet.cell(row=row, column=3, value=supervisor_name)
+                cell.fill = fill
+
+                # 导师职称
+                supervisor_title = student.supervisor.title if student.supervisor else ''
+                cell = sheet.cell(row=row, column=4, value=supervisor_title)
+                cell.fill = fill
+
+                row += 1
+
+            # 添加边框
+            thin_border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+
+            for r in range(3, row):
+                for c in range(1, 5):
+                    cell = sheet.cell(row=r, column=c)
+                    cell.border = thin_border
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # 创建 HTTP 响应
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename=defense_schedule_{defense_type}.xlsx'
+
+        wb.save(response)
+        return response
     def _move_student(self, request):
         """移动学生到另一个组"""
         student_id = request.data.get('student_id')

@@ -69,3 +69,29 @@ class Group(models.Model):
 
     def __str__(self):
         return self.group_id
+
+
+class RuleConfig(models.Model):
+    """规则配置，每种答辩类型一条记录"""
+    defense_type = models.CharField(max_length=10, unique=True, verbose_name="答辩类型")
+    config = models.JSONField(default=dict, verbose_name="配置内容")
+    updated_at = models.DateTimeField(auto_now=True, verbose_name="更新时间")
+
+    def __str__(self):
+        return f"规则配置 - {self.defense_type}"
+
+
+class OperationLog(models.Model):
+    """操作日志"""
+    type = models.CharField(max_length=30, verbose_name="操作类型")
+    module = models.CharField(max_length=50, verbose_name="模块")
+    description = models.TextField(verbose_name="描述")
+    operator = models.CharField(max_length=50, default='系统', verbose_name="操作人")
+    result = models.CharField(max_length=10, default='成功', verbose_name="结果")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.type} - {self.description[:20]}"

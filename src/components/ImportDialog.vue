@@ -35,6 +35,12 @@
       </span>
     </template>
   </el-dialog>
+
+  <ImportPreviewDialog
+    v-model="previewVisible"
+    :module="type"
+    @success="handlePreviewSuccess"
+  />
 </template>
 
 <script setup lang="ts">
@@ -45,6 +51,10 @@ import type { UploadFile } from 'element-plus'
 import { importTeachers } from '../api/teacher'
 import { importStudents } from '../api/student'
 import { importClassrooms } from '../api/classroom'
+import ImportPreviewDialog from './ImportPreviewDialog.vue'
+import type { ImportModule } from '../types/import'
+
+const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
 const props = defineProps<{
   modelValue: boolean
@@ -59,6 +69,7 @@ const emit = defineEmits<{
 const visible = ref(props.modelValue)
 const selectedFile = ref<File | null>(null)
 const loading = ref(false)
+const previewVisible = ref(false)
 
 watch(() => props.modelValue, (val) => {
   visible.value = val
@@ -78,6 +89,11 @@ const handleConfirm = async () => {
     return
   }
 
+  if (USE_MOCK) {
+    previewVisible.value = true
+    return
+  }
+
   loading.value = true
   try {
     let res: any
@@ -88,7 +104,7 @@ const handleConfirm = async () => {
     } else {
       res = await importClassrooms(selectedFile.value)
     }
-    
+
     ElMessage.success(res.message || '导入成功')
     if (res.errors && res.errors.length > 0) {
       console.warn('部分数据导入失败:', res.errors)
@@ -100,7 +116,7 @@ const handleConfirm = async () => {
     console.error(e)
     const errorMsg = e.response?.data?.message || e.response?.data?.error || '导入失败，请检查文件格式'
     const subErrors = e.response?.data?.errors
-    
+
     if (subErrors && subErrors.length > 0) {
       ElMessage.error({
         message: `${errorMsg}: ${subErrors[0]}`,
@@ -112,5 +128,10 @@ const handleConfirm = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handlePreviewSuccess = () => {
+  emit('success')
+  visible.value = false
 }
 </script>

@@ -1,16 +1,27 @@
 import request from './request'
 import { createCsvBlob } from '../utils/download'
+import type { DefenseType } from '../types/schedule'
+import { getScheduleResults } from './schedule'
+import { readLocalConflicts } from './conflict'
+import { exportScheduleToCsv } from '../utils/exportMock'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
-export async function exportScheduleExcel(defenseType: string) {
-  if (USE_MOCK) {
-    const csvContent = [
-      '答辩类型,导出模式,生成时间',
-      `"${defenseType}","Mock","${new Date().toLocaleString()}"`
-    ].join('\n')
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-    return createCsvBlob(csvContent)
+export async function exportScheduleExcel(defenseType: DefenseType) {
+  if (USE_MOCK) {
+    await sleep(600)
+
+    const result = await getScheduleResults(defenseType)
+    if (!result) {
+      return createCsvBlob('暂无排期数据可导出')
+    }
+
+    const { conflicts } = readLocalConflicts(defenseType)
+    exportScheduleToCsv(result, conflicts)
+
+    return createCsvBlob('')
   }
 
   return request.get('/schedule/export-excel/', {

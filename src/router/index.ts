@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useUserStore } from '../stores/user'
 import MainLayout from '../layout/MainLayout.vue'
 import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
@@ -81,6 +82,16 @@ const router = createRouter({
       ]
     }
   ]
+})
+
+router.beforeEach((to) => {
+  const userStore = useUserStore()
+  if (to.path !== '/login' && !userStore.isLoggedIn) {
+    return { path: '/login' }
+  }
+  if (to.path === '/login' && userStore.isLoggedIn) {
+    return { path: '/dashboard' }
+  }
 })
 
 export default router

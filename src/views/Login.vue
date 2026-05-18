@@ -10,7 +10,7 @@
         <el-form-item>
           <el-input 
             v-model="form.username" 
-            placeholder="请输入账号 (admin)" 
+            placeholder="请输入账号" 
             size="large"
           >
             <template #prefix>
@@ -22,7 +22,7 @@
           <el-input 
             v-model="form.password" 
             type="password" 
-            placeholder="请输入密码 (任意)" 
+            placeholder="请输入密码" 
             size="large"
             show-password
           >
@@ -49,8 +49,10 @@ import { reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useUserStore } from '../stores/user'
 
 const router = useRouter()
+const userStore = useUserStore()
 const form = reactive({
   username: '',
   password: ''
@@ -58,6 +60,7 @@ const form = reactive({
 
 const handleLogin = () => {
   if (form.username === 'admin') {
+    userStore.login(form.username)
     ElMessage.success('登录成功')
     router.push('/dashboard')
   } else {

@@ -14,9 +14,11 @@
           v-model:defenseType="defenseType"
           v-model:viewMode="viewMode"
           :loading="loading"
+          :has-result="!!result"
           @generate="handleGenerate"
           @refresh="handleRefresh"
           @check-conflicts="handleCheckConflicts"
+          @export="handleExportClick"
         />
       </div>
     </div>
@@ -72,13 +74,14 @@
         </div>
       </div>
 
-      <div class="lg:col-span-1">
+      <div class="lg:col-span-1 space-y-4">
         <ConflictPanel
           :conflicts="conflicts"
           :loading="conflictLoading"
           @check="handleCheckConflicts"
           @view-detail="openConflictDetail"
         />
+        <SoftConstraintPanel :summary="optimizationSummary" />
       </div>
     </div>
   </div>
@@ -95,6 +98,18 @@
   />
 
   <ConflictDetailDialog v-model="conflictDetailVisible" :conflict="currentConflict" />
+
+  <ExportDialog
+    v-model="exportDialogVisible"
+    :options="{ defenseType: defenseType }"
+    :stats="exportStats"
+    @confirm="handleExportConfirm"
+  />
+
+  <ExportProgress
+    :status="exportStatus"
+    @close="exportStatus = 'idle'"
+  />
 </template>
 
 <script setup lang="ts">
@@ -107,12 +122,20 @@ import LegendTag from '../../components/LegendTag.vue'
 import ScheduleAdjustDrawer from '../../components/ScheduleAdjustDrawer.vue'
 import ConflictPanel from '../../components/ConflictPanel.vue'
 import ConflictDetailDialog from '../../components/ConflictDetailDialog.vue'
+import ExportDialog from '../../components/ExportDialog.vue'
+import ExportProgress from '../../components/ExportProgress.vue'
+import SoftConstraintPanel from '../../components/SoftConstraintPanel.vue'
 import type { DefenseType, ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher } from '../../types/schedule'
 import { generateSchedule, getScheduleResults } from '../../api/schedule'
 import { checkScheduleConflicts, readLocalConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
 import { getGroupConflictCount, getGroupStatus } from '../../utils/conflictMock'
+import { exportScheduleExcel } from '../../api/export'
+import type { ExportStatus } from '../../types/export'
+import type { OptimizationSummary } from '../../types/optimization'
+import { evaluateSoftConstraints } from '../../utils/optimizationMock'
+import { getRuleConfig } from '../../api/ruleConfig'
 import { listTeachers } from '../../api/teacher'
 import { listStudents } from '../../api/student'
 import { listClassrooms } from '../../api/classroom'
@@ -134,9 +157,27 @@ const currentGroup = ref<ScheduleGroup | null>(null)
 const currentConflict = ref<ScheduleConflict | null>(null)
 const conflictDetailVisible = ref(false)
 
+const exportDialogVisible = ref(false)
+const exportStatus = ref<ExportStatus>('idle')
+
+const optimizationSummary = ref<OptimizationSummary | null>(null)
+
 const teacherOptions = ref<ScheduleTeacher[]>([])
 const studentOptions = ref<ScheduleStudent[]>([])
 const classroomOptions = ref<{ campus: '创新港' | '兴庆'; name: string }[]>([])
+
+const updateOptimizationScore = async () => {
+  if (!result.value) {
+    optimizationSummary.value = null
+    return
+  }
+  try {
+    const config = await getRuleConfig(defenseType.value)
+    optimizationSummary.value = evaluateSoftConstraints(result.value, config)
+  } catch {
+    optimizationSummary.value = null
+  }
+}
 
 const openAdjust = (group: ScheduleGroup) => {
   currentGroup.value = group
@@ -146,6 +187,22 @@ const openAdjust = (group: ScheduleGroup) => {
 const openConflictDetail = (c: ScheduleConflict) => {
   currentConflict.value = c
   conflictDetailVisible.value = true
+}
+
+const handleExportClick = () => {
+  if (!result.value) return
+  exportDialogVisible.value = true
+}
+
+const handleExportConfirm = async () => {
+  exportStatus.value = 'exporting'
+  try {
+    await exportScheduleExcel(defenseType.value)
+    exportStatus.value = 'success'
+  } catch {
+    exportStatus.value = 'error'
+    ElMessage.error('导出失败，请稍后重试')
+  }
 }
 
 const loadOptions = async () => {
@@ -184,12 +241,14 @@ const fetchResult = async () => {
     if (currentDefenseType !== defenseType.value) return
     result.value = scheduleResult
     await handleCheckConflicts(currentDefenseType)
+    await updateOptimizationScore()
   } catch (e) {
     if (currentDefenseType !== defenseType.value) return
     errorMsg.value = e instanceof Error ? e.message : '排期结果加载失败'
     result.value = null
     conflicts.value = []
     currentConflict.value = null
+    optimizationSummary.value = null
   } finally {
     if (currentDefenseType === defenseType.value) {
       loading.value = false
@@ -211,6 +270,7 @@ const handleGenerate = async () => {
     result.value = scheduleResult
     ElMessage.success('排期生成成功')
     await handleCheckConflicts(currentDefenseType)
+    await updateOptimizationScore()
   } catch (e) {
     if (currentDefenseType !== defenseType.value) return
     errorMsg.value = '生成失败'
@@ -277,6 +337,7 @@ watch(defenseType, async () => {
   result.value = null
   conflicts.value = []
   currentConflict.value = null
+  optimizationSummary.value = null
   await fetchResult()
 })
 
@@ -307,6 +368,14 @@ const groupConflictCountMap = computed(() => {
   }
   return map
 })
+
+const exportStats = computed(() => ({
+  groupCount: meta.value.groupCount,
+  studentCount: meta.value.studentCount,
+  conflictCount: meta.value.conflictCount,
+  errorCount: conflicts.value.filter(c => c.level === 'error').length,
+  warningCount: conflicts.value.filter(c => c.level === 'warning').length
+}))
 
 const meta = computed(() => {
   if (!result.value) {

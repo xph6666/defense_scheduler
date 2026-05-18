@@ -31,17 +31,23 @@
       <el-button :loading="loading" @click="emit('check-conflicts')">
         重新检测冲突
       </el-button>
+      <el-button type="success" :disabled="!hasResult" @click="emit('export')">
+        <template #icon><el-icon><Download /></el-icon></template>
+        导出 Excel
+      </el-button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { Download } from '@element-plus/icons-vue'
 import type { DefenseType } from '../types/schedule'
 
 defineProps<{
   defenseType: DefenseType
   viewMode: 'card' | 'table'
   loading?: boolean
+  hasResult?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,5 +56,6 @@ const emit = defineEmits<{
   (e: 'generate'): void
   (e: 'refresh'): void
   (e: 'check-conflicts'): void
+  (e: 'export'): void
 }>()
 </script>

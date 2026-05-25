@@ -7,6 +7,7 @@ import { toBackendDefenseType } from './schedule'
 import { isNotFoundError } from './request'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+const USE_REMOTE_CONFLICT_CHECK = (import.meta as any).env?.VITE_USE_REMOTE_CONFLICT_CHECK === 'true'
 
 const getConflictsKey = (defenseType: DefenseType) => `schedule_conflicts_${defenseType}`
 const getCheckedAtKey = (defenseType: DefenseType) => `schedule_conflicts_checked_at_${defenseType}`
@@ -18,7 +19,7 @@ const writeLocal = (defenseType: DefenseType, conflicts: ScheduleConflict[]) => 
 }
 
 export const readLocalConflicts = (defenseType: DefenseType) => {
-  if (!USE_MOCK || typeof window === 'undefined') return { conflicts: [], checkedAt: '' }
+  if (typeof window === 'undefined') return { conflicts: [], checkedAt: '' }
   const raw = window.localStorage.getItem(getConflictsKey(defenseType))
   const checkedAt = window.localStorage.getItem(getCheckedAtKey(defenseType)) || ''
   if (!raw) return { conflicts: [], checkedAt }
@@ -30,7 +31,7 @@ export const readLocalConflicts = (defenseType: DefenseType) => {
 }
 
 export const checkScheduleConflicts = async (defenseType: DefenseType, fallbackResult?: ScheduleResult | null) => {
-  if (!USE_MOCK) {
+  if (!USE_MOCK && USE_REMOTE_CONFLICT_CHECK) {
     try {
       return await request.post('/schedule/check-conflicts/', {
         defense_type: toBackendDefenseType(defenseType)
@@ -46,7 +47,7 @@ export const checkScheduleConflicts = async (defenseType: DefenseType, fallbackR
     }
   }
 
-  const result = getScheduleResult(defenseType)
+  const result = fallbackResult || getScheduleResult(defenseType)
   if (!result) {
     writeLocal(defenseType, [])
     return []

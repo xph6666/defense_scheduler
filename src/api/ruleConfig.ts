@@ -2,6 +2,7 @@ import request from './request'
 import type { RuleConfig, DefenseType } from '../types/ruleConfig'
 import { getRuleConfigFromStorage, saveRuleConfigToStorage } from '../utils/ruleConfigStorage'
 import { toBackendDefenseType } from './schedule'
+import { isNotFoundError } from './request'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
@@ -10,9 +11,16 @@ export async function getRuleConfig(defenseType: DefenseType) {
     return getRuleConfigFromStorage(defenseType)
   }
 
-  return request.get('/rule-config/', {
-    params: { defense_type: toBackendDefenseType(defenseType) }
-  }) as Promise<RuleConfig>
+  try {
+    return await request.get('/rule-config/', {
+      params: { defense_type: toBackendDefenseType(defenseType) }
+    }) as RuleConfig
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return getRuleConfigFromStorage(defenseType)
+    }
+    throw error
+  }
 }
 
 export async function saveRuleConfig(data: RuleConfig) {

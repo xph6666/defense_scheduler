@@ -21,10 +21,12 @@ npm run dev
 ```env
 VITE_USE_MOCK=true
 VITE_API_BASE_URL=http://localhost:8000/api
+VITE_API_PROXY_TARGET=http://localhost:8000
 ```
 
 - `VITE_USE_MOCK=true`：使用前端 Mock 和浏览器本地存储，适合单机演示。
 - `VITE_USE_MOCK=false`：请求 `VITE_API_BASE_URL` 指向的后端接口，适合前后端联调。
+- 未设置 `VITE_API_BASE_URL` 时，开发服务器会把 `/api/*` 代理到 `VITE_API_PROXY_TARGET`，默认 `http://localhost:8000`。
 
 真实联调前请确认后端已提供教师、学生、教室、排期、冲突检测、人工调整、规则配置和操作日志相关接口。
 

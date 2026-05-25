@@ -17,6 +17,9 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: apiProxyTarget,
           changeOrigin: true,
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+          },
         },
       },
     },

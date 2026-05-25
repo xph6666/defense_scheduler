@@ -56,7 +56,10 @@
             <el-icon class="mr-2 text-blue-500"><DataAnalysis /></el-icon>
             排期结果概览
           </div>
-          <el-button type="primary" link @click="goSchedule">查看排期结果</el-button>
+          <div class="flex items-center gap-3">
+            <el-button type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
+            <el-button type="primary" link @click="goSchedule">查看排期结果</el-button>
+          </div>
         </div>
       </template>
 
@@ -106,14 +109,17 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { listTeachers } from '../api/teacher'
 import { listStudents } from '../api/student'
 import { listClassrooms } from '../api/classroom'
 import { Avatar, User, OfficeBuilding, Timer, InfoFilled, DataAnalysis, WarningFilled } from '@element-plus/icons-vue'
-import type { DefenseType, ScheduleResult } from '../types/schedule'
+import type { DefenseType } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getAllScheduleResults } from '../utils/scheduleStorage'
 import { readLocalConflicts } from '../api/conflict'
+import { resetDemoData } from '../utils/demoSeed'
+import { addOperationLog } from '../utils/operationLogStorage'
 
 const stats = ref({
   teachers: 0,
@@ -180,6 +186,29 @@ const refreshConflictOverview = () => {
 
 const goSchedule = () => {
   router.push('/schedule-results')
+}
+
+const handleResetDemoData = async () => {
+  try {
+    await ElMessageBox.confirm('确定要重置演示数据吗？当前排期结果与导出时间会被清空。', '确认重置', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+
+    resetDemoData()
+    addOperationLog({
+      type: '重置演示数据',
+      module: 'Dashboard',
+      description: '重置教师、学生、教室演示数据并清空排期结果'
+    })
+    fetchStats()
+    refreshScheduleOverview()
+    refreshConflictOverview()
+    ElMessage.success('演示数据已重置')
+  } catch {
+    return
+  }
 }
 
 const fetchStats = async () => {

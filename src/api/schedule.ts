@@ -7,16 +7,19 @@ const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
+export const toBackendDefenseType = (defenseType: DefenseType) => {
+  const typeMap: Record<DefenseType, string> = {
+    '预答辩': 'pre',
+    '正式答辩': 'formal',
+    '中期答辩': 'mid'
+  }
+  return typeMap[defenseType]
+}
+
 export const getScheduleResults = async (defenseType: DefenseType) => {
   if (!USE_MOCK) {
-    // 映射前端类型到后端类型
-    const typeMap: Record<string, string> = {
-      '预答辩': 'pre',
-      '正式答辩': 'formal',
-      '中期答辩': 'mid'
-    }
-    return request.get('/schedule/current/', { 
-      params: { defense_type: typeMap[defenseType] } 
+    return request.get('/schedule/current/', {
+      params: { defense_type: toBackendDefenseType(defenseType) }
     }) as Promise<ScheduleResult>
   }
 
@@ -26,13 +29,8 @@ export const getScheduleResults = async (defenseType: DefenseType) => {
 
 export const generateSchedule = async (defenseType: DefenseType) => {
   if (!USE_MOCK) {
-    const typeMap: Record<string, string> = {
-      '预答辩': 'pre',
-      '正式答辩': 'formal',
-      '中期答辩': 'mid'
-    }
-    return request.post('/schedule/generate/', { 
-      rules: { defense_type: typeMap[defenseType] } 
+    return request.post('/schedule/generate/', {
+      rules: { defense_type: toBackendDefenseType(defenseType) }
     }) as Promise<ScheduleResult>
   }
 

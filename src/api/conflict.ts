@@ -3,6 +3,7 @@ import type { DefenseType } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getScheduleResult } from '../utils/scheduleStorage'
 import { checkConflictsMock } from '../utils/conflictMock'
+import { toBackendDefenseType } from './schedule'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
@@ -16,7 +17,7 @@ const writeLocal = (defenseType: DefenseType, conflicts: ScheduleConflict[]) => 
 }
 
 export const readLocalConflicts = (defenseType: DefenseType) => {
-  if (typeof window === 'undefined') return { conflicts: [], checkedAt: '' }
+  if (!USE_MOCK || typeof window === 'undefined') return { conflicts: [], checkedAt: '' }
   const raw = window.localStorage.getItem(getConflictsKey(defenseType))
   const checkedAt = window.localStorage.getItem(getCheckedAtKey(defenseType)) || ''
   if (!raw) return { conflicts: [], checkedAt }
@@ -29,7 +30,9 @@ export const readLocalConflicts = (defenseType: DefenseType) => {
 
 export const checkScheduleConflicts = async (defenseType: DefenseType) => {
   if (!USE_MOCK) {
-    return request.post('/schedule/check-conflicts/', { defenseType }) as Promise<ScheduleConflict[]>
+    return request.post('/schedule/check-conflicts/', {
+      defense_type: toBackendDefenseType(defenseType)
+    }) as Promise<ScheduleConflict[]>
   }
 
   const result = getScheduleResult(defenseType)
@@ -42,3 +45,4 @@ export const checkScheduleConflicts = async (defenseType: DefenseType) => {
   return conflicts
 }
 
+export const isConflictMockMode = () => USE_MOCK

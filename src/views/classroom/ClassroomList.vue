@@ -250,7 +250,7 @@ const submitForm = async () => {
           await updateClassroom(form.id, form)
           ElMessage.success('修改成功')
         } else {
-          const { id, ...data } = form
+          const { id: _id, ...data } = form
           await createClassroom(data)
           ElMessage.success('新增成功')
         }

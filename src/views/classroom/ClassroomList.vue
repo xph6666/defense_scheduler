@@ -72,6 +72,19 @@
       </el-table-column>
     </el-table>
 
+    <div class="mt-4 flex justify-end">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="filteredData.length"
+        layout="total, sizes, prev, pager, next, jumper"
+        background
+        @size-change="handlePageSizeChange"
+        @current-change="handlePageChange"
+      />
+    </div>
+
     <!-- Dialog -->
     <el-dialog
       v-model="dialogVisible"
@@ -112,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
@@ -127,9 +140,16 @@ const dialogVisible = ref(false)
 const importVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()
-const tableData = ref<Classroom[]>([])
 const allData = ref<Classroom[]>([])
+const filteredData = ref<Classroom[]>([])
 const selectedIds = ref<number[]>([])
+const currentPage = ref(1)
+const pageSize = ref(10)
+
+const tableData = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredData.value.slice(start, start + pageSize.value)
+})
 
 const handleSelectionChange = (selection: Classroom[]) => {
   selectedIds.value = selection.map(item => item.id)
@@ -197,11 +217,22 @@ const fetchData = async () => {
 }
 
 const handleSearch = () => {
-  tableData.value = allData.value.filter(item => {
+  filteredData.value = allData.value.filter(item => {
     const matchCampus = !searchForm.campus || item.campus === searchForm.campus
     const matchName = !searchForm.name || item.name.includes(searchForm.name)
     return matchCampus && matchName
   })
+  currentPage.value = 1
+  selectedIds.value = []
+}
+
+const handlePageChange = () => {
+  selectedIds.value = []
+}
+
+const handlePageSizeChange = () => {
+  currentPage.value = 1
+  selectedIds.value = []
 }
 
 const resetSearch = () => {

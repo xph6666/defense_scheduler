@@ -21,11 +21,14 @@ export const getScheduleResult = (defenseType: DefenseType) => {
 export const updateScheduleGroupInStorage = (defenseType: DefenseType, groupId: number, groupData: ScheduleGroup) => {
   const current = getScheduleResult(defenseType)
   if (!current) return null
-  const idx = current.groups.findIndex(g => g.id === groupId)
-  if (idx === -1) return null
-  current.groups[idx] = { ...groupData }
-  saveScheduleResult(current)
-  return current
+  const exists = current.groups.some(g => g.id === groupId)
+  if (!exists) return null
+  const updated = {
+    ...current,
+    groups: current.groups.map(g => (g.id === groupId ? { ...groupData } : g))
+  }
+  saveScheduleResult(updated)
+  return updated
 }
 
 export const getAllScheduleResults = () => {

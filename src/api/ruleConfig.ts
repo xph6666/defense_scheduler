@@ -5,9 +5,10 @@ import { toBackendDefenseType } from './schedule'
 import { isNotFoundError } from './request'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+const USE_REMOTE_RULE_CONFIG = (import.meta as any).env?.VITE_USE_REMOTE_RULE_CONFIG === 'true'
 
 export async function getRuleConfig(defenseType: DefenseType) {
-  if (USE_MOCK) {
+  if (USE_MOCK || !USE_REMOTE_RULE_CONFIG) {
     return getRuleConfigFromStorage(defenseType)
   }
 
@@ -24,7 +25,7 @@ export async function getRuleConfig(defenseType: DefenseType) {
 }
 
 export async function saveRuleConfig(data: RuleConfig) {
-  if (USE_MOCK) {
+  if (USE_MOCK || !USE_REMOTE_RULE_CONFIG) {
     saveRuleConfigToStorage(data)
     return data
   }

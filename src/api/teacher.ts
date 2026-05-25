@@ -1,4 +1,5 @@
 import request from './request'
+import { extractList } from './response'
 import type { Teacher } from '../types/teacher'
 import { mockTeachers } from '../utils/mockData'
 
@@ -10,7 +11,8 @@ const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
 export const listTeachers = async () => {
   if (!USE_MOCK) {
-    return request.get('/teachers/') as Promise<Teacher[]>
+    const response = await request.get('/teachers/')
+    return extractList<Teacher>(response)
   }
   return new Promise<Teacher[]>(resolve => {
     setTimeout(() => resolve([...teachersData]), 300)

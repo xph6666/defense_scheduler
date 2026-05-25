@@ -1,5 +1,6 @@
 import request from './request'
 import type { DefenseType, ScheduleResult } from '../types/schedule'
+import type { RuleConfig } from '../types/ruleConfig'
 import { generateMockScheduleResult } from '../utils/scheduleMock'
 import { getScheduleResult, saveScheduleResult } from '../utils/scheduleStorage'
 
@@ -27,10 +28,34 @@ export const getScheduleResults = async (defenseType: DefenseType) => {
   return getScheduleResult(defenseType)
 }
 
-export const generateSchedule = async (defenseType: DefenseType) => {
+const addDays = (dateText: string, days: number) => {
+  const date = new Date(dateText)
+  if (Number.isNaN(date.getTime())) {
+    return dateText
+  }
+  date.setDate(date.getDate() + days)
+  return date.toISOString().split('T')[0]
+}
+
+const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
+  const startDate = config?.startDate || new Date().toISOString().split('T')[0]
+
+  return {
+    defense_type: toBackendDefenseType(defenseType),
+    start_date: startDate,
+    end_date: addDays(startDate, 10),
+    group_size: config?.studentCount?.target || 6,
+    expert_count: config?.expertCount?.target || 3,
+    avoid_weekend: config?.avoidWeekend ?? true,
+    avoid_holiday: config?.avoidHoliday ?? true,
+    mentor_avoidance: config?.mentorAvoidance ?? false
+  }
+}
+
+export const generateSchedule = async (defenseType: DefenseType, config?: RuleConfig) => {
   if (!USE_MOCK) {
     return request.post('/schedule/generate/', {
-      rules: { defense_type: toBackendDefenseType(defenseType) }
+      rules: buildScheduleRules(defenseType, config)
     }) as Promise<ScheduleResult>
   }
 

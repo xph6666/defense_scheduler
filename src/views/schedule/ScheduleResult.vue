@@ -263,7 +263,8 @@ const handleGenerate = async () => {
   conflicts.value = []
   currentConflict.value = null
   try {
-    await generateSchedule(currentDefenseType)
+    const config = await getRuleConfig(currentDefenseType)
+    await generateSchedule(currentDefenseType, config)
     if (currentDefenseType !== defenseType.value) return
     const scheduleResult = await getScheduleResults(currentDefenseType)
     if (currentDefenseType !== defenseType.value) return

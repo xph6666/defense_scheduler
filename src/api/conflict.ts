@@ -1,9 +1,10 @@
 import request from './request'
-import type { DefenseType } from '../types/schedule'
+import type { DefenseType, ScheduleResult } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getScheduleResult } from '../utils/scheduleStorage'
 import { checkConflictsMock } from '../utils/conflictMock'
 import { toBackendDefenseType } from './schedule'
+import { isNotFoundError } from './request'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
@@ -28,11 +29,21 @@ export const readLocalConflicts = (defenseType: DefenseType) => {
   }
 }
 
-export const checkScheduleConflicts = async (defenseType: DefenseType) => {
+export const checkScheduleConflicts = async (defenseType: DefenseType, fallbackResult?: ScheduleResult | null) => {
   if (!USE_MOCK) {
-    return request.post('/schedule/check-conflicts/', {
-      defense_type: toBackendDefenseType(defenseType)
-    }) as Promise<ScheduleConflict[]>
+    try {
+      return await request.post('/schedule/check-conflicts/', {
+        defense_type: toBackendDefenseType(defenseType)
+      }) as ScheduleConflict[]
+    } catch (error) {
+      if (!isNotFoundError(error)) {
+        throw error
+      }
+      const result = fallbackResult || getScheduleResult(defenseType)
+      const conflicts = result ? checkConflictsMock(result) : []
+      writeLocal(defenseType, conflicts)
+      return conflicts
+    }
   }
 
   const result = getScheduleResult(defenseType)

@@ -298,7 +298,7 @@ const handleCheckConflicts = async (targetDefenseType: DefenseType = defenseType
 
   conflictLoading.value = true
   try {
-    const nextConflicts = await checkScheduleConflicts(targetDefenseType)
+    const nextConflicts = await checkScheduleConflicts(targetDefenseType, result.value)
     if (targetDefenseType !== defenseType.value) return
     conflicts.value = nextConflicts
   } catch (e) {

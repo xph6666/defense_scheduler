@@ -7,6 +7,20 @@ interface ApiEnvelope<T = unknown> {
   error?: string
 }
 
+export class ApiRequestError extends Error {
+  status?: number
+
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+  }
+}
+
+export const isNotFoundError = (error: unknown) => {
+  return error instanceof ApiRequestError && error.status === 404
+}
+
 const request = axios.create({
   baseURL: (import.meta as any).env?.VITE_API_BASE_URL || '/api',
   timeout: 10000
@@ -38,7 +52,7 @@ request.interceptors.response.use(
   error => {
     const body = error.response?.data as ApiEnvelope | undefined
     const message = body?.message || body?.error || error.message || '网络请求失败'
-    return Promise.reject(new Error(message))
+    return Promise.reject(new ApiRequestError(message, error.response?.status))
   }
 )
 

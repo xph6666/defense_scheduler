@@ -1,6 +1,12 @@
 from rest_framework import serializers
 from .models import Teacher, Student, Room
+from .models import RuleConfig
 
+class RuleConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RuleConfig
+        fields = '__all__'
+        
 class TeacherSerializer(serializers.ModelSerializer):
     isExternal = serializers.BooleanField(source='is_external', default=False, required=False)
     availableTypes = serializers.JSONField(source='available_types', default=list, required=False)

@@ -7,32 +7,38 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.http import HttpResponse
 import pandas as pd
 import json
-from .models import Teacher, Student, Room, ScheduleVersion, Group
-from .serializers import TeacherSerializer, StudentSerializer, RoomSerializer, ScheduleVersionSerializer
+from .models import Teacher, Student, Room, ScheduleVersion, Group, RuleConfig
+from .serializers import TeacherSerializer, StudentSerializer, RoomSerializer, ScheduleVersionSerializer, RuleConfigSerializer
+from .utils import success_response, error_response
 
+# ==================== RuleConfig 视图 ====================
+class RuleConfigViewSet(ModelViewSet):
+    queryset = RuleConfig.objects.all()
+    serializer_class = RuleConfigSerializer
 
+# ==================== 导入混入类 ====================
 class ImportMixin:
     @action(detail=False, methods=['post'])
     def import_data(self, request):
         file = request.FILES.get('file')
         if not file:
-            return Response({'error': '未提供文件'}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return error_response(message='未提供文件', status=400)
+
         try:
             if file.name.endswith('.csv'):
                 df = pd.read_csv(file)
             elif file.name.endswith(('.xls', '.xlsx')):
                 df = pd.read_excel(file)
             else:
-                return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
-            
+                return error_response(message='不支持的文件格式', status=400)
+
             df.columns = [c.strip() for c in df.columns]
             df = df.where(pd.notnull(df), None)
             data_list = df.to_dict(orient='records')
-            
+
             success_count = 0
             errors = []
-            
+
             for index, row in enumerate(data_list):
                 try:
                     processed_row = {}
@@ -55,7 +61,7 @@ class ImportMixin:
                                     processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
                             else:
                                 processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
-                    
+
                     bool_fields = ['isExternal', 'is_external']
                     for field in bool_fields:
                         if field in processed_row and isinstance(processed_row[field], str):
@@ -69,51 +75,124 @@ class ImportMixin:
                         errors.append(f"行 {index + 2}: {serializer.errors}")
                 except Exception as e:
                     errors.append(f"行 {index + 2}: {str(e)}")
-            
-            if success_count == 0 and errors:
-                return Response({
-                    'message': f'导入失败，请检查文件格式。',
-                    'errors': errors[:5]
-                }, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response({
-                'message': f'成功导入 {success_count} 条数据',
-                'errors': errors
-            }, status=status.HTTP_200_OK)
-            
+            if success_count == 0 and errors:
+                return error_response(message='导入失败，请检查文件格式', status=400, errors=errors[:5])
+
+            return success_response(
+                data={'success_count': success_count, 'errors': errors},
+                message=f'成功导入 {success_count} 条数据',
+                status=200
+            )
+
         except Exception as e:
-            return Response({'error': f'解析文件失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(message=f'解析文件失败: {str(e)}', status=400)
 
     @action(detail=False, methods=['post'])
     def batch_delete(self, request):
         ids = request.data.get('ids', [])
         if not ids:
-            return Response({'error': '未提供待删除的 ID 列表'}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return error_response(message='未提供待删除的 ID 列表', status=400)
+
         try:
             queryset = self.get_queryset().filter(id__in=ids)
             count = queryset.count()
             queryset.delete()
-            return Response({'message': f'成功删除 {count} 条数据'}, status=status.HTTP_200_OK)
+            return success_response(data={'deleted_count': count}, message=f'成功删除 {count} 条数据', status=200)
         except Exception as e:
-            return Response({'error': f'删除失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(message=f'删除失败: {str(e)}', status=400)
 
-
+# ==================== 教师视图 ====================
 class TeacherViewSet(ImportMixin, ModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return success_response(data=serializer.data, message='获取教师列表成功', status=200)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='添加教师成功', status=201)
+        return error_response(message='添加教师失败', status=400, errors=serializer.errors)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='更新教师成功', status=200)
+        return error_response(message='更新教师失败', status=400, errors=serializer.errors)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return success_response(message='删除教师成功', status=204)
+
+# ==================== 学生视图 ====================
 class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return success_response(data=serializer.data, message='获取学生列表成功', status=200)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='添加学生成功', status=201)
+        return error_response(message='添加学生失败', status=400, errors=serializer.errors)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='更新学生成功', status=200)
+        return error_response(message='更新学生失败', status=400, errors=serializer.errors)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return success_response(message='删除学生成功', status=204)
+
+# ==================== 教室视图 ====================
 class RoomViewSet(ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return success_response(data=serializer.data, message='获取教室列表成功', status=200)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='添加教室成功', status=201)
+        return error_response(message='添加教室失败', status=400, errors=serializer.errors)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return success_response(data=serializer.data, message='更新教室成功', status=200)
+        return error_response(message='更新教室失败', status=400, errors=serializer.errors)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return success_response(message='删除教室成功', status=204)
+
+# ==================== 排期视图 ====================
 class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
@@ -146,7 +225,7 @@ class ScheduleViewSet(GenericViewSet):
             result = self._mock_schedule_result(input_data)
 
         ScheduleVersion.objects.filter(defense_type=rules['defense_type']).update(is_current=False)
-        
+
         version_num = ScheduleVersion.objects.filter(defense_type=rules['defense_type']).count() + 1
         schedule_version = ScheduleVersion.objects.create(
             version=version_num,
@@ -172,7 +251,13 @@ class ScheduleViewSet(GenericViewSet):
 
         request.query_params._mutable = True
         request.query_params['defense_type'] = rules['defense_type']
-        return self.current(request)
+        current_response = self.current(request)
+        if hasattr(current_response, 'data'):
+            data = current_response.data
+        else:
+            data = current_response
+
+        return success_response(data=data, message='排期生成成功', status=201)
 
     def _mock_schedule_result(self, input_data):
         return {
@@ -201,12 +286,11 @@ class ScheduleViewSet(GenericViewSet):
         ).first()
 
         if not schedule_version:
-            return Response({
-                'defenseType': defense_type,
-                'generatedAt': '',
-                'groups': [],
-                'message': '暂无排期结果'
-            })
+            return success_response(
+                data={'defenseType': defense_type, 'generatedAt': '', 'groups': []},
+                message='暂无排期结果',
+                status=200
+            )
 
         groups = schedule_version.groups.all()
         formatted_groups = []
@@ -231,20 +315,21 @@ class ScheduleViewSet(GenericViewSet):
                 ],
                 'students': [
                     {
-                        'id': s.id, 
-                        'name': s.name, 
-                        'studentType': s.type,
-                        'mentorName': s.supervisor.name if s.supervisor else ''
+                        'id': s.id,
+                        'name': s.name,
+                        'studentType': s.student_type,
+                        'mentorName': s.mentor_name
                     }
                     for s in group.students.all()
                 ]
             })
 
-        return Response({
+        data = {
             'defenseType': schedule_version.get_defense_type_display(),
             'generatedAt': schedule_version.created_at.strftime('%Y-%m-%d %H:%M'),
             'groups': formatted_groups
-        })
+        }
+        return success_response(data=data, message='获取当前排期成功', status=200)
 
     @action(detail=False, methods=['post'])
     def adjust(self, request):
@@ -264,14 +349,11 @@ class ScheduleViewSet(GenericViewSet):
         elif action_type == 'change_secretary':
             return self._change_secretary(request)
         else:
-            return Response(
-                {'error': f'未知的 action: {action_type}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return error_response(message=f'未知的 action: {action_type}', status=400)
 
     @action(detail=False, methods=['get'])
     def export(self, request):
-        """导出当前排期为 Excel 文件"""
+        """导出当前排期为 Excel 文件（直接返回文件，不包装）"""
         defense_type = request.query_params.get('defense_type', 'pre')
         schedule_version = ScheduleVersion.objects.filter(
             defense_type=defense_type,
@@ -279,7 +361,7 @@ class ScheduleViewSet(GenericViewSet):
         ).first()
 
         if not schedule_version:
-            return Response({'error': '暂无排期结果可导出'}, status=404)
+            return error_response(message='暂无排期结果可导出', status=404)
 
         wb = Workbook()
         default_sheet = wb.active
@@ -291,7 +373,7 @@ class ScheduleViewSet(GenericViewSet):
             'FFB3B3', 'B3FFB3', 'B3B3FF', 'FFFFB3', 'FFB3FF', 'B3FFFF',
         ]
 
-        supervisor_color_map = {}
+        mentor_color_map = {}
         color_index = 0
 
         for group in groups:
@@ -338,25 +420,24 @@ class ScheduleViewSet(GenericViewSet):
             row += 1
 
             for student in group.students.all():
-                if student.supervisor_id not in supervisor_color_map:
-                    supervisor_color_map[student.supervisor_id] = colors[color_index % len(colors)]
+                mentor_key = student.mentor_name if student.mentor_name else '无导师'
+                if mentor_key not in mentor_color_map:
+                    mentor_color_map[mentor_key] = colors[color_index % len(colors)]
                     color_index += 1
 
-                color = supervisor_color_map[student.supervisor_id]
+                color = mentor_color_map[mentor_key]
                 fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
 
                 cell = sheet.cell(row=row, column=1, value=student.name)
                 cell.fill = fill
 
-                cell = sheet.cell(row=row, column=2, value=student.get_type_display())
+                cell = sheet.cell(row=row, column=2, value=student.student_type)
                 cell.fill = fill
 
-                supervisor_name = student.supervisor.name if student.supervisor else '未分配'
-                cell = sheet.cell(row=row, column=3, value=supervisor_name)
+                cell = sheet.cell(row=row, column=3, value=student.mentor_name if student.mentor_name else '未分配')
                 cell.fill = fill
 
-                supervisor_title = student.supervisor.title if student.supervisor else ''
-                cell = sheet.cell(row=row, column=4, value=supervisor_title)
+                cell = sheet.cell(row=row, column=4, value='')
                 cell.fill = fill
 
                 row += 1
@@ -378,17 +459,35 @@ class ScheduleViewSet(GenericViewSet):
             content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
         response['Content-Disposition'] = f'attachment; filename=defense_schedule_{defense_type}.xlsx'
-
         wb.save(response)
         return response
 
+    # ========== 独立冲突检测接口 ==========
+    @action(detail=False, methods=['post'])
+    def check_conflicts(self, request):
+        """
+        独立冲突检测接口
+        请求体: {"schedule_version_id": 123}
+        返回该版本下的所有冲突
+        """
+        version_id = request.data.get('schedule_version_id')
+        if not version_id:
+            return error_response(message='缺少 schedule_version_id', status=400)
+        try:
+            schedule_version = ScheduleVersion.objects.get(id=version_id)
+            conflicts = self._check_conflicts(schedule_version)
+            return success_response(data={'conflicts': conflicts}, message='检测成功')
+        except ScheduleVersion.DoesNotExist:
+            return error_response(message='排期版本不存在', status=404)
+
+    # ---------- 私有调整方法 ----------
     def _move_student(self, request):
         student_id = request.data.get('student_id')
         from_group_id = request.data.get('from_group_id')
         to_group_id = request.data.get('to_group_id')
 
         if not all([student_id, from_group_id, to_group_id]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             from_group = Group.objects.get(id=from_group_id)
@@ -398,16 +497,15 @@ class ScheduleViewSet(GenericViewSet):
             to_group.students.add(student_id)
 
             conflicts = self._check_conflicts(from_group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': f'学生 {student_id} 已从组 {from_group_id} 移动到组 {to_group_id}',
-                'conflicts': conflicts
-            })
+            return success_response(
+                data={'conflicts': conflicts},
+                message=f'学生 {student_id} 已从组 {from_group_id} 移动到组 {to_group_id}',
+                status=200
+            )
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
         except Exception as e:
-            return Response({'error': str(e)}, status=400)
+            return error_response(message=str(e), status=400)
 
     def _change_expert(self, request):
         group_id = request.data.get('group_id')
@@ -415,110 +513,80 @@ class ScheduleViewSet(GenericViewSet):
         new_expert_id = request.data.get('new_expert_id')
 
         if not all([group_id, old_expert_id, new_expert_id]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             group = Group.objects.get(id=group_id)
             group.experts.remove(old_expert_id)
             group.experts.add(new_expert_id)
-
             conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '专家已更换',
-                'conflicts': conflicts
-            })
+            return success_response(data={'conflicts': conflicts}, message='专家已更换', status=200)
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
 
     def _change_chair(self, request):
         group_id = request.data.get('group_id')
         new_chair_id = request.data.get('new_chair_id')
 
         if not all([group_id, new_chair_id]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             group = Group.objects.get(id=group_id)
             group.chair_id = new_chair_id
             group.save()
-
             conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '主席已更换',
-                'conflicts': conflicts
-            })
+            return success_response(data={'conflicts': conflicts}, message='主席已更换', status=200)
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
 
     def _change_secretary(self, request):
         group_id = request.data.get('group_id')
         new_secretary_id = request.data.get('new_secretary_id')
 
         if not all([group_id, new_secretary_id]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             group = Group.objects.get(id=group_id)
             group.secretary_id = new_secretary_id
             group.save()
-
             conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '秘书已更换',
-                'conflicts': conflicts
-            })
+            return success_response(data={'conflicts': conflicts}, message='秘书已更换', status=200)
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
 
     def _change_time(self, request):
         group_id = request.data.get('group_id')
         new_time = request.data.get('new_time')
 
         if not all([group_id, new_time]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             group = Group.objects.get(id=group_id)
             group.time = new_time
             group.save()
-
             conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': f'时间已修改为 {new_time}',
-                'conflicts': conflicts
-            })
+            return success_response(data={'conflicts': conflicts}, message=f'时间已修改为 {new_time}', status=200)
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
 
     def _change_room(self, request):
         group_id = request.data.get('group_id')
         new_room_id = request.data.get('new_room_id')
 
         if not all([group_id, new_room_id]):
-            return Response({'error': '缺少必要参数'}, status=400)
+            return error_response(message='缺少必要参数', status=400)
 
         try:
             group = Group.objects.get(id=group_id)
             group.room_id = new_room_id
             group.save()
-
             conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '教室已更换',
-                'conflicts': conflicts
-            })
+            return success_response(data={'conflicts': conflicts}, message='教室已更换', status=200)
         except Group.DoesNotExist:
-            return Response({'error': '组不存在'}, status=404)
+            return error_response(message='组不存在', status=404)
 
     def _check_conflicts(self, schedule_version):
         conflicts = []
@@ -585,16 +653,17 @@ class ScheduleViewSet(GenericViewSet):
                 else:
                     room_time_map[key] = group.id
 
+        # 秘书-学生冲突
         for group in groups:
             if group.secretary:
-                secretary_id = group.secretary.id
+                secretary_name = group.secretary.name
                 for student in group.students.all():
-                    if student.secretary_id == secretary_id:
+                    if student.secretary_name == secretary_name:
                         conflicts.append({
                             'type': 'secretary_student_conflict',
-                            'description': f"秘书 {group.secretary.name} 和自己的学生 {student.name} 在同一组",
+                            'description': f"秘书 {secretary_name} 和自己的学生 {student.name} 在同一组",
                             'group_id': group.id,
-                            'secretary_id': secretary_id,
+                            'secretary_name': secretary_name,
                             'student_id': student.id
                         })
 

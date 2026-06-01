@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-d6t8fl_y3_3k)#88c554ly06t=8w8#^723p6)#coc_@99002qv
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '.ngrok-free.dev']
 
 
 # Application definition
@@ -128,3 +128,14 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 CORS_ALLOW_ALL_ORIGINS = True   # 开发用
+
+# Static files (CSS, JavaScript, Images)
+STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'   # 新增：用于 collectstatic
+
+# CORS 配置（你已经有了，确保存在）
+CORS_ALLOW_ALL_ORIGINS = True
+
+# 如果你计划生成 API 文档，请取消下面的注释并安装 drf-spectacular
+# INSTALLED_APPS += ['drf_spectacular']
+# REST_FRAMEWORK['DEFAULT_SCHEMA_CLASS'] = 'drf_spectacular.openapi.AutoSchema'

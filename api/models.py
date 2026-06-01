@@ -69,3 +69,15 @@ class Group(models.Model):
 
     def __str__(self):
         return self.group_id
+class RuleConfig(models.Model):
+    DEFENSE_TYPE_CHOICES = [
+        ('pre', '预答辩'),
+        ('formal', '正式答辩'),
+        ('mid', '中期答辩'),
+    ]
+    defense_type = models.CharField(max_length=20, choices=DEFENSE_TYPE_CHOICES, unique=True)
+    rules = models.JSONField(default=dict, help_text="存储规则参数，如 group_size, expert_count 等")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.get_defense_type_display()} 规则配置"

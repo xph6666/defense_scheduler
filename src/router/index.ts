@@ -1,16 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '../stores/user'
-import MainLayout from '../layout/MainLayout.vue'
-import Login from '../views/Login.vue'
-import Dashboard from '../views/Dashboard.vue'
-import TeacherList from '../views/teacher/TeacherList.vue'
-import StudentList from '../views/student/StudentList.vue'
-import ClassroomList from '../views/classroom/ClassroomList.vue'
-import ScheduleResult from '../views/schedule/ScheduleResult.vue'
-import RuleConfig from '../views/RuleConfig.vue'
-import OperationLog from '../views/OperationLog.vue'
-import DemoGuide from '../views/DemoGuide.vue'
-import AcceptanceTest from '../views/AcceptanceTest.vue'
+
+const MainLayout = () => import('../layout/MainLayout.vue')
+const Login = () => import('../views/Login.vue')
+const Dashboard = () => import('../views/Dashboard.vue')
+const TeacherList = () => import('../views/teacher/TeacherList.vue')
+const StudentList = () => import('../views/student/StudentList.vue')
+const ClassroomList = () => import('../views/classroom/ClassroomList.vue')
+const ScheduleResult = () => import('../views/schedule/ScheduleResult.vue')
+const RuleConfig = () => import('../views/RuleConfig.vue')
+const OperationLog = () => import('../views/OperationLog.vue')
+const DemoGuide = () => import('../views/DemoGuide.vue')
+const AcceptanceTest = () => import('../views/AcceptanceTest.vue')
 
 const router = createRouter({
   history: createWebHistory(),

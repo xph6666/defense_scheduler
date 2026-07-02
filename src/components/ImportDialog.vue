@@ -52,7 +52,6 @@ import { importTeachers } from '../api/teacher'
 import { importStudents } from '../api/student'
 import { importClassrooms } from '../api/classroom'
 import ImportPreviewDialog from './ImportPreviewDialog.vue'
-import type { ImportModule } from '../types/import'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 

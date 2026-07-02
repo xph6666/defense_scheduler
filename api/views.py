@@ -268,8 +268,8 @@ class ScheduleViewSet(GenericViewSet):
                     {
                         'id': s.id, 
                         'name': s.name, 
-                        'studentType': s.type,
-                        'mentorName': s.supervisor.name if s.supervisor else ''
+                        'studentType': s.student_type,
+                        'mentorName': s.mentor_name
                     }
                     for s in group.students.all()
                 ]
@@ -373,24 +373,25 @@ class ScheduleViewSet(GenericViewSet):
             row += 1
 
             for student in group.students.all():
-                if student.supervisor_id not in supervisor_color_map:
-                    supervisor_color_map[student.supervisor_id] = colors[color_index % len(colors)]
+                mentor_key = student.mentor_name or f"student-{student.id}"
+                if mentor_key not in supervisor_color_map:
+                    supervisor_color_map[mentor_key] = colors[color_index % len(colors)]
                     color_index += 1
 
-                color = supervisor_color_map[student.supervisor_id]
+                color = supervisor_color_map[mentor_key]
                 fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
 
                 cell = sheet.cell(row=row, column=1, value=student.name)
                 cell.fill = fill
 
-                cell = sheet.cell(row=row, column=2, value=student.get_type_display())
+                cell = sheet.cell(row=row, column=2, value=student.student_type)
                 cell.fill = fill
 
-                supervisor_name = student.supervisor.name if student.supervisor else '未分配'
+                supervisor_name = student.mentor_name or '未分配'
                 cell = sheet.cell(row=row, column=3, value=supervisor_name)
                 cell.fill = fill
 
-                supervisor_title = student.supervisor.title if student.supervisor else ''
+                supervisor_title = Teacher.objects.filter(name=student.mentor_name).values_list('title', flat=True).first() or ''
                 cell = sheet.cell(row=row, column=4, value=supervisor_title)
                 cell.fill = fill
 
@@ -416,6 +417,20 @@ class ScheduleViewSet(GenericViewSet):
 
         wb.save(response)
         return response
+
+    @action(detail=False, methods=['post'], url_path='check-conflicts')
+    def check_conflicts(self, request):
+        """检测当前排期冲突"""
+        defense_type = request.data.get('defense_type', 'pre')
+        schedule_version = ScheduleVersion.objects.filter(
+            defense_type=defense_type,
+            is_current=True
+        ).first()
+
+        if not schedule_version:
+            return Response([], status=status.HTTP_200_OK)
+
+        return Response(self._check_conflicts(schedule_version), status=status.HTTP_200_OK)
 
     def _move_student(self, request):
         student_id = request.data.get('student_id')
@@ -622,14 +637,14 @@ class ScheduleViewSet(GenericViewSet):
 
         for group in groups:
             if group.secretary:
-                secretary_id = group.secretary.id
+                secretary_name = group.secretary.name
                 for student in group.students.all():
-                    if student.secretary_id == secretary_id:
+                    if student.secretary_name and student.secretary_name == secretary_name:
                         conflicts.append({
                             'type': 'secretary_student_conflict',
                             'description': f"秘书 {group.secretary.name} 和自己的学生 {student.name} 在同一组",
                             'group_id': group.id,
-                            'secretary_id': secretary_id,
+                            'secretary_id': group.secretary.id,
                             'student_id': student.id
                         })
 

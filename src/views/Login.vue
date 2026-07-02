@@ -35,6 +35,7 @@
           type="primary" 
           class="w-full mt-4" 
           size="large" 
+          :loading="loading"
           @click="handleLogin"
         >
           登录
@@ -45,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -57,14 +58,24 @@ const form = reactive({
   username: '',
   password: ''
 })
+const loading = ref(false)
 
-const handleLogin = () => {
-  if (form.username === 'admin') {
-    userStore.login(form.username)
+const handleLogin = async () => {
+  if (!form.username || !form.password) {
+    ElMessage.error('请输入账号和密码')
+    return
+  }
+
+  loading.value = true
+  try {
+    await userStore.login(form.username, form.password)
     ElMessage.success('登录成功')
     router.push('/dashboard')
-  } else {
-    ElMessage.error('请输入正确账号 admin')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '账号或密码错误'
+    ElMessage.error(message)
+  } finally {
+    loading.value = false
   }
 }
 </script>

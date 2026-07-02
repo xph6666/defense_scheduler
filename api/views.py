@@ -1,7 +1,12 @@
 from rest_framework.viewsets import ModelViewSet, GenericViewSet
 from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.authtoken.models import Token
+from django.contrib.auth import authenticate
+from django.db import transaction
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.http import HttpResponse
@@ -17,6 +22,29 @@ from .serializers import (
     TeacherSerializer,
     default_rule_config,
 )
+
+
+def split_time_text(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    normalized = str(value).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
+    return [item.strip() for item in normalized.split(',') if item.strip()]
+
+
+class AuthLoginView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        username = request.data.get('username', '')
+        password = request.data.get('password', '')
+        user = authenticate(request, username=username, password=password)
+        if not user:
+            return Response({'error': '账号或密码错误'}, status=status.HTTP_400_BAD_REQUEST)
+        token, _ = Token.objects.get_or_create(user=user)
+        return Response({'token': token.key, 'username': user.get_username()})
 
 
 class ImportMixin:
@@ -153,13 +181,62 @@ class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
 
+    def _build_algorithm_input(self):
+        teachers = list(Teacher.objects.all())
+        students = list(Student.objects.all())
+        rooms = list(Room.objects.all())
+        teacher_by_name = {teacher.name: teacher for teacher in teachers}
+
+        teacher_payload = []
+        for teacher in teachers:
+            forbidden_with = [
+                teacher_by_name[name].id
+                for name in [item.strip() for item in teacher.avoid_teacher_names.replace('，', ',').split(',') if item.strip()]
+                if name in teacher_by_name
+            ]
+            teacher_payload.append({
+                'id': teacher.id,
+                'name': teacher.name,
+                'college': teacher.college,
+                'is_external': teacher.is_external,
+                'title': teacher.title,
+                'available_time': split_time_text(teacher.unavailable_times),
+                'campus_preference': teacher.campus_preference,
+                'forbidden_with': forbidden_with,
+            })
+
+        student_payload = []
+        for student in students:
+            mentor = teacher_by_name.get(student.mentor_name)
+            secretary = teacher_by_name.get(student.secretary_name)
+            student_payload.append({
+                'id': student.id,
+                'name': student.name,
+                'type': student.student_type,
+                'supervisor_id': mentor.id if mentor else None,
+                'campus': student.campus,
+                'secretary_id': secretary.id if secretary else None,
+            })
+
+        room_payload = [
+            {
+                'id': room.id,
+                'campus': room.campus,
+                'name': room.name,
+                'available_time': split_time_text(room.available_times),
+            }
+            for room in rooms
+        ]
+
+        return {
+            'teachers': teacher_payload,
+            'students': student_payload,
+            'rooms': room_payload,
+        }
+
     @action(detail=False, methods=['post'])
     def generate(self, request):
         """一键生成排期"""
-        teachers = Teacher.objects.all().values()
-        students = Student.objects.all().values()
-        rooms = Room.objects.all().values()
-
         rules = request.data.get('rules', {
             'defense_type': 'pre',
             'start_date': '2025-05-10',
@@ -167,43 +244,41 @@ class ScheduleViewSet(GenericViewSet):
             'avoid_holiday': True,
         })
 
-        input_data = {
-            'teachers': list(teachers),
-            'students': list(students),
-            'rooms': list(rooms),
-            'rules': rules
-        }
+        input_data = {**self._build_algorithm_input(), 'rules': rules}
 
         try:
-            from algorithm import generate_schedule
+            from algorithm import SchedulingError, generate_schedule
             result = generate_schedule(**input_data)
-        except ImportError:
-            result = self._mock_schedule_result(input_data)
+        except ImportError as exc:
+            return Response({'error': f'排期算法加载失败: {exc}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except SchedulingError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError) as exc:
+            return Response({'error': f'排期参数错误: {exc}'}, status=status.HTTP_400_BAD_REQUEST)
 
-        ScheduleVersion.objects.filter(defense_type=rules['defense_type']).update(is_current=False)
-        
-        version_num = ScheduleVersion.objects.filter(defense_type=rules['defense_type']).count() + 1
-        schedule_version = ScheduleVersion.objects.create(
-            version=version_num,
-            defense_type=rules['defense_type'],
-            rules_snapshot=rules,
-            is_current=True
-        )
+        with transaction.atomic():
+            ScheduleVersion.objects.filter(defense_type=rules['defense_type']).update(is_current=False)
 
-        for group_data in result.get('groups', []):
-            group = Group.objects.create(
-                schedule_version=schedule_version,
-                group_id=group_data['group_id'],
-                time=group_data['time'],
-                room_id=group_data.get('room_id'),
-                campus=group_data.get('campus', ''),
-                chair_id=group_data.get('chair_id'),
-                secretary_id=group_data.get('secretary_id')
+            version_num = ScheduleVersion.objects.filter(defense_type=rules['defense_type']).count() + 1
+            schedule_version = ScheduleVersion.objects.create(
+                version=version_num,
+                defense_type=rules['defense_type'],
+                rules_snapshot=rules,
+                is_current=True
             )
-            for expert_id in group_data.get('expert_ids', []):
-                group.experts.through.objects.create(group_id=group.id, teacher_id=expert_id)
-            for student_id in group_data.get('student_ids', []):
-                group.students.through.objects.create(group_id=group.id, student_id=student_id)
+
+            for group_data in result.get('groups', []):
+                group = Group.objects.create(
+                    schedule_version=schedule_version,
+                    group_id=group_data['group_id'],
+                    time=group_data.get('time') or '',
+                    room_id=group_data.get('room_id'),
+                    campus=group_data.get('campus') or '',
+                    chair_id=group_data.get('chair_id'),
+                    secretary_id=group_data.get('secretary_id')
+                )
+                group.experts.add(*group_data.get('expert_ids', []))
+                group.students.add(*group_data.get('student_ids', []))
 
         request.query_params._mutable = True
         request.query_params['defense_type'] = rules['defense_type']
@@ -279,6 +354,61 @@ class ScheduleViewSet(GenericViewSet):
             'defenseType': schedule_version.get_defense_type_display(),
             'generatedAt': schedule_version.created_at.strftime('%Y-%m-%d %H:%M'),
             'groups': formatted_groups
+        })
+
+    @action(detail=False, methods=['post'], url_path='adjust-group')
+    def adjust_group(self, request):
+        """保存前端完整分组编辑表单。"""
+        group_id = request.data.get('group_id')
+        group_data = request.data.get('group_data') or {}
+        if not group_id or not group_data:
+            return Response({'error': '缺少必要参数'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
+        except Group.DoesNotExist:
+            return Response({'error': '组不存在'}, status=status.HTTP_404_NOT_FOUND)
+
+        group.group_id = group_data.get('groupName') or group.group_id
+        date = group_data.get('date')
+        time_range = group_data.get('timeRange')
+        if date and time_range:
+            group.time = f'{date} {time_range}'
+        group.campus = group_data.get('campus') or group.campus
+
+        room_name = group_data.get('classroom')
+        if room_name:
+            room = Room.objects.filter(name=room_name, campus=group.campus).first() or Room.objects.filter(name=room_name).first()
+            if room:
+                group.room = room
+
+        chair_name = group_data.get('chairman') or group_data.get('leader')
+        if chair_name:
+            chair = Teacher.objects.filter(name=chair_name).first()
+            if chair:
+                group.chair = chair
+
+        secretary_name = group_data.get('secretary')
+        if secretary_name:
+            secretary = Teacher.objects.filter(name=secretary_name).first()
+            if secretary:
+                group.secretary = secretary
+
+        teacher_ids = [item.get('id') for item in group_data.get('teachers', []) if item.get('id')]
+        student_ids = [item.get('id') for item in group_data.get('students', []) if item.get('id')]
+
+        with transaction.atomic():
+            group.save()
+            if teacher_ids:
+                group.experts.set(teacher_ids)
+            if student_ids:
+                group.students.set(student_ids)
+
+        return Response({
+            'success': True,
+            'message': '调整保存成功',
+            'updatedGroup': group_data,
+            'conflicts': self._check_conflicts(group.schedule_version),
         })
 
     @action(detail=False, methods=['post'])
@@ -417,6 +547,17 @@ class ScheduleViewSet(GenericViewSet):
 
         wb.save(response)
         return response
+
+    @action(detail=False, methods=['get'], url_path='export-excel')
+    def export_excel(self, request):
+        defense_type = request.query_params.get('defense_type')
+        defense_label = request.query_params.get('defenseType')
+        if not defense_type and defense_label:
+            defense_type = {'预答辩': 'pre', '正式答辩': 'formal', '中期答辩': 'mid'}.get(defense_label, defense_label)
+
+        request.GET._mutable = True
+        request.GET['defense_type'] = defense_type or 'pre'
+        return self.export(request)
 
     @action(detail=False, methods=['post'], url_path='check-conflicts')
     def check_conflicts(self, request):

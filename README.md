@@ -6,6 +6,7 @@
 
 - Node.js 18+
 - npm 9+
+- Python 3.12+
 
 ## 安装与启动
 
@@ -13,6 +14,19 @@
 npm install
 npm run dev
 ```
+
+后端本地启动：
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
+```
+
+真实后端模式下，前端登录使用 Django 用户账号；请先创建管理员或业务用户。
 
 ## Mock 与真实后端切换
 
@@ -24,6 +38,10 @@ VITE_API_BASE_URL=http://localhost:8000/api
 VITE_API_PROXY_TARGET=http://localhost:8000
 VITE_USE_REMOTE_RULE_CONFIG=false
 VITE_USE_REMOTE_CONFLICT_CHECK=false
+DJANGO_DEBUG=true
+DJANGO_SECRET_KEY=change-me-in-local-dev
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,testserver
+DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
 - `VITE_USE_MOCK=true`：使用前端 Mock 和浏览器本地存储，适合单机演示。
@@ -31,6 +49,7 @@ VITE_USE_REMOTE_CONFLICT_CHECK=false
 - 未设置 `VITE_API_BASE_URL` 时，开发服务器会把 `/api/*` 代理到 `VITE_API_PROXY_TARGET`，默认 `http://localhost:8000`。
 - `VITE_USE_REMOTE_RULE_CONFIG=true`：启用后端规则配置接口；后端未部署该接口时保持 `false`。
 - `VITE_USE_REMOTE_CONFLICT_CHECK=true`：启用后端冲突检测接口；后端未部署该接口时保持 `false`。
+- 后端默认关闭 `DEBUG` 与全开放 CORS；本地开发请在环境变量中显式开启需要的配置。
 
 真实联调前请确认后端已提供教师、学生、教室、排期、冲突检测、人工调整、规则配置和操作日志相关接口。
 
@@ -41,7 +60,11 @@ npm run check
 npm run lint
 npm run build
 npm run preview
+python manage.py test
+python manage.py check --deploy
 ```
+
+生产部署前请参考 `.env.production.example` 设置长随机 `DJANGO_SECRET_KEY`、关闭 `DJANGO_DEBUG`、限制 `DJANGO_ALLOWED_HOSTS` / `DJANGO_CORS_ALLOWED_ORIGINS`，并在 HTTPS 环境中开启 secure cookie、HSTS 和 SSL redirect。
 
 ## 第八周前端联调重点
 

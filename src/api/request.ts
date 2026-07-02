@@ -40,6 +40,10 @@ const unwrapResponse = (response: AxiosResponse) => {
 
 request.interceptors.request.use(
   config => {
+    const token = typeof window !== 'undefined' ? window.localStorage.getItem('authToken') : ''
+    if (token && token !== 'mock-token') {
+      config.headers.Authorization = `Token ${token}`
+    }
     return config
   },
   error => {

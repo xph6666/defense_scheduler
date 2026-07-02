@@ -1,12 +1,40 @@
+from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import Room, Student, Teacher
+from .models import Group, Room, ScheduleVersion, Student, Teacher
+
+
+class AuthContractTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='admin', password='strong-pass-123')
+        Teacher.objects.create(name='教师1', college='计算机学院', title='教授')
+
+    def test_api_requires_authentication_except_login(self):
+        response = self.client.get('/api/teachers/')
+
+        self.assertEqual(response.status_code, 401)
+
+        login_response = self.client.post(
+            '/api/auth/login/',
+            {'username': 'admin', 'password': 'strong-pass-123'},
+            format='json',
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertIn('token', login_response.data)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Token {login_response.data['token']}")
+        authed_response = self.client.get('/api/teachers/')
+        self.assertEqual(authed_response.status_code, 200)
+        self.assertEqual(len(authed_response.data), 1)
 
 
 class IntegrationContractTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user = User.objects.create_user(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
 
     def test_rule_config_api_supports_frontend_contract(self):
         response = self.client.get('/api/rule-config/', {'defense_type': 'pre'})
@@ -57,6 +85,8 @@ class IntegrationContractTests(TestCase):
 class ScheduleContractTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user = User.objects.create_user(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
         for index, title in enumerate(['教授', '副教授', '讲师', '讲师'], start=1):
             Teacher.objects.create(
                 name=f'教师{index}',
@@ -116,6 +146,116 @@ class ScheduleContractTests(TestCase):
         self.assertIsInstance(conflicts_response.data, list)
 
         export_response = self.client.get('/api/schedule/export/', {'defense_type': 'pre'})
+        self.assertEqual(export_response.status_code, 200)
+        self.assertEqual(
+            export_response['Content-Type'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+
+    def test_schedule_generation_maps_frontend_model_fields_for_constraints(self):
+        Teacher.objects.all().delete()
+        Student.objects.all().delete()
+        Room.objects.all().delete()
+        mentor = Teacher.objects.create(
+            name='导师张',
+            college='计算机学院',
+            title='教授',
+            roles=['专家'],
+            available_types=['预答辩'],
+        )
+        eligible = Teacher.objects.create(
+            name='专家李',
+            college='计算机学院',
+            title='副教授',
+            roles=['专家'],
+            available_types=['预答辩'],
+        )
+        Teacher.objects.create(
+            name='秘书王',
+            college='计算机学院',
+            title='讲师',
+            roles=['秘书'],
+            available_types=['预答辩'],
+        )
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+        Student.objects.create(
+            name='学生1',
+            student_type='学硕',
+            mentor_name=mentor.name,
+            campus='创新港',
+            defense_types=['预答辩'],
+            secretary_name='秘书王',
+        )
+
+        response = self.client.post(
+            '/api/schedule/generate/',
+            {
+                'rules': {
+                    'defense_type': 'pre',
+                    'start_date': '2025-05-10',
+                    'end_date': '2025-05-10',
+                    'group_size': 1,
+                    'expert_count': 1,
+                    'avoid_weekend': False,
+                    'avoid_supervisor': True,
+                }
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        group = response.data['groups'][0]
+        self.assertNotIn(mentor.name, [teacher['name'] for teacher in group['teachers']])
+        self.assertIn(eligible.name, [teacher['name'] for teacher in group['teachers']])
+
+    def test_frontend_adjust_and_export_aliases_are_supported(self):
+        teacher = Teacher.objects.first()
+        secretary = Teacher.objects.last()
+        room = Room.objects.first()
+        student = Student.objects.first()
+        version = ScheduleVersion.objects.create(
+            version=1,
+            defense_type='pre',
+            is_current=True,
+            rules_snapshot={},
+        )
+        group = Group.objects.create(
+            schedule_version=version,
+            group_id='G1',
+            time='2025-05-10 09:00-12:00',
+            room=room,
+            campus='创新港',
+            chair=teacher,
+            secretary=secretary,
+        )
+        group.experts.add(teacher)
+        group.students.add(student)
+
+        adjust_response = self.client.post(
+            '/api/schedule/adjust-group/',
+            {
+                'defense_type': 'pre',
+                'group_id': group.id,
+                'group_data': {
+                    'groupName': 'G1-调整',
+                    'date': '2025-05-11',
+                    'timeRange': '14:00-16:00',
+                    'campus': '兴庆',
+                    'classroom': room.name,
+                    'chairman': teacher.name,
+                    'secretary': secretary.name,
+                    'teachers': [{'id': teacher.id, 'name': teacher.name, 'title': teacher.title, 'roles': teacher.roles}],
+                    'students': [{'id': student.id, 'name': student.name, 'studentType': student.student_type, 'mentorName': student.mentor_name}],
+                },
+            },
+            format='json',
+        )
+        self.assertEqual(adjust_response.status_code, 200)
+        group.refresh_from_db()
+        self.assertEqual(group.group_id, 'G1-调整')
+        self.assertEqual(group.time, '2025-05-11 14:00-16:00')
+
+        export_response = self.client.get('/api/schedule/export-excel/', {'defenseType': '预答辩'})
         self.assertEqual(export_response.status_code, 200)
         self.assertEqual(
             export_response['Content-Type'],

@@ -1,7 +1,7 @@
 import request from './request'
-import { createCsvBlob } from '../utils/download'
+import { createCsvBlob, downloadBlob } from '../utils/download'
 import type { DefenseType } from '../types/schedule'
-import { getScheduleResults } from './schedule'
+import { getScheduleResults, toBackendDefenseType } from './schedule'
 import { readLocalConflicts } from './conflict'
 import { exportScheduleToCsv } from '../utils/exportMock'
 
@@ -24,8 +24,10 @@ export async function exportScheduleExcel(defenseType: DefenseType) {
     return createCsvBlob('')
   }
 
-  return request.get('/schedule/export-excel/', {
-    params: { defenseType },
+  const blob = await request.get('/schedule/export/', {
+    params: { defense_type: toBackendDefenseType(defenseType) },
     responseType: 'blob'
-  }) as Promise<Blob>
+  }) as Blob
+  downloadBlob(blob, `defense_schedule_${toBackendDefenseType(defenseType)}.xlsx`)
+  return blob
 }

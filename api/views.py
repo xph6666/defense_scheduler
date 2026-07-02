@@ -7,8 +7,16 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.http import HttpResponse
 import pandas as pd
 import json
-from .models import Teacher, Student, Room, ScheduleVersion, Group
-from .serializers import TeacherSerializer, StudentSerializer, RoomSerializer, ScheduleVersionSerializer
+from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
+from .serializers import (
+    OperationLogSerializer,
+    RuleConfigSerializer,
+    RoomSerializer,
+    ScheduleVersionSerializer,
+    StudentSerializer,
+    TeacherSerializer,
+    default_rule_config,
+)
 
 
 class ImportMixin:
@@ -112,6 +120,33 @@ class StudentViewSet(ImportMixin, ModelViewSet):
 class RoomViewSet(ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
+
+
+class RuleConfigViewSet(ModelViewSet):
+    queryset = RuleConfig.objects.all()
+    serializer_class = RuleConfigSerializer
+
+    def list(self, request, *args, **kwargs):
+        defense_type = request.query_params.get('defense_type', 'pre')
+        rule_config = RuleConfig.objects.filter(defense_type=defense_type).first()
+        if not rule_config:
+            return Response(default_rule_config(defense_type))
+        return Response(self.get_serializer(rule_config).data)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
+
+
+class OperationLogViewSet(ModelViewSet):
+    queryset = OperationLog.objects.all()
+    serializer_class = OperationLogSerializer
+
+    def clear(self, request):
+        OperationLog.objects.all().delete()
+        return Response({'message': '日志已清空'}, status=status.HTTP_200_OK)
 
 
 class ScheduleViewSet(GenericViewSet):

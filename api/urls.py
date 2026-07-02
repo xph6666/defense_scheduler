@@ -12,5 +12,14 @@ router.register(r'operation-logs', OperationLogViewSet, basename='operation-logs
 router.register(r'schedule', ScheduleViewSet, basename='schedule')
 
 urlpatterns = [
+    path(
+        'operation-logs/',
+        OperationLogViewSet.as_view({
+            'get': 'list',
+            'post': 'create',
+            'delete': 'clear',
+        }),
+        name='operation-logs-list',
+    ),
     path('', include(router.urls)),
 ]

@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -80,6 +81,19 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(clear_response.status_code, 200)
         self.assertEqual(clear_response.data['message'], '日志已清空')
         self.assertEqual(self.client.get('/api/operation-logs/').data, [])
+
+    def test_import_rejects_oversized_files_before_parsing(self):
+        oversized_file = SimpleUploadedFile(
+            'teachers.csv',
+            b'name,title\n' + (b'x' * (5 * 1024 * 1024 + 1)),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': oversized_file})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('文件大小不能超过', response.data['error'])
+        self.assertEqual(Teacher.objects.count(), 0)
 
 
 class ScheduleContractTests(TestCase):
@@ -261,3 +275,48 @@ class ScheduleContractTests(TestCase):
             export_response['Content-Type'],
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
+
+    def test_adjust_group_rejects_unknown_references_without_partial_update(self):
+        teacher = Teacher.objects.first()
+        secretary = Teacher.objects.last()
+        room = Room.objects.first()
+        student = Student.objects.first()
+        version = ScheduleVersion.objects.create(
+            version=1,
+            defense_type='pre',
+            is_current=True,
+            rules_snapshot={},
+        )
+        group = Group.objects.create(
+            schedule_version=version,
+            group_id='G1',
+            time='2025-05-10 09:00-12:00',
+            room=room,
+            campus='创新港',
+            chair=teacher,
+            secretary=secretary,
+        )
+        group.experts.add(teacher)
+        group.students.add(student)
+
+        response = self.client.post(
+            '/api/schedule/adjust-group/',
+            {
+                'group_id': group.id,
+                'group_data': {
+                    'groupName': '不应保存',
+                    'classroom': '不存在的教室',
+                    'chairman': teacher.name,
+                    'secretary': secretary.name,
+                    'teachers': [{'id': 999999, 'name': '不存在的教师'}],
+                    'students': [{'id': student.id, 'name': student.name}],
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('教室不存在', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.group_id, 'G1')
+        self.assertEqual(list(group.experts.values_list('id', flat=True)), [teacher.id])

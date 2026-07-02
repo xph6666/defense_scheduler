@@ -24,6 +24,9 @@ from .serializers import (
 )
 
 
+MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024
+
+
 def split_time_text(value):
     if not value:
         return []
@@ -53,6 +56,8 @@ class ImportMixin:
         file = request.FILES.get('file')
         if not file:
             return Response({'error': '未提供文件'}, status=status.HTTP_400_BAD_REQUEST)
+        if file.size > MAX_IMPORT_FILE_SIZE:
+            return Response({'error': '文件大小不能超过 5MB'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             if file.name.endswith('.csv'):
@@ -369,39 +374,62 @@ class ScheduleViewSet(GenericViewSet):
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=status.HTTP_404_NOT_FOUND)
 
-        group.group_id = group_data.get('groupName') or group.group_id
+        next_group_id = group_data.get('groupName') or group.group_id
         date = group_data.get('date')
         time_range = group_data.get('timeRange')
+        next_time = group.time
         if date and time_range:
-            group.time = f'{date} {time_range}'
-        group.campus = group_data.get('campus') or group.campus
+            next_time = f'{date} {time_range}'
+        next_campus = group_data.get('campus') or group.campus
 
+        room = None
         room_name = group_data.get('classroom')
         if room_name:
-            room = Room.objects.filter(name=room_name, campus=group.campus).first() or Room.objects.filter(name=room_name).first()
-            if room:
-                group.room = room
+            room = Room.objects.filter(name=room_name, campus=next_campus).first() or Room.objects.filter(name=room_name).first()
+            if not room:
+                return Response({'error': f'教室不存在: {room_name}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        chair = None
         chair_name = group_data.get('chairman') or group_data.get('leader')
         if chair_name:
             chair = Teacher.objects.filter(name=chair_name).first()
-            if chair:
-                group.chair = chair
+            if not chair:
+                return Response({'error': f'主席/组长不存在: {chair_name}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        secretary = None
         secretary_name = group_data.get('secretary')
         if secretary_name:
             secretary = Teacher.objects.filter(name=secretary_name).first()
-            if secretary:
-                group.secretary = secretary
+            if not secretary:
+                return Response({'error': f'秘书不存在: {secretary_name}'}, status=status.HTTP_400_BAD_REQUEST)
 
         teacher_ids = [item.get('id') for item in group_data.get('teachers', []) if item.get('id')]
         student_ids = [item.get('id') for item in group_data.get('students', []) if item.get('id')]
+        if teacher_ids:
+            existing_teacher_ids = set(Teacher.objects.filter(id__in=teacher_ids).values_list('id', flat=True))
+            missing_teacher_ids = sorted(set(teacher_ids) - existing_teacher_ids)
+            if missing_teacher_ids:
+                return Response({'error': f'教师不存在: {missing_teacher_ids}'}, status=status.HTTP_400_BAD_REQUEST)
+        if student_ids:
+            existing_student_ids = set(Student.objects.filter(id__in=student_ids).values_list('id', flat=True))
+            missing_student_ids = sorted(set(student_ids) - existing_student_ids)
+            if missing_student_ids:
+                return Response({'error': f'学生不存在: {missing_student_ids}'}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
+            group.group_id = next_group_id
+            group.time = next_time
+            group.campus = next_campus
+            if room:
+                group.room = room
+            if chair:
+                group.chair = chair
+            if secretary:
+                group.secretary = secretary
             group.save()
-            if teacher_ids:
+            if 'teachers' in group_data:
                 group.experts.set(teacher_ids)
-            if student_ids:
+            if 'students' in group_data:
                 group.students.set(student_ids)
 
         return Response({

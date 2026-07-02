@@ -39,12 +39,10 @@
           <template #header>
             <div class="flex items-center text-gray-500 text-sm">
               <el-icon class="mr-2"><Timer /></el-icon>
-              本周开发阶段
+              当前排期组数
             </div>
           </template>
-          <div class="text-sm font-medium text-gray-700 leading-tight">
-            第 3 周：人工调整 + 冲突检测 + 冲突高亮
-          </div>
+          <div class="text-3xl font-bold text-gray-800">{{ scheduleOverview.totalGroups }}</div>
         </el-card>
       </el-col>
     </el-row>
@@ -57,7 +55,7 @@
             排期结果概览
           </div>
           <div class="flex items-center gap-3">
-            <el-button type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
+            <el-button v-if="enableDemoTools" type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
             <el-button type="primary" link @click="goSchedule">查看排期结果</el-button>
           </div>
         </div>
@@ -90,19 +88,6 @@
         <div><span class="text-gray-500">最近一次检测时间：</span>{{ conflictOverview.checkedAt }}</div>
       </div>
     </el-card>
-
-    <el-card shadow="never">
-      <template #header>
-        <div class="font-bold text-gray-800 flex items-center">
-          <el-icon class="mr-2 text-blue-500"><InfoFilled /></el-icon>
-          系统进度说明
-        </div>
-      </template>
-      <div class="text-gray-600 space-y-2 leading-relaxed">
-        <p><strong>当前已完成：</strong>前端工程搭建、基础布局、基础数据管理、排期结果展示、一键生成排期、人工调整入口、冲突检测展示。</p>
-        <p><strong>下一步：</strong>对接后端排期与冲突接口，完善人工调整能力与导出功能。</p>
-      </div>
-    </el-card>
   </div>
 </template>
 
@@ -113,13 +98,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { listTeachers } from '../api/teacher'
 import { listStudents } from '../api/student'
 import { listClassrooms } from '../api/classroom'
-import { Avatar, User, OfficeBuilding, Timer, InfoFilled, DataAnalysis, WarningFilled } from '@element-plus/icons-vue'
+import { Avatar, User, OfficeBuilding, Timer, DataAnalysis, WarningFilled } from '@element-plus/icons-vue'
 import type { DefenseType } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getAllScheduleResults } from '../utils/scheduleStorage'
 import { readLocalConflicts } from '../api/conflict'
 import { resetDemoData } from '../utils/demoSeed'
 import { addOperationLog } from '../utils/operationLogStorage'
+import { enableDemoTools } from '../config/features'
 
 const stats = ref({
   teachers: 0,

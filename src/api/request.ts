@@ -26,6 +26,18 @@ const request = axios.create({
   timeout: 10000
 })
 
+const clearAuthState = () => {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem('authToken')
+  window.localStorage.removeItem('username')
+}
+
+const redirectToLogin = () => {
+  if (typeof window === 'undefined' || window.location.pathname === '/login') return
+  const redirect = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  window.location.assign(`/login?redirect=${encodeURIComponent(redirect)}`)
+}
+
 const unwrapResponse = (response: AxiosResponse) => {
   const body = response.data as ApiEnvelope | unknown
   if (body && typeof body === 'object' && 'success' in body) {
@@ -56,6 +68,10 @@ request.interceptors.response.use(
   error => {
     const body = error.response?.data as ApiEnvelope | undefined
     const message = body?.message || body?.error || error.message || '网络请求失败'
+    if (error.response?.status === 401) {
+      clearAuthState()
+      redirectToLogin()
+    }
     return Promise.reject(new ApiRequestError(message, error.response?.status))
   }
 )

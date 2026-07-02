@@ -36,11 +36,11 @@
         <el-icon><Document /></el-icon>
         <span>操作日志</span>
       </el-menu-item>
-      <el-menu-item index="/demo-guide">
+      <el-menu-item v-if="enableDemoTools" index="/demo-guide">
         <el-icon><Guide /></el-icon>
         <span>演示指南</span>
       </el-menu-item>
-      <el-menu-item index="/acceptance-test">
+      <el-menu-item v-if="enableDemoTools" index="/acceptance-test">
         <el-icon><CircleCheck /></el-icon>
         <span>验收测试</span>
       </el-menu-item>
@@ -52,6 +52,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { DataBoard, Avatar, User, OfficeBuilding, Calendar, Setting, Document, Guide, CircleCheck } from '@element-plus/icons-vue'
+import { enableDemoTools } from '../config/features'
 
 const route = useRoute()
 const activeMenu = computed(() => route.path)

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '../stores/user'
+import { enableDemoTools } from '../config/features'
 
 const MainLayout = () => import('../layout/MainLayout.vue')
 const Login = () => import('../views/Login.vue')
@@ -12,6 +13,23 @@ const RuleConfig = () => import('../views/RuleConfig.vue')
 const OperationLog = () => import('../views/OperationLog.vue')
 const DemoGuide = () => import('../views/DemoGuide.vue')
 const AcceptanceTest = () => import('../views/AcceptanceTest.vue')
+
+const demoRoutes = enableDemoTools
+  ? [
+      {
+        path: 'demo-guide',
+        name: 'DemoGuide',
+        component: DemoGuide,
+        meta: { title: '演示指南' }
+      },
+      {
+        path: 'acceptance-test',
+        name: 'AcceptanceTest',
+        component: AcceptanceTest,
+        meta: { title: '验收测试' }
+      }
+    ]
+  : []
 
 const router = createRouter({
   history: createWebHistory(),
@@ -68,18 +86,7 @@ const router = createRouter({
           component: OperationLog,
           meta: { title: '操作日志' }
         },
-        {
-          path: 'demo-guide',
-          name: 'DemoGuide',
-          component: DemoGuide,
-          meta: { title: '演示指南' }
-        },
-        {
-          path: 'acceptance-test',
-          name: 'AcceptanceTest',
-          component: AcceptanceTest,
-          meta: { title: '验收测试' }
-        }
+        ...demoRoutes
       ]
     }
   ]
@@ -88,7 +95,7 @@ const router = createRouter({
 router.beforeEach((to) => {
   const userStore = useUserStore()
   if (to.path !== '/login' && !userStore.isLoggedIn) {
-    return { path: '/login' }
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
   if (to.path === '/login' && userStore.isLoggedIn) {
     return { path: '/dashboard' }

@@ -110,6 +110,7 @@ def generate_schedule(
             campus=campus,
             student_ids=[s.id for s in student_batch],
         )
+        conflicts.extend(check_group_size(group.group_id, len(student_batch), rules))
 
         slot, room, assignment_conflicts = assign_slot_and_room(
             group=group,
@@ -273,14 +274,47 @@ def default_slot(day: date, hour: int, minute: int) -> TimeRange:
 
 
 def build_student_groups(students: Sequence[Student], rules: Dict[str, Any]) -> List[List[Student]]:
-    """Naive Week 1 grouping: sort by campus then chunk by group_size."""
+    """按校区排序后以目标人数切块；尾组不足下限时优先并入前一组（不突破上限）。"""
     target_size = int(rules["group_size"])
+    min_size = int(rules.get("group_min", 0) or 0)
+    max_size = int(rules.get("group_max", 0) or 0)
     ordered = sorted(students, key=lambda s: ((s.campus or ""), s.id))
 
     groups: List[List[Student]] = []
     for i in range(0, len(ordered), target_size):
         groups.append(list(ordered[i : i + target_size]))
+
+    if (
+        min_size > 0
+        and len(groups) >= 2
+        and len(groups[-1]) < min_size
+        and (max_size <= 0 or len(groups[-2]) + len(groups[-1]) <= max_size)
+    ):
+        groups[-2].extend(groups.pop())
     return groups
+
+
+def check_group_size(group_id: str, size: int, rules: Dict[str, Any]) -> List[dict]:
+    """组人数超出配置区间时生成提示（并组无法解决时兜底告知用户）。"""
+    min_size = int(rules.get("group_min", 0) or 0)
+    max_size = int(rules.get("group_max", 0) or 0)
+    if min_size and size < min_size:
+        return [
+            make_conflict(
+                conflict_type="group_size_out_of_range",
+                description=f"{group_id} has {size} students, below the configured minimum of {min_size}",
+                related_ids=[group_id],
+            )
+        ]
+    if max_size and size > max_size:
+        return [
+            make_conflict(
+                conflict_type="group_size_out_of_range",
+                description=f"{group_id} has {size} students, above the configured maximum of {max_size}",
+                related_ids=[group_id],
+            )
+        ]
+    return []
 
 
 def infer_group_campus(students: Sequence[Student]) -> Optional[str]:
@@ -349,6 +383,9 @@ def assign_teachers(
             rules=rules,
         )
     ]
+    if rules.get("prefer_senior", False):
+        # 稳定排序：职称高者优先被选为主席/专家，同职称保持原有顺序
+        available_teachers.sort(key=lambda t: title_rank(t.title), reverse=True)
 
     chair_id: Optional[int] = None
     if need_chair:
@@ -376,17 +413,21 @@ def assign_teachers(
         expert_ids.append(teacher.id)
 
     if len(expert_ids) < needed_experts:
-        conflicts.append(
-            make_conflict(
-                conflict_type="insufficient_experts",
-                description=(
-                    f"{group.group_id} requires {needed_experts} experts but only {len(expert_ids)} "
-                    f"eligible experts were assigned"
-                ),
-                related_ids=[group.group_id] + expert_ids,
-            )
+        shortage = make_conflict(
+            conflict_type="insufficient_experts",
+            description=(
+                f"{group.group_id} requires {needed_experts} experts but only {len(expert_ids)} "
+                f"eligible experts were assigned"
+            ),
+            related_ids=[group.group_id] + expert_ids,
         )
+        # 附带数量信息，便于调用方区分"低于理想值"与"低于可接受下限"
+        shortage["required"] = needed_experts
+        shortage["assigned"] = len(expert_ids)
+        shortage["min_required"] = int(rules.get("expert_min", 0) or 0)
+        conflicts.append(shortage)
 
+    secretary_min_rank = title_rank(rules.get("secretary_title")) if rules.get("secretary_title") else -1
     secretary_id = next(
         (
             t.id
@@ -395,6 +436,7 @@ def assign_teachers(
             and t.id != chair_id
             and t.id not in supervisor_ids
             and t.id not in forbidden_secretary_ids
+            and (secretary_min_rank < 0 or title_rank(t.title) >= secretary_min_rank)
         ),
         None,
     )

@@ -10,6 +10,7 @@
       :max="10"
       :step="1"
       show-stops
+      :disabled="disabled"
       class="flex-grow"
       @change="handleChange"
     />
@@ -28,6 +29,7 @@ const props = defineProps<{
   modelValue: number
   label: string
   description?: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{

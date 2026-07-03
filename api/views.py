@@ -88,6 +88,15 @@ class AuthLoginView(APIView):
 
 
 class ImportMixin:
+    def _get_import_unique_fields(self):
+        serializer_class = self.get_serializer_class()
+        return getattr(serializer_class, 'import_unique_fields', [])
+
+    def _normalize_import_unique_value(self, value):
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
     @action(detail=False, methods=['post'])
     def import_data(self, request):
         file = request.FILES.get('file')
@@ -121,6 +130,8 @@ class ImportMixin:
             valid_serializers = []
             errors = []
             
+            batch_unique_values = {}
+
             for index, row in enumerate(data_list):
                 try:
                     processed_row = {}
@@ -148,6 +159,27 @@ class ImportMixin:
                     for field in bool_fields:
                         if field in processed_row and isinstance(processed_row[field], str):
                             processed_row[field] = processed_row[field].lower() in ['true', '1', '是', 'yes']
+
+                    row_errors = {}
+                    for field, message in self._get_import_unique_fields():
+                        fields = field if isinstance(field, (tuple, list)) else (field,)
+                        values = tuple(
+                            self._normalize_import_unique_value(processed_row.get(item))
+                            for item in fields
+                        )
+                        if any(value in (None, '') for value in values):
+                            continue
+                        key = (tuple(fields), values)
+                        if key in batch_unique_values:
+                            row_errors[fields[-1]] = [message]
+                        else:
+                            batch_unique_values[key] = index + 2
+                    if row_errors:
+                        errors.append({
+                            'row': index + 2,
+                            'errors': row_errors,
+                        })
+                        continue
 
                     serializer = self.get_serializer(data=processed_row)
                     if serializer.is_valid():
@@ -345,6 +377,12 @@ class ScheduleViewSet(GenericViewSet):
             teacher for teacher in Teacher.objects.all()
             if not (teacher.available_types or []) or defense_label in teacher.available_types
         ]
+        teacher_name_counts = {}
+        for teacher in teachers:
+            teacher_name_counts[teacher.name] = teacher_name_counts.get(teacher.name, 0) + 1
+        duplicate_teacher_names = sorted(name for name, count in teacher_name_counts.items() if count > 1)
+        if duplicate_teacher_names:
+            raise ValueError(f'教师姓名重复，无法可靠匹配导师/秘书：{"、".join(duplicate_teacher_names)}')
         teacher_by_name = {teacher.name: teacher for teacher in teachers}
 
         data_notices = []
@@ -440,8 +478,12 @@ class ScheduleViewSet(GenericViewSet):
             'avoid_holiday': True,
         }))
 
-        input_payload, data_notices = self._build_algorithm_input(rules['defense_type'])
         defense_label = DEFENSE_TYPE_LABELS.get(rules['defense_type'], rules['defense_type'])
+
+        try:
+            input_payload, data_notices = self._build_algorithm_input(rules['defense_type'])
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         if not input_payload['students']:
             return Response(

@@ -221,6 +221,99 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(Teacher.objects.count(), 1)
 
+    def test_teacher_api_rejects_duplicate_names(self):
+        Teacher.objects.create(name='重复教师', college='计算机学院', title='教授')
+
+        response = self.client.post(
+            '/api/teachers/',
+            {'name': '重复教师', 'college': '软件学院', 'title': '副教授'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.data)
+        self.assertEqual(Teacher.objects.filter(name='重复教师').count(), 1)
+
+    def test_import_rejects_duplicate_teacher_names_in_same_file(self):
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            'name,title\n重复教师,教授\n重复教师,副教授\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Teacher.objects.count(), 0)
+        self.assertEqual(response.data['errors'][0]['row'], 3)
+        self.assertIn('name', response.data['errors'][0]['errors'])
+
+    def test_student_api_rejects_duplicate_names(self):
+        Student.objects.create(name='重复学生', student_type='学硕', campus='创新港')
+
+        response = self.client.post(
+            '/api/students/',
+            {'name': '重复学生', 'studentType': '专硕', 'campus': '兴庆'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.data)
+        self.assertEqual(Student.objects.filter(name='重复学生').count(), 1)
+
+    def test_room_api_rejects_duplicate_names_in_same_campus(self):
+        Room.objects.create(campus='创新港', name='A101', capacity=30)
+
+        response = self.client.post(
+            '/api/rooms/',
+            {'campus': '创新港', 'name': 'A101', 'capacity': 40},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.data)
+        self.assertEqual(Room.objects.filter(campus='创新港', name='A101').count(), 1)
+
+    def test_room_api_allows_same_name_in_different_campus(self):
+        Room.objects.create(campus='创新港', name='A101', capacity=30)
+
+        response = self.client.post(
+            '/api/rooms/',
+            {'campus': '兴庆', 'name': 'A101', 'capacity': 40},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Room.objects.filter(name='A101').count(), 2)
+
+    def test_import_rejects_duplicate_student_names_in_same_file(self):
+        upload = SimpleUploadedFile(
+            'students.csv',
+            'name,studentType,campus\n重复学生,学硕,创新港\n重复学生,专硕,兴庆\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Student.objects.count(), 0)
+        self.assertEqual(response.data['errors'][0]['row'], 3)
+        self.assertIn('name', response.data['errors'][0]['errors'])
+
+    def test_import_rejects_duplicate_rooms_in_same_campus_in_same_file(self):
+        upload = SimpleUploadedFile(
+            'rooms.csv',
+            'campus,name,capacity\n创新港,A101,30\n创新港,A101,40\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/rooms/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Room.objects.count(), 0)
+        self.assertEqual(response.data['errors'][0]['row'], 3)
+        self.assertIn('name', response.data['errors'][0]['errors'])
+
 
 class ScheduleContractTests(TestCase):
     def setUp(self):
@@ -686,6 +779,24 @@ class ScheduleTypeFilterTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('没有可参加【预答辩】的教师', response.data['error'])
+
+    def test_generate_rejects_duplicate_teacher_names_before_matching_mentors(self):
+        Teacher.objects.create(name='同名老师', title='教授', available_types=['预答辩'])
+        Teacher.objects.create(name='同名老师', title='副教授', available_types=['预答辩'])
+        Teacher.objects.create(name='可用老师', title='讲师', available_types=['预答辩'])
+        Student.objects.create(
+            name='学生1',
+            student_type='学硕',
+            mentor_name='同名老师',
+            campus='创新港',
+            defense_types=['预答辩'],
+        )
+
+        response = self._generate()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('教师姓名重复', response.data['error'])
+        self.assertIn('同名老师', response.data['error'])
 
 
 class AlgorithmGroupSizeTests(TestCase):

@@ -102,6 +102,7 @@ class RoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = Room
         fields = ['id', 'campus', 'name', 'capacity', 'availableTimes', 'remark']
+        validators = []
 
     def validate(self, attrs):
         campus = attrs.get('campus', self.instance.campus if self.instance else None)

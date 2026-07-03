@@ -39,6 +39,7 @@ const addDays = (dateText: string, days: number) => {
 
 const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
   const startDate = config?.startDate || new Date().toISOString().split('T')[0]
+  const endDate = config?.endDate || addDays(startDate, 10)
   // 规则页里正式答辩配置"主席最低职称"，其余类型配置"组长最低职称"，模型中都是 chair 角色
   const chairTitle = defenseType === '正式答辩'
     ? config?.roleQualification?.chairmanMinTitle
@@ -47,7 +48,7 @@ const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
   return {
     defense_type: toBackendDefenseType(defenseType),
     start_date: startDate,
-    end_date: addDays(startDate, 10),
+    end_date: endDate,
     group_size: config?.studentCount?.target || 6,
     group_min: config?.studentCount?.min || 0,
     group_max: config?.studentCount?.max || 0,

@@ -48,6 +48,7 @@ class ScheduleVersion(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     is_current = models.BooleanField(default=True, verbose_name="是否当前生效")
     rules_snapshot = models.JSONField(default=dict, verbose_name="规则快照")
+    conflicts_snapshot = models.JSONField(default=list, blank=True, verbose_name="生成时冲突快照")
 
     class Meta:
         ordering = ['-created_at']

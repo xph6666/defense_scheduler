@@ -186,6 +186,70 @@ class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
 
+    # 算法/检测产生的英文冲突类型 → 前端 ScheduleConflict 的中文类型与级别
+    CONFLICT_TYPE_LABELS = {
+        'time_conflict': ('时间冲突', 'error'),
+        'teacher_time_conflict': ('时间冲突', 'error'),
+        'room_conflict': ('教室冲突', 'error'),
+        'room_or_time_unavailable': ('教室冲突', 'error'),
+        'insufficient_experts': ('人员冲突', 'error'),
+        'chair_unavailable': ('人员冲突', 'error'),
+        'secretary_unavailable': ('人员冲突', 'error'),
+        'supervisor_avoidance': ('导师回避冲突', 'error'),
+        'secretary_student_conflict': ('秘书学生冲突', 'error'),
+        'campus_mismatch': ('校区切换提示', 'warning'),
+    }
+
+    # 历史/前端旧版规则键 → 算法使用的规则键
+    RULE_KEY_ALIASES = {
+        'mentor_avoidance': 'avoid_supervisor',
+    }
+
+    def _normalize_rules(self, rules):
+        """统一规则键：兼容旧键名别名，并补齐 defense_type 缺省值"""
+        normalized = dict(rules or {})
+        for alias, canonical in self.RULE_KEY_ALIASES.items():
+            if alias in normalized and canonical not in normalized:
+                normalized[canonical] = normalized[alias]
+        normalized.setdefault('defense_type', 'pre')
+        return normalized
+
+    def _format_conflicts(self, schedule_version, raw_conflicts):
+        """把英文冲突结构转换为前端 ScheduleConflict 形状（中文类型 + level/target/reason）"""
+        group_name_map = {g.id: g.group_id for g in schedule_version.groups.all()}
+        defense_label = schedule_version.get_defense_type_display()
+        created_at = schedule_version.created_at.isoformat()
+
+        formatted = []
+        for index, item in enumerate(raw_conflicts or [], start=1):
+            raw_type = item.get('type', '')
+            label, level = self.CONFLICT_TYPE_LABELS.get(raw_type, (raw_type or '未知冲突', 'warning'))
+
+            group_ids = [
+                gid for gid in (item.get('group_db_ids') or item.get('group_ids') or [])
+                if gid in group_name_map
+            ]
+            if not group_ids and item.get('group_id') in group_name_map:
+                group_ids = [item['group_id']]
+
+            target = item.get('teacher_name') or item.get('room_name') or ''
+            if not target and group_ids:
+                target = group_name_map.get(group_ids[0], '')
+
+            formatted.append({
+                'id': index,
+                'defenseType': defense_label,
+                'groupId': group_ids[0] if group_ids else None,
+                'groupName': group_name_map.get(group_ids[0], '') if group_ids else '',
+                'type': label,
+                'level': level,
+                'target': target,
+                'reason': item.get('description', ''),
+                'relatedGroupIds': group_ids,
+                'createdAt': created_at,
+            })
+        return formatted
+
     def _build_algorithm_input(self):
         teachers = list(Teacher.objects.all())
         students = list(Student.objects.all())
@@ -242,12 +306,12 @@ class ScheduleViewSet(GenericViewSet):
     @action(detail=False, methods=['post'])
     def generate(self, request):
         """一键生成排期"""
-        rules = request.data.get('rules', {
+        rules = self._normalize_rules(request.data.get('rules', {
             'defense_type': 'pre',
             'start_date': '2025-05-10',
             'avoid_weekend': True,
             'avoid_holiday': True,
-        })
+        }))
 
         input_data = {**self._build_algorithm_input(), 'rules': rules}
 
@@ -272,6 +336,8 @@ class ScheduleViewSet(GenericViewSet):
                 is_current=True
             )
 
+            # 算法冲突里的组编号是 "G1" 这类字符串，入库后补上数据库组 ID 便于前端定位
+            group_db_map = {}
             for group_data in result.get('groups', []):
                 group = Group.objects.create(
                     schedule_version=schedule_version,
@@ -282,8 +348,22 @@ class ScheduleViewSet(GenericViewSet):
                     chair_id=group_data.get('chair_id'),
                     secretary_id=group_data.get('secretary_id')
                 )
+                group_db_map[group_data['group_id']] = group.id
                 group.experts.add(*group_data.get('expert_ids', []))
                 group.students.add(*group_data.get('student_ids', []))
+
+            conflicts_snapshot = []
+            for item in result.get('conflicts', []):
+                enriched = dict(item)
+                enriched['group_db_ids'] = [
+                    group_db_map[related]
+                    for related in item.get('related_ids', [])
+                    if isinstance(related, str) and related in group_db_map
+                ]
+                conflicts_snapshot.append(enriched)
+
+            schedule_version.conflicts_snapshot = conflicts_snapshot
+            schedule_version.save(update_fields=['conflicts_snapshot'])
 
         request.query_params._mutable = True
         request.query_params['defense_type'] = rules['defense_type']
@@ -320,6 +400,7 @@ class ScheduleViewSet(GenericViewSet):
                 'defenseType': defense_type,
                 'generatedAt': '',
                 'groups': [],
+                'conflicts': [],
                 'message': '暂无排期结果'
             })
 
@@ -358,7 +439,8 @@ class ScheduleViewSet(GenericViewSet):
         return Response({
             'defenseType': schedule_version.get_defense_type_display(),
             'generatedAt': schedule_version.created_at.strftime('%Y-%m-%d %H:%M'),
-            'groups': formatted_groups
+            'groups': formatted_groups,
+            'conflicts': self._format_conflicts(schedule_version, schedule_version.conflicts_snapshot)
         })
 
     @action(detail=False, methods=['post'], url_path='adjust-group')
@@ -599,7 +681,10 @@ class ScheduleViewSet(GenericViewSet):
         if not schedule_version:
             return Response([], status=status.HTTP_200_OK)
 
-        return Response(self._check_conflicts(schedule_version), status=status.HTTP_200_OK)
+        return Response(
+            self._format_conflicts(schedule_version, self._check_conflicts(schedule_version)),
+            status=status.HTTP_200_OK,
+        )
 
     def _move_student(self, request):
         student_id = request.data.get('student_id')

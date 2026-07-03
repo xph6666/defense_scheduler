@@ -429,12 +429,37 @@ def teacher_is_eligible(
     return True
 
 
+# 职称等级表：等级越高越资深。键统一小写，中英文写法都收录。
+TITLE_RANKS = {
+    "教授": 3,
+    "professor": 3,
+    "副教授": 2,
+    "associate professor": 2,
+    "讲师": 1,
+    "lecturer": 1,
+    "助教": 0,
+    "assistant": 0,
+    "teaching assistant": 0,
+}
+
+
+def title_rank(title: Optional[str]) -> int:
+    return TITLE_RANKS.get((title or "").strip().lower(), -1)
+
+
 def meets_chair_requirement(teacher: Teacher, rules: Dict[str, Any]) -> bool:
-    required = (rules.get("chair_title") or "").lower()
+    """按职称等级判断能否担任主席。
+
+    注意不能用子串匹配："教授" in "副教授" 为 True，会把副教授错配成教授。
+    要求的职称不在等级表里时退回精确匹配。
+    """
+    required = (rules.get("chair_title") or "").strip()
     if not required:
         return True
-    title = (teacher.title or "").lower()
-    return required in title
+    required_rank = title_rank(required)
+    if required_rank < 0:
+        return (teacher.title or "").strip().lower() == required.lower()
+    return title_rank(teacher.title) >= required_rank
 
 
 def conflicts_with_selected_teachers(

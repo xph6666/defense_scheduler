@@ -40,6 +40,8 @@ def default_rule_config(defense_type='pre'):
 
 
 class TeacherSerializer(serializers.ModelSerializer):
+    import_unique_fields = [('name', '教师姓名重复，请使用唯一姓名')]
+
     isExternal = serializers.BooleanField(source='is_external', default=False, required=False)
     availableTypes = serializers.JSONField(source='available_types', default=list, required=False)
     campusPreference = serializers.CharField(source='campus_preference', allow_blank=True, required=False)
@@ -55,8 +57,19 @@ class TeacherSerializer(serializers.ModelSerializer):
             'avoidTeacherNames', 'remark'
         ]
 
+    def validate_name(self, value):
+        name = value.strip()
+        queryset = Teacher.objects.filter(name=name)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('教师姓名已存在，请使用唯一姓名')
+        return name
+
 
 class StudentSerializer(serializers.ModelSerializer):
+    import_unique_fields = [('name', '学生姓名重复，请使用唯一姓名')]
+
     studentType = serializers.CharField(source='student_type', required=False)
     mentorName = serializers.CharField(source='mentor_name', allow_blank=True, required=False)
     defenseTypes = serializers.JSONField(source='defense_types', default=list, required=False)
@@ -70,14 +83,43 @@ class StudentSerializer(serializers.ModelSerializer):
             'defenseTypes', 'secretaryName', 'remark'
         ]
 
+    def validate_name(self, value):
+        name = value.strip()
+        queryset = Student.objects.filter(name=name)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('学生姓名已存在，请使用唯一姓名')
+        return name
+
 
 class RoomSerializer(serializers.ModelSerializer):
+    import_unique_fields = [(('campus', 'name'), '同一校区的教室名称重复')]
+
     availableTimes = serializers.CharField(source='available_times', allow_blank=True, required=False)
     remark = serializers.CharField(allow_blank=True, required=False)
 
     class Meta:
         model = Room
         fields = ['id', 'campus', 'name', 'capacity', 'availableTimes', 'remark']
+
+    def validate(self, attrs):
+        campus = attrs.get('campus', self.instance.campus if self.instance else None)
+        name = attrs.get('name', self.instance.name if self.instance else None)
+        if isinstance(campus, str):
+            campus = campus.strip()
+            attrs['campus'] = campus
+        if isinstance(name, str):
+            name = name.strip()
+            attrs['name'] = name
+
+        if campus and name:
+            queryset = Room.objects.filter(campus=campus, name=name)
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError({'name': ['同一校区的教室名称已存在']})
+        return attrs
 
 
 class ScheduleVersionSerializer(serializers.ModelSerializer):

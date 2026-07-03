@@ -25,6 +25,7 @@ from .serializers import (
 
 
 MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024
+MAX_IMPORT_ROWS = 1000
 
 
 def split_time_text(value):
@@ -98,18 +99,26 @@ class ImportMixin:
         try:
             import pandas as pd
 
-            if file.name.endswith('.csv'):
+            filename = file.name.lower()
+            if filename.endswith('.csv'):
                 df = pd.read_csv(file)
-            elif file.name.endswith(('.xls', '.xlsx')):
+            elif filename.endswith(('.xls', '.xlsx')):
                 df = pd.read_excel(file)
             else:
                 return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
             
             df.columns = [c.strip() for c in df.columns]
+            if df.empty:
+                return Response({'error': '文件中没有可导入的数据'}, status=status.HTTP_400_BAD_REQUEST)
+            if len(df) > MAX_IMPORT_ROWS:
+                return Response(
+                    {'error': f'单次最多导入 {MAX_IMPORT_ROWS} 行数据'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             df = df.where(pd.notnull(df), None)
             data_list = df.to_dict(orient='records')
             
-            success_count = 0
+            valid_serializers = []
             errors = []
             
             for index, row in enumerate(data_list):
@@ -142,22 +151,32 @@ class ImportMixin:
 
                     serializer = self.get_serializer(data=processed_row)
                     if serializer.is_valid():
-                        serializer.save()
-                        success_count += 1
+                        valid_serializers.append(serializer)
                     else:
-                        errors.append(f"行 {index + 2}: {serializer.errors}")
+                        errors.append({
+                            'row': index + 2,
+                            'errors': serializer.errors,
+                        })
                 except Exception as e:
-                    errors.append(f"行 {index + 2}: {str(e)}")
+                    errors.append({
+                        'row': index + 2,
+                        'errors': {'non_field_errors': [str(e)]},
+                    })
             
-            if success_count == 0 and errors:
+            if errors:
                 return Response({
-                    'message': f'导入失败，请检查文件格式。',
-                    'errors': errors[:5]
+                    'message': '导入失败，请修正错误后重新导入。',
+                    'errors': errors[:5],
+                    'errorCount': len(errors),
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+            with transaction.atomic():
+                for serializer in valid_serializers:
+                    serializer.save()
+
             return Response({
-                'message': f'成功导入 {success_count} 条数据',
-                'errors': errors
+                'message': f'成功导入 {len(valid_serializers)} 条数据',
+                'errors': []
             }, status=status.HTTP_200_OK)
             
         except Exception as e:

@@ -168,6 +168,59 @@ class IntegrationContractTests(TestCase):
         self.assertIn('文件大小不能超过', response.data['error'])
         self.assertEqual(Teacher.objects.count(), 0)
 
+    def test_import_is_atomic_and_returns_structured_row_errors(self):
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            'name,college,title\n有效教师,计算机学院,教授\n无职称教师,计算机学院,\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Teacher.objects.count(), 0)
+        self.assertEqual(response.data['errors'][0]['row'], 3)
+        self.assertIn('title', response.data['errors'][0]['errors'])
+
+    def test_import_rejects_empty_data_files(self):
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            'name,title\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('没有可导入的数据', response.data['error'])
+        self.assertEqual(Teacher.objects.count(), 0)
+
+    def test_import_rejects_files_with_too_many_rows(self):
+        csv_text = 'name,title\n' + ''.join(f'教师{i},教授\n' for i in range(1001))
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            csv_text.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('单次最多导入', response.data['error'])
+        self.assertEqual(Teacher.objects.count(), 0)
+
+    def test_import_accepts_supported_extensions_case_insensitively(self):
+        upload = SimpleUploadedFile(
+            'TEACHERS.CSV',
+            'name,title\n教师1,教授\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Teacher.objects.count(), 1)
+
 
 class ScheduleContractTests(TestCase):
     def setUp(self):

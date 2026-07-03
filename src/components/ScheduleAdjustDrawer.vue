@@ -1,6 +1,6 @@
 <template>
   <el-drawer v-model="visible" :title="drawerTitle" size="640px" destroy-on-close>
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
+    <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" :disabled="readonly">
       <el-form-item label="组名" prop="groupName">
         <el-input v-model="form.groupName" />
       </el-form-item>
@@ -70,7 +70,7 @@
     <template #footer>
       <div class="flex items-center justify-end gap-2">
         <el-button @click="visible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+        <el-button v-if="!readonly" type="primary" :loading="saving" @click="handleSave">保存</el-button>
       </div>
     </template>
   </el-drawer>
@@ -89,6 +89,7 @@ const props = defineProps<{
   students: ScheduleStudent[]
   classrooms: { campus: '创新港' | '兴庆'; name: string }[]
   saving?: boolean
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -195,6 +196,7 @@ const drawerTitle = computed(() => {
 })
 
 const handleSave = async () => {
+  if (props.readonly) return
   if (!formRef.value) return
   await formRef.value.validate(valid => {
     if (!valid) return

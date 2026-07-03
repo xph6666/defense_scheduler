@@ -19,7 +19,7 @@
           <el-option label="失败" value="失败" />
         </el-select>
       </div>
-      <el-button type="danger" link size="small" @click="handleClear">清空日志</el-button>
+      <el-button v-if="canManage" type="danger" link size="small" @click="handleClear">清空日志</el-button>
     </div>
 
     <el-table v-loading="loading" :data="displayLogs" border stripe style="width: 100%" size="small">
@@ -61,6 +61,7 @@ import { clearRemoteOperationLogs, isOperationLogMockMode, listOperationLogs } f
 
 const props = defineProps<{
   limit?: number
+  canManage?: boolean
 }>()
 
 const allLogs = ref<OperationLog[]>([])
@@ -121,6 +122,10 @@ const loadLogs = async () => {
 }
 
 const handleClear = () => {
+  if (!props.canManage) {
+    ElMessage.warning('需要管理员权限')
+    return
+  }
   ElMessageBox.confirm('确定要清空所有操作日志吗？', '确认清空').then(async () => {
     try {
       await clearRemoteOperationLogs()

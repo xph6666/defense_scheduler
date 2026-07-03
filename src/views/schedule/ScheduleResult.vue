@@ -15,6 +15,7 @@
           v-model:viewMode="viewMode"
           :loading="loading"
           :has-result="!!result"
+          :can-manage="canManage"
           @generate="handleGenerate"
           @refresh="handleRefresh"
           @check-conflicts="handleCheckConflicts"
@@ -47,7 +48,7 @@
     </div>
 
     <div v-else-if="!result" class="bg-white p-10 rounded-lg shadow-sm">
-      <el-empty description="当前暂无排期结果，请先点击“一键生成排期”。" />
+      <el-empty :description="emptyResultDescription" />
     </div>
 
     <div v-else class="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -63,6 +64,7 @@
                 :group="g"
                 :status="groupStatusMap[g.id] || 'normal'"
                 :conflict-count="groupConflictCountMap[g.id] || 0"
+                :can-manage="canManage"
                 @adjust="openAdjust"
               />
             </el-col>
@@ -70,7 +72,7 @@
         </div>
 
         <div v-else class="bg-white p-6 rounded-lg shadow-sm">
-          <ScheduleTable :groups="result.groups" :group-status="groupStatusMap" @adjust="openAdjust" />
+          <ScheduleTable :groups="result.groups" :group-status="groupStatusMap" :can-manage="canManage" @adjust="openAdjust" />
         </div>
       </div>
 
@@ -94,6 +96,7 @@
     :students="studentOptions"
     :classrooms="classroomOptions"
     :saving="adjustSaving"
+    :readonly="!canManage"
     @save="handleSaveAdjust"
   />
 
@@ -140,12 +143,14 @@ import { listTeachers } from '../../api/teacher'
 import { listStudents } from '../../api/student'
 import { listClassrooms } from '../../api/classroom'
 import type { Classroom } from '../../types/classroom'
+import { useAdminGuard } from '../../utils/adminGuard'
 
 const defenseType = ref<DefenseType>('预答辩')
 const viewMode = ref<'card' | 'table'>('card')
 const loading = ref(false)
 const errorMsg = ref('')
 const result = ref<ScheduleResult | null>(null)
+const { canManage, requireAdmin } = useAdminGuard()
 
 const conflicts = ref<ScheduleConflict[]>([])
 const conflictLoading = ref(false)
@@ -180,6 +185,7 @@ const updateOptimizationScore = async () => {
 }
 
 const openAdjust = (group: ScheduleGroup) => {
+  if (!requireAdmin()) return
   currentGroup.value = group
   adjustVisible.value = true
 }
@@ -269,6 +275,7 @@ const fetchResult = async () => {
 }
 
 const handleGenerate = async () => {
+  if (!requireAdmin()) return
   const currentDefenseType = defenseType.value
   loading.value = true
   errorMsg.value = ''
@@ -329,6 +336,7 @@ const handleCheckConflicts = async (targetDefenseType: DefenseType = defenseType
 }
 
 const handleSaveAdjust = async (groupData: ScheduleGroup) => {
+  if (!requireAdmin()) return
   if (!result.value) return
   adjustSaving.value = true
   try {
@@ -354,6 +362,13 @@ watch(defenseType, async () => {
   currentConflict.value = null
   optimizationSummary.value = null
   await fetchResult()
+})
+
+watch(canManage, isAllowed => {
+  if (!isAllowed) {
+    adjustVisible.value = false
+    currentGroup.value = null
+  }
 })
 
 onMounted(() => {
@@ -382,6 +397,12 @@ const groupConflictCountMap = computed(() => {
     map[g.id] = getGroupConflictCount(g.id, conflicts.value)
   }
   return map
+})
+
+const emptyResultDescription = computed(() => {
+  return canManage.value
+    ? '当前暂无排期结果，请先点击“一键生成排期”。'
+    : '当前暂无排期结果，请联系管理员生成排期。'
 })
 
 const exportStats = computed(() => ({

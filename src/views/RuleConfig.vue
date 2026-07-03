@@ -9,6 +9,7 @@
           <RuleConfigForm
             v-if="activeType === '预答辩'"
             v-model="configs.预答辩"
+            :readonly="!canManage"
             @save="handleSave"
             @reset="handleReset"
           />
@@ -17,6 +18,7 @@
           <RuleConfigForm
             v-if="activeType === '正式答辩'"
             v-model="configs.正式答辩"
+            :readonly="!canManage"
             @save="handleSave"
             @reset="handleReset"
           />
@@ -25,6 +27,7 @@
           <RuleConfigForm
             v-if="activeType === '中期答辩'"
             v-model="configs.中期答辩"
+            :readonly="!canManage"
             @save="handleSave"
             @reset="handleReset"
           />
@@ -43,9 +46,11 @@ import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 import { getDefaultRuleConfig } from '../utils/ruleConfigStorage'
 import { createOperationLog } from '../api/operationLog'
 import { getRuleConfig, saveRuleConfig } from '../api/ruleConfig'
+import { useAdminGuard } from '../utils/adminGuard'
 
 const activeType = ref<DefenseType>('预答辩')
 const defenseTypes: DefenseType[] = ['预答辩', '正式答辩', '中期答辩']
+const { canManage, requireAdmin } = useAdminGuard()
 
 const configs = reactive<Record<DefenseType, RuleConfig>>({
   '预答辩': getDefaultRuleConfig('预答辩'),
@@ -61,6 +66,7 @@ const loadConfigs = async () => {
 }
 
 const handleSave = async (config: RuleConfig) => {
+  if (!requireAdmin()) return
   try {
     configs[config.defenseType] = await saveRuleConfig(config)
     try {
@@ -80,6 +86,7 @@ const handleSave = async (config: RuleConfig) => {
 }
 
 const handleReset = async (type: string) => {
+  if (!requireAdmin()) return
   try {
     await ElMessageBox.confirm(`确定要恢复 [${type}] 的默认规则吗？当前修改将丢失。`, '确认恢复')
     const defenseType = type as DefenseType

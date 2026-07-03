@@ -100,6 +100,17 @@ def parse_time_entries(raw_text):
     return valid, invalid
 
 
+def validate_schedule_time_text(raw_text):
+    from algorithm import SchedulingError, parse_time_range
+
+    normalized = normalize_time_text(raw_text)
+    try:
+        parse_time_range(normalized)
+    except SchedulingError as exc:
+        raise ValueError(f'时间格式无效: {raw_text}') from exc
+    return normalized
+
+
 class AuthLoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -688,7 +699,10 @@ class ScheduleViewSet(GenericViewSet):
         time_range = group_data.get('timeRange')
         next_time = group.time
         if date and time_range:
-            next_time = f'{date} {time_range}'
+            try:
+                next_time = validate_schedule_time_text(f'{date} {time_range}')
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         next_campus = group_data.get('campus') or group.campus
 
         room = None
@@ -925,23 +939,28 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            from_group = Group.objects.get(id=from_group_id)
+            from_group = Group.objects.select_related('schedule_version').get(id=from_group_id)
             to_group = Group.objects.get(id=to_group_id)
-
-            from_group.students.remove(student_id)
-            to_group.students.add(student_id)
-
-            conflicts = self._check_conflicts(from_group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': f'学生 {student_id} 已从组 {from_group_id} 移动到组 {to_group_id}',
-                'conflicts': conflicts
-            })
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=404)
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
+
+        student = Student.objects.filter(id=student_id).first()
+        if not student:
+            return Response({'error': f'学生不存在: {student_id}'}, status=400)
+        if not from_group.students.filter(id=student.id).exists():
+            return Response({'error': f'学生不在原组: {student_id}'}, status=400)
+
+        with transaction.atomic():
+            from_group.students.remove(student)
+            to_group.students.add(student)
+
+        conflicts = self._check_conflicts(from_group.schedule_version)
+
+        return Response({
+            'status': 'ok',
+            'message': f'学生 {student_id} 已从组 {from_group_id} 移动到组 {to_group_id}',
+            'conflicts': conflicts
+        })
 
     def _change_expert(self, request):
         group_id = request.data.get('group_id')
@@ -952,19 +971,33 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            group = Group.objects.get(id=group_id)
-            group.experts.remove(old_expert_id)
-            group.experts.add(new_expert_id)
-
-            conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '专家已更换',
-                'conflicts': conflicts
-            })
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=404)
+
+        old_expert = Teacher.objects.filter(id=old_expert_id).first()
+        new_expert = Teacher.objects.filter(id=new_expert_id).first()
+        missing_ids = [
+            teacher_id
+            for teacher_id, teacher in ((old_expert_id, old_expert), (new_expert_id, new_expert))
+            if teacher is None
+        ]
+        if missing_ids:
+            return Response({'error': f'教师不存在: {missing_ids}'}, status=400)
+        if not group.experts.filter(id=old_expert.id).exists():
+            return Response({'error': f'原专家不在当前组: {old_expert_id}'}, status=400)
+
+        with transaction.atomic():
+            group.experts.remove(old_expert)
+            group.experts.add(new_expert)
+
+        conflicts = self._check_conflicts(group.schedule_version)
+
+        return Response({
+            'status': 'ok',
+            'message': '专家已更换',
+            'conflicts': conflicts
+        })
 
     def _change_chair(self, request):
         group_id = request.data.get('group_id')
@@ -974,19 +1007,24 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            group = Group.objects.get(id=group_id)
-            group.chair_id = new_chair_id
-            group.save()
-
-            conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '主席已更换',
-                'conflicts': conflicts
-            })
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=404)
+
+        chair = Teacher.objects.filter(id=new_chair_id).first()
+        if not chair:
+            return Response({'error': f'主席不存在: {new_chair_id}'}, status=400)
+
+        group.chair = chair
+        group.save()
+
+        conflicts = self._check_conflicts(group.schedule_version)
+
+        return Response({
+            'status': 'ok',
+            'message': '主席已更换',
+            'conflicts': conflicts
+        })
 
     def _change_secretary(self, request):
         group_id = request.data.get('group_id')
@@ -996,19 +1034,24 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            group = Group.objects.get(id=group_id)
-            group.secretary_id = new_secretary_id
-            group.save()
-
-            conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '秘书已更换',
-                'conflicts': conflicts
-            })
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=404)
+
+        secretary = Teacher.objects.filter(id=new_secretary_id).first()
+        if not secretary:
+            return Response({'error': f'秘书不存在: {new_secretary_id}'}, status=400)
+
+        group.secretary = secretary
+        group.save()
+
+        conflicts = self._check_conflicts(group.schedule_version)
+
+        return Response({
+            'status': 'ok',
+            'message': '秘书已更换',
+            'conflicts': conflicts
+        })
 
     def _change_time(self, request):
         group_id = request.data.get('group_id')
@@ -1018,15 +1061,20 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            group = Group.objects.get(id=group_id)
-            group.time = new_time
+            normalized_time = validate_schedule_time_text(new_time)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=400)
+
+        try:
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
+            group.time = normalized_time
             group.save()
 
             conflicts = self._check_conflicts(group.schedule_version)
 
             return Response({
                 'status': 'ok',
-                'message': f'时间已修改为 {new_time}',
+                'message': f'时间已修改为 {normalized_time}',
                 'conflicts': conflicts
             })
         except Group.DoesNotExist:
@@ -1040,19 +1088,24 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '缺少必要参数'}, status=400)
 
         try:
-            group = Group.objects.get(id=group_id)
-            group.room_id = new_room_id
-            group.save()
-
-            conflicts = self._check_conflicts(group.schedule_version)
-
-            return Response({
-                'status': 'ok',
-                'message': '教室已更换',
-                'conflicts': conflicts
-            })
+            group = Group.objects.select_related('schedule_version').get(id=group_id)
         except Group.DoesNotExist:
             return Response({'error': '组不存在'}, status=404)
+
+        room = Room.objects.filter(id=new_room_id).first()
+        if not room:
+            return Response({'error': f'教室不存在: {new_room_id}'}, status=400)
+
+        group.room = room
+        group.save()
+
+        conflicts = self._check_conflicts(group.schedule_version)
+
+        return Response({
+            'status': 'ok',
+            'message': '教室已更换',
+            'conflicts': conflicts
+        })
 
     def _check_conflicts(self, schedule_version):
         conflicts = []

@@ -457,6 +457,30 @@ class ScheduleContractTests(TestCase):
                 secretary_name='教师4',
             )
 
+    def _create_manual_adjustment_group(self):
+        teacher = Teacher.objects.first()
+        secretary = Teacher.objects.last()
+        room = Room.objects.first()
+        student = Student.objects.first()
+        version = ScheduleVersion.objects.create(
+            version=1,
+            defense_type='pre',
+            is_current=True,
+            rules_snapshot={},
+        )
+        group = Group.objects.create(
+            schedule_version=version,
+            group_id='G1',
+            time='2025-05-10 09:00-12:00',
+            room=room,
+            campus='创新港',
+            chair=teacher,
+            secretary=secretary,
+        )
+        group.experts.add(teacher)
+        group.students.add(student)
+        return group
+
     def test_schedule_generate_current_conflict_check_and_export_use_current_models(self):
         generate_response = self.client.post(
             '/api/schedule/generate/',
@@ -652,6 +676,158 @@ class ScheduleContractTests(TestCase):
         group.refresh_from_db()
         self.assertEqual(group.group_id, 'G1')
         self.assertEqual(list(group.experts.values_list('id', flat=True)), [teacher.id])
+
+    def test_adjust_group_rejects_invalid_time_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        teacher = group.chair
+        secretary = group.secretary
+        room = group.room
+        student = group.students.first()
+
+        response = self.client.post(
+            '/api/schedule/adjust-group/',
+            {
+                'group_id': group.id,
+                'group_data': {
+                    'groupName': '不应保存',
+                    'date': '2025-05-11',
+                    'timeRange': '16:00-14:00',
+                    'classroom': room.name,
+                    'chairman': teacher.name,
+                    'secretary': secretary.name,
+                    'teachers': [{'id': teacher.id, 'name': teacher.name}],
+                    'students': [{'id': student.id, 'name': student.name}],
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('时间格式无效', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.group_id, 'G1')
+        self.assertEqual(group.time, '2025-05-10 09:00-12:00')
+
+    def test_adjust_action_rejects_invalid_time_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'change_time',
+                'group_id': group.id,
+                'new_time': 'not-a-time',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('时间格式无效', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.time, '2025-05-10 09:00-12:00')
+
+    def test_adjust_action_rejects_missing_room_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        original_room_id = group.room_id
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'change_room',
+                'group_id': group.id,
+                'new_room_id': 999999,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('教室不存在', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.room_id, original_room_id)
+
+    def test_adjust_action_rejects_missing_chair_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        original_chair_id = group.chair_id
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'change_chair',
+                'group_id': group.id,
+                'new_chair_id': 999999,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('主席不存在', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.chair_id, original_chair_id)
+
+    def test_adjust_action_rejects_missing_secretary_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        original_secretary_id = group.secretary_id
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'change_secretary',
+                'group_id': group.id,
+                'new_secretary_id': 999999,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('秘书不存在', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(group.secretary_id, original_secretary_id)
+
+    def test_adjust_action_rejects_missing_expert_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        original_expert_ids = list(group.experts.values_list('id', flat=True))
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'change_expert',
+                'group_id': group.id,
+                'old_expert_id': original_expert_ids[0],
+                'new_expert_id': 999999,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('教师不存在', response.data['error'])
+        group.refresh_from_db()
+        self.assertEqual(list(group.experts.values_list('id', flat=True)), original_expert_ids)
+
+    def test_adjust_action_rejects_missing_student_without_partial_update(self):
+        group = self._create_manual_adjustment_group()
+        target_group = self._create_manual_adjustment_group()
+        target_group.group_id = 'G2'
+        target_group.save()
+        original_student_ids = list(group.students.values_list('id', flat=True))
+        target_student_ids = list(target_group.students.values_list('id', flat=True))
+
+        response = self.client.post(
+            '/api/schedule/adjust/',
+            {
+                'action': 'move_student',
+                'student_id': 999999,
+                'from_group_id': group.id,
+                'to_group_id': target_group.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('学生不存在', response.data['error'])
+        group.refresh_from_db()
+        target_group.refresh_from_db()
+        self.assertEqual(list(group.students.values_list('id', flat=True)), original_student_ids)
+        self.assertEqual(list(target_group.students.values_list('id', flat=True)), target_student_ids)
 
 
 class ScheduleConflictContractTests(TestCase):

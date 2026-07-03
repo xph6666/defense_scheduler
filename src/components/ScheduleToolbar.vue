@@ -22,7 +22,7 @@
     </div>
 
     <div class="flex items-center gap-2">
-      <el-button type="primary" :loading="loading" @click="emit('generate')">
+      <el-button v-if="canManage" type="primary" :loading="loading" @click="emit('generate')">
         一键生成排期
       </el-button>
       <el-button :loading="loading" @click="emit('refresh')">
@@ -48,6 +48,7 @@ defineProps<{
   viewMode: 'card' | 'table'
   loading?: boolean
   hasResult?: boolean
+  canManage?: boolean
 }>()
 
 const emit = defineEmits<{

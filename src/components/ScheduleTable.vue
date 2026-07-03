@@ -49,7 +49,7 @@
       </template>
     </el-table-column>
     <el-table-column prop="remark" label="备注" min-width="200" show-overflow-tooltip />
-    <el-table-column label="操作" width="100" fixed="right">
+    <el-table-column v-if="canManage" label="操作" width="100" fixed="right">
       <template #default="{ row }">
         <el-button link type="primary" size="small" @click="emit('adjust', row)">调整</el-button>
       </template>
@@ -65,6 +65,7 @@ import ConflictTag from './ConflictTag.vue'
 const props = defineProps<{
   groups: ScheduleGroup[]
   groupStatus: Record<number, 'normal' | 'warning' | 'error'>
+  canManage?: boolean
 }>()
 
 const emit = defineEmits<{

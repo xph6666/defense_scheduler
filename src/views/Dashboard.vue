@@ -55,7 +55,7 @@
             排期结果概览
           </div>
           <div class="flex items-center gap-3">
-            <el-button v-if="enableDemoTools" type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
+            <el-button v-if="enableDemoTools && canManage" type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
             <el-button type="primary" link @click="goSchedule">查看排期结果</el-button>
           </div>
         </div>
@@ -106,6 +106,7 @@ import { readLocalConflicts } from '../api/conflict'
 import { resetDemoData } from '../utils/demoSeed'
 import { addOperationLog } from '../utils/operationLogStorage'
 import { enableDemoTools } from '../config/features'
+import { useAdminGuard } from '../utils/adminGuard'
 
 const stats = ref({
   teachers: 0,
@@ -114,6 +115,7 @@ const stats = ref({
 })
 
 const router = useRouter()
+const { canManage, requireAdmin } = useAdminGuard()
 
 const scheduleOverview = ref({
   typeCount: 0,
@@ -175,6 +177,7 @@ const goSchedule = () => {
 }
 
 const handleResetDemoData = async () => {
+  if (!requireAdmin()) return
   try {
     await ElMessageBox.confirm('确定要重置演示数据吗？当前排期结果与导出时间会被清空。', '确认重置', {
       confirmButtonText: '确定',

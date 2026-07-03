@@ -20,12 +20,12 @@
     </el-form>
 
     <!-- Toolbar -->
-    <div class="mb-4 flex justify-between items-center">
+    <div v-if="canManage" class="mb-4 flex justify-between items-center">
       <div class="flex gap-2">
         <el-button type="primary" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>新增
         </el-button>
-        <el-button type="success" @click="importVisible = true">
+        <el-button type="success" @click="openImport">
           <el-icon class="mr-1"><Upload /></el-icon>导入
         </el-button>
         <el-button 
@@ -50,7 +50,7 @@
       style="width: 100%"
       @selection-change="handleSelectionChange"
     >
-      <el-table-column type="selection" width="55" />
+      <el-table-column v-if="canManage" type="selection" width="55" />
       <el-table-column prop="campus" label="校区" width="120">
         <template #default="{ row }">
           <el-tag :type="row.campus === '创新港' ? 'primary' : 'success'">{{ row.campus }}</el-tag>
@@ -64,7 +64,7 @@
       </el-table-column>
       <el-table-column prop="availableTimes" label="可用时间" min-width="200" />
       <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column v-if="canManage" label="操作" width="150" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
@@ -120,7 +120,7 @@
       </template>
     </el-dialog>
 
-    <ImportDialog v-model="importVisible" type="classroom" @success="fetchData" />
+    <ImportDialog v-if="canManage" v-model="importVisible" type="classroom" @success="fetchData" />
   </div>
 </template>
 
@@ -132,6 +132,7 @@ import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
 import { listClassrooms, createClassroom, updateClassroom, deleteClassroom, batchDeleteClassrooms } from '../../api/classroom'
 import type { Classroom } from '../../types/classroom'
+import { useAdminGuard } from '../../utils/adminGuard'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -145,6 +146,7 @@ const filteredData = ref<Classroom[]>([])
 const selectedIds = ref<number[]>([])
 const currentPage = ref(1)
 const pageSize = ref(10)
+const { canManage, requireAdmin } = useAdminGuard()
 
 const tableData = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -156,6 +158,7 @@ const handleSelectionChange = (selection: Classroom[]) => {
 }
 
 const handleBatchDelete = () => {
+  if (!requireAdmin()) return
   if (!selectedIds.value.length) return
   
   ElMessageBox.confirm(
@@ -242,6 +245,7 @@ const resetSearch = () => {
 }
 
 const handleAdd = () => {
+  if (!requireAdmin()) return
   isEdit.value = false
   Object.assign(form, { id: 0, ...defaultForm })
   dialogVisible.value = true
@@ -249,6 +253,7 @@ const handleAdd = () => {
 }
 
 const handleEdit = (row: Classroom) => {
+  if (!requireAdmin()) return
   isEdit.value = true
   Object.assign(form, JSON.parse(JSON.stringify(row)))
   dialogVisible.value = true
@@ -256,6 +261,7 @@ const handleEdit = (row: Classroom) => {
 }
 
 const handleDelete = (row: Classroom) => {
+  if (!requireAdmin()) return
   ElMessageBox.confirm(`确定要删除教室 "${row.name}" 吗？`, '警告', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
@@ -272,6 +278,7 @@ const handleDelete = (row: Classroom) => {
 }
 
 const submitForm = async () => {
+  if (!requireAdmin()) return
   if (!formRef.value) return
   await formRef.value.validate(async (valid) => {
     if (valid) {
@@ -294,6 +301,11 @@ const submitForm = async () => {
       }
     }
   })
+}
+
+const openImport = () => {
+  if (!requireAdmin()) return
+  importVisible.value = true
 }
 
 onMounted(() => {

@@ -1,5 +1,5 @@
 <template>
-  <el-form ref="formRef" :model="form" label-width="140px" class="rule-config-form">
+  <el-form ref="formRef" :model="form" label-width="140px" class="rule-config-form" :disabled="readonly">
     <!-- 基础规则 -->
     <el-card shadow="never" class="mb-4">
       <template #header>
@@ -173,7 +173,7 @@
       </div>
     </el-card>
 
-    <div class="flex justify-center gap-4 py-4">
+    <div v-if="!readonly" class="flex justify-center gap-4 py-4">
       <el-button @click="$emit('reset', form.defenseType)">恢复默认</el-button>
       <el-button type="primary" @click="$emit('save', form)">保存配置</el-button>
     </div>
@@ -188,6 +188,7 @@ import WeightSlider from './WeightSlider.vue'
 
 const props = defineProps<{
   modelValue: RuleConfig
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{

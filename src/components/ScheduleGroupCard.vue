@@ -7,7 +7,7 @@
           <ConflictTag :status="status" />
           <el-tag v-if="conflictCount > 0" type="info" size="small">冲突 {{ conflictCount }}</el-tag>
         </div>
-        <el-button size="small" @click="emit('adjust', group)">调整</el-button>
+        <el-button v-if="canManage" size="small" @click="emit('adjust', group)">调整</el-button>
       </div>
     </template>
 
@@ -69,6 +69,7 @@ const props = defineProps<{
   group: ScheduleGroup
   status: 'normal' | 'warning' | 'error'
   conflictCount: number
+  canManage?: boolean
 }>()
 
 const emit = defineEmits<{

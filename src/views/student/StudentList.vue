@@ -23,12 +23,12 @@
     </el-form>
 
     <!-- Toolbar -->
-    <div class="mb-4 flex justify-between items-center">
+    <div v-if="canManage" class="mb-4 flex justify-between items-center">
       <div class="flex gap-2">
         <el-button type="primary" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>新增
         </el-button>
-        <el-button type="success" @click="importVisible = true">
+        <el-button type="success" @click="openImport">
           <el-icon class="mr-1"><Upload /></el-icon>导入
         </el-button>
         <el-button 
@@ -53,7 +53,7 @@
       style="width: 100%"
       @selection-change="handleSelectionChange"
     >
-      <el-table-column type="selection" width="55" />
+      <el-table-column v-if="canManage" type="selection" width="55" />
       <el-table-column prop="name" label="姓名" width="120" />
       <el-table-column prop="studentType" label="学生类型" width="100">
         <template #default="{ row }">
@@ -74,7 +74,7 @@
           <span v-else class="text-gray-400">未分组</span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column v-if="canManage" label="操作" width="150" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
@@ -143,7 +143,7 @@
       </template>
     </el-dialog>
 
-    <ImportDialog v-model="importVisible" type="student" @success="fetchData" />
+    <ImportDialog v-if="canManage" v-model="importVisible" type="student" @success="fetchData" />
   </div>
 </template>
 
@@ -155,6 +155,7 @@ import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
 import { listStudents, createStudent, updateStudent, deleteStudent, batchDeleteStudents } from '../../api/student'
 import type { Student } from '../../types/student'
+import { useAdminGuard } from '../../utils/adminGuard'
 
 const loading = ref(false)
 const submitLoading = ref(false)
@@ -168,6 +169,7 @@ const filteredData = ref<Student[]>([])
 const selectedIds = ref<number[]>([])
 const currentPage = ref(1)
 const pageSize = ref(10)
+const { canManage, requireAdmin } = useAdminGuard()
 
 const tableData = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -179,6 +181,7 @@ const handleSelectionChange = (selection: Student[]) => {
 }
 
 const handleBatchDelete = () => {
+  if (!requireAdmin()) return
   if (!selectedIds.value.length) return
   
   ElMessageBox.confirm(
@@ -272,6 +275,7 @@ const resetSearch = () => {
 }
 
 const handleAdd = () => {
+  if (!requireAdmin()) return
   isEdit.value = false
   Object.assign(form, { id: 0, ...defaultForm })
   dialogVisible.value = true
@@ -279,6 +283,7 @@ const handleAdd = () => {
 }
 
 const handleEdit = (row: Student) => {
+  if (!requireAdmin()) return
   isEdit.value = true
   Object.assign(form, JSON.parse(JSON.stringify(row)))
   dialogVisible.value = true
@@ -286,6 +291,7 @@ const handleEdit = (row: Student) => {
 }
 
 const handleDelete = (row: Student) => {
+  if (!requireAdmin()) return
   ElMessageBox.confirm(`确定要删除学生 "${row.name}" 吗？`, '警告', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
@@ -302,6 +308,7 @@ const handleDelete = (row: Student) => {
 }
 
 const submitForm = async () => {
+  if (!requireAdmin()) return
   if (!formRef.value) return
   await formRef.value.validate(async (valid) => {
     if (valid) {
@@ -324,6 +331,11 @@ const submitForm = async () => {
       }
     }
   })
+}
+
+const openImport = () => {
+  if (!requireAdmin()) return
+  importVisible.value = true
 }
 
 onMounted(() => {

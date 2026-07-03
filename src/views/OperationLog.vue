@@ -5,7 +5,7 @@
       description="查看前端记录的排期生成、人工调整、冲突检测、导出和规则配置等关键操作历史。"
     >
       <el-card shadow="never" class="bg-white">
-        <OperationLogTable />
+        <OperationLogTable :can-manage="canManage" />
       </el-card>
     </PageSection>
   </div>
@@ -14,4 +14,7 @@
 <script setup lang="ts">
 import PageSection from '../components/PageSection.vue'
 import OperationLogTable from '../components/OperationLogTable.vue'
+import { useAdminGuard } from '../utils/adminGuard'
+
+const { canManage } = useAdminGuard()
 </script>

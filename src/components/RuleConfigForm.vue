@@ -45,7 +45,8 @@
           <el-input-number v-model="form.expertCount.min" :min="1" controls-position="right" class="w-full" />
         </el-form-item>
         <el-form-item label="秘书人数">
-          <el-input-number v-model="form.secretaryCount" :min="1" controls-position="right" class="w-full" />
+          <el-input-number v-model="form.secretaryCount" :min="1" :max="1" disabled controls-position="right" class="w-full" />
+          <span class="text-xs text-gray-400">当前版本每组固定 1 名秘书</span>
         </el-form-item>
       </div>
     </el-card>
@@ -123,7 +124,8 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="避开节假日">
-            <el-switch v-model="form.avoidHoliday" />
+            <el-switch v-model="form.avoidHoliday" disabled />
+            <span class="ml-2 text-xs text-gray-400">暂未生效，请通过教师/教室的不可用时间设置</span>
           </el-form-item>
         </el-col>
       </el-row>
@@ -134,33 +136,39 @@
       <template #header>
         <div class="font-bold text-gray-800 flex items-center gap-2">
           <el-icon><Operation /></el-icon>软约束权重 (0-10)
+          <el-tag size="small" type="warning">暂未参与排期计算</el-tag>
         </div>
       </template>
       <div class="space-y-4">
-        <WeightSlider 
-          v-model="form.softWeights.balanceStudentCount" 
-          label="学生人数均衡" 
-          description="尽量使各组学生人数接近目标值" 
+        <WeightSlider
+          v-model="form.softWeights.balanceStudentCount"
+          label="学生人数均衡"
+          description="尽量使各组学生人数接近目标值"
+          disabled
         />
-        <WeightSlider 
-          v-model="form.softWeights.preferSeniorTeacher" 
-          label="正高专家优先" 
-          description="优先安排教授担任组长或主席" 
+        <WeightSlider
+          v-model="form.softWeights.preferSeniorTeacher"
+          label="正高专家优先"
+          description="优先安排教授担任组长或主席"
+          disabled
         />
-        <WeightSlider 
-          v-model="form.softWeights.avoidCrossCampus" 
-          label="减少跨校区" 
-          description="尽量减少教师在同一天跨校区排期" 
+        <WeightSlider
+          v-model="form.softWeights.avoidCrossCampus"
+          label="减少跨校区"
+          description="尽量减少教师在同一天跨校区排期"
+          disabled
         />
-        <WeightSlider 
-          v-model="form.softWeights.externalMentorConcentration" 
-          label="外院导师集中" 
-          description="尽量将同一外院导师的学生集中排期" 
+        <WeightSlider
+          v-model="form.softWeights.externalMentorConcentration"
+          label="外院导师集中"
+          description="尽量将同一外院导师的学生集中排期"
+          disabled
         />
-        <WeightSlider 
-          v-model="form.softWeights.preferAcademicMasterFirst" 
-          label="学硕优先排期" 
-          description="在场次选择上优先考虑学术型硕士" 
+        <WeightSlider
+          v-model="form.softWeights.preferAcademicMasterFirst"
+          label="学硕优先排期"
+          description="在场次选择上优先考虑学术型硕士"
+          disabled
         />
       </div>
     </el-card>

@@ -10,6 +10,7 @@ export type ConflictType =
   | '人数规则提示'
   | '校区切换提示'
   | '外院导师集中提示'
+  | '数据完整性提示'
 
 export type ConflictLevel = 'error' | 'warning' | 'info'
 

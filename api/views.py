@@ -1,19 +1,19 @@
 from rest_framework.viewsets import ModelViewSet, GenericViewSet
 from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from django.db import transaction
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from django.http import HttpResponse
-import pandas as pd
+from django.utils import timezone
 import json
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
+from .permissions import IsAdminOrReadOnly, IsAdminUser, is_admin_user
 from .serializers import (
+    DEFENSE_TYPE_LABELS,
     OperationLogSerializer,
     RuleConfigSerializer,
     RoomSerializer,
@@ -36,6 +36,38 @@ def split_time_text(value):
     return [item.strip() for item in normalized.split(',') if item.strip()]
 
 
+def normalize_time_text(value):
+    """归一化常见时间写法：全角冒号、中文/波浪横线、斜杠日期分隔"""
+    return (
+        str(value)
+        .replace('：', ':')
+        .replace('—', '-')
+        .replace('～', '-')
+        .replace('~', '-')
+        .replace('/', '-')
+        .strip()
+    )
+
+
+def parse_time_entries(raw_text):
+    """拆分并归一化时间文本，返回 (可解析条目, 无法解析的原始条目)。
+
+    无法解析的条目由调用方生成提示并跳过，避免一条格式错误让整次排期失败。
+    """
+    from algorithm import SchedulingError, parse_time_range
+
+    valid, invalid = [], []
+    for entry in split_time_text(raw_text):
+        normalized = normalize_time_text(entry)
+        try:
+            parse_time_range(normalized)
+        except SchedulingError:
+            invalid.append(entry)
+        else:
+            valid.append(normalized)
+    return valid, invalid
+
+
 class AuthLoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -47,7 +79,11 @@ class AuthLoginView(APIView):
         if not user:
             return Response({'error': '账号或密码错误'}, status=status.HTTP_400_BAD_REQUEST)
         token, _ = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key, 'username': user.get_username()})
+        return Response({
+            'token': token.key,
+            'username': user.get_username(),
+            'isAdmin': is_admin_user(user),
+        })
 
 
 class ImportMixin:
@@ -60,6 +96,8 @@ class ImportMixin:
             return Response({'error': '文件大小不能超过 5MB'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
+            import pandas as pd
+
             if file.name.endswith('.csv'):
                 df = pd.read_csv(file)
             elif file.name.endswith(('.xls', '.xlsx')):
@@ -143,21 +181,25 @@ class ImportMixin:
 class TeacherViewSet(ImportMixin, ModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 
 class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 
 class RoomViewSet(ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 
 class RuleConfigViewSet(ModelViewSet):
     queryset = RuleConfig.objects.all()
     serializer_class = RuleConfigSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
     def list(self, request, *args, **kwargs):
         defense_type = request.query_params.get('defense_type', 'pre')
@@ -176,6 +218,7 @@ class RuleConfigViewSet(ModelViewSet):
 class OperationLogViewSet(ModelViewSet):
     queryset = OperationLog.objects.all()
     serializer_class = OperationLogSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
     def clear(self, request):
         OperationLog.objects.all().delete()
@@ -185,6 +228,12 @@ class OperationLogViewSet(ModelViewSet):
 class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
+    read_actions = {'current', 'export', 'export_excel', 'check_conflicts'}
+
+    def get_permissions(self):
+        if self.action in self.read_actions:
+            return [IsAuthenticated()]
+        return [IsAdminUser()]
 
     # 算法/检测产生的英文冲突类型 → 前端 ScheduleConflict 的中文类型与级别
     CONFLICT_TYPE_LABELS = {
@@ -198,6 +247,9 @@ class ScheduleViewSet(GenericViewSet):
         'supervisor_avoidance': ('导师回避冲突', 'error'),
         'secretary_student_conflict': ('秘书学生冲突', 'error'),
         'campus_mismatch': ('校区切换提示', 'warning'),
+        'student_defense_type_missing': ('数据完整性提示', 'warning'),
+        'group_size_out_of_range': ('人数规则提示', 'warning'),
+        'invalid_time_format': ('数据完整性提示', 'warning'),
     }
 
     # 历史/前端旧版规则键 → 算法使用的规则键
@@ -218,12 +270,17 @@ class ScheduleViewSet(GenericViewSet):
         """把英文冲突结构转换为前端 ScheduleConflict 形状（中文类型 + level/target/reason）"""
         group_name_map = {g.id: g.group_id for g in schedule_version.groups.all()}
         defense_label = schedule_version.get_defense_type_display()
-        created_at = schedule_version.created_at.isoformat()
+        created_at = timezone.localtime(schedule_version.created_at).isoformat()
 
         formatted = []
         for index, item in enumerate(raw_conflicts or [], start=1):
             raw_type = item.get('type', '')
             label, level = self.CONFLICT_TYPE_LABELS.get(raw_type, (raw_type or '未知冲突', 'warning'))
+            if raw_type == 'insufficient_experts':
+                # 专家数达到配置下限时降级为警告，未达下限保持错误
+                min_required = item.get('min_required') or 0
+                if min_required and (item.get('assigned') or 0) >= min_required:
+                    level = 'warning'
 
             group_ids = [
                 gid for gid in (item.get('group_db_ids') or item.get('group_ids') or [])
@@ -250,11 +307,28 @@ class ScheduleViewSet(GenericViewSet):
             })
         return formatted
 
-    def _build_algorithm_input(self):
-        teachers = list(Teacher.objects.all())
+    def _build_algorithm_input(self, defense_type):
+        """按答辩类型过滤参与者并转换为算法输入结构。
+
+        过滤语义：
+        - 学生 defense_types 必须包含当前答辩类型；为空视为数据缺失，跳过并生成提示。
+        - 教师 available_types 为空视为不限类型；非空则必须包含当前类型。
+        - 姓名→ID 映射基于过滤后的教师集合：被过滤的导师本就不会被排入，
+          supervisor_id 置空即可，避免算法校验到不存在的教师 ID。
+
+        返回 (算法输入 dict, 数据提示列表)。
+        """
+        defense_label = DEFENSE_TYPE_LABELS.get(defense_type, defense_type)
         students = list(Student.objects.all())
         rooms = list(Room.objects.all())
+
+        teachers = [
+            teacher for teacher in Teacher.objects.all()
+            if not (teacher.available_types or []) or defense_label in teacher.available_types
+        ]
         teacher_by_name = {teacher.name: teacher for teacher in teachers}
+
+        data_notices = []
 
         teacher_payload = []
         for teacher in teachers:
@@ -263,19 +337,36 @@ class ScheduleViewSet(GenericViewSet):
                 for name in [item.strip() for item in teacher.avoid_teacher_names.replace('，', ',').split(',') if item.strip()]
                 if name in teacher_by_name
             ]
+            unavailable_times, invalid_times = parse_time_entries(teacher.unavailable_times)
+            if invalid_times:
+                data_notices.append({
+                    'type': 'invalid_time_format',
+                    'description': (
+                        f'教师 {teacher.name} 的不可用时间格式无法识别，已忽略：'
+                        f'{"、".join(invalid_times)}（正确格式如 2025-05-10 09:00-12:00）'
+                    ),
+                    'related_ids': [teacher.id],
+                })
             teacher_payload.append({
                 'id': teacher.id,
                 'name': teacher.name,
                 'college': teacher.college,
                 'is_external': teacher.is_external,
                 'title': teacher.title,
-                'available_time': split_time_text(teacher.unavailable_times),
+                'available_time': unavailable_times,
                 'campus_preference': teacher.campus_preference,
                 'forbidden_with': forbidden_with,
             })
 
         student_payload = []
+        missing_type_students = []
         for student in students:
+            defense_types = student.defense_types or []
+            if not defense_types:
+                missing_type_students.append(student)
+                continue
+            if defense_label not in defense_types:
+                continue
             mentor = teacher_by_name.get(student.mentor_name)
             secretary = teacher_by_name.get(student.secretary_name)
             student_payload.append({
@@ -287,21 +378,38 @@ class ScheduleViewSet(GenericViewSet):
                 'secretary_id': secretary.id if secretary else None,
             })
 
-        room_payload = [
-            {
+        if missing_type_students:
+            names = '、'.join(student.name for student in missing_type_students)
+            data_notices.append({
+                'type': 'student_defense_type_missing',
+                'description': f'以下学生未设置参加答辩类型，本次排期已跳过：{names}',
+                'related_ids': [student.id for student in missing_type_students],
+            })
+
+        room_payload = []
+        for room in rooms:
+            available_times, invalid_times = parse_time_entries(room.available_times)
+            if invalid_times:
+                data_notices.append({
+                    'type': 'invalid_time_format',
+                    'description': (
+                        f'教室 {room.name} 的可用时间格式无法识别，已忽略：'
+                        f'{"、".join(invalid_times)}（正确格式如 2025-05-10 09:00-12:00）'
+                    ),
+                    'related_ids': [room.id],
+                })
+            room_payload.append({
                 'id': room.id,
                 'campus': room.campus,
                 'name': room.name,
-                'available_time': split_time_text(room.available_times),
-            }
-            for room in rooms
-        ]
+                'available_time': available_times,
+            })
 
         return {
             'teachers': teacher_payload,
             'students': student_payload,
             'rooms': room_payload,
-        }
+        }, data_notices
 
     @action(detail=False, methods=['post'])
     def generate(self, request):
@@ -313,7 +421,21 @@ class ScheduleViewSet(GenericViewSet):
             'avoid_holiday': True,
         }))
 
-        input_data = {**self._build_algorithm_input(), 'rules': rules}
+        input_payload, data_notices = self._build_algorithm_input(rules['defense_type'])
+        defense_label = DEFENSE_TYPE_LABELS.get(rules['defense_type'], rules['defense_type'])
+
+        if not input_payload['students']:
+            return Response(
+                {'error': f'没有学生参加【{defense_label}】，请检查学生数据中的"参加答辩类型"设置'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not input_payload['teachers']:
+            return Response(
+                {'error': f'没有可参加【{defense_label}】的教师，请检查教师数据中的"可参加答辩类型"设置'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        input_data = {**input_payload, 'rules': rules}
 
         try:
             from algorithm import SchedulingError, generate_schedule
@@ -352,7 +474,7 @@ class ScheduleViewSet(GenericViewSet):
                 group.experts.add(*group_data.get('expert_ids', []))
                 group.students.add(*group_data.get('student_ids', []))
 
-            conflicts_snapshot = []
+            conflicts_snapshot = list(data_notices)
             for item in result.get('conflicts', []):
                 enriched = dict(item)
                 enriched['group_db_ids'] = [
@@ -438,7 +560,7 @@ class ScheduleViewSet(GenericViewSet):
 
         return Response({
             'defenseType': schedule_version.get_defense_type_display(),
-            'generatedAt': schedule_version.created_at.strftime('%Y-%m-%d %H:%M'),
+            'generatedAt': timezone.localtime(schedule_version.created_at).strftime('%Y-%m-%d %H:%M'),
             'groups': formatted_groups,
             'conflicts': self._format_conflicts(schedule_version, schedule_version.conflicts_snapshot)
         })
@@ -547,6 +669,9 @@ class ScheduleViewSet(GenericViewSet):
     @action(detail=False, methods=['get'])
     def export(self, request):
         """导出当前排期为 Excel 文件"""
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
         defense_type = request.query_params.get('defense_type', 'pre')
         schedule_version = ScheduleVersion.objects.filter(
             defense_type=defense_type,

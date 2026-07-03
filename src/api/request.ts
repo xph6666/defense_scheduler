@@ -30,6 +30,7 @@ const clearAuthState = () => {
   if (typeof window === 'undefined') return
   window.localStorage.removeItem('authToken')
   window.localStorage.removeItem('username')
+  window.localStorage.removeItem('isAdmin')
 }
 
 const redirectToLogin = () => {

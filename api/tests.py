@@ -3,11 +3,39 @@ from pathlib import Path
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 import algorithm
 from .models import Group, Room, ScheduleVersion, Student, Teacher
+
+
+class BaseDataConstraintTests(TestCase):
+    def test_teacher_name_is_unique_at_database_level(self):
+        Teacher.objects.create(name='同名教师', college='计算机学院', title='教授')
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Teacher.objects.create(name='同名教师', college='软件学院', title='副教授')
+
+    def test_student_name_is_unique_at_database_level(self):
+        Student.objects.create(name='同名学生', student_type='学硕', campus='创新港')
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Student.objects.create(name='同名学生', student_type='专硕', campus='兴庆')
+
+    def test_room_name_is_unique_per_campus_at_database_level(self):
+        Room.objects.create(campus='创新港', name='A101', capacity=30)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Room.objects.create(campus='创新港', name='A101', capacity=40)
+
+    def test_room_name_can_repeat_across_campuses_at_database_level(self):
+        Room.objects.create(campus='创新港', name='A101', capacity=30)
+
+        Room.objects.create(campus='兴庆', name='A101', capacity=40)
+
+        self.assertEqual(Room.objects.filter(name='A101').count(), 2)
 
 
 class DesktopStartupDependencyTests(TestCase):
@@ -779,25 +807,6 @@ class ScheduleTypeFilterTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('没有可参加【预答辩】的教师', response.data['error'])
-
-    def test_generate_rejects_duplicate_teacher_names_before_matching_mentors(self):
-        Teacher.objects.create(name='同名老师', title='教授', available_types=['预答辩'])
-        Teacher.objects.create(name='同名老师', title='副教授', available_types=['预答辩'])
-        Teacher.objects.create(name='可用老师', title='讲师', available_types=['预答辩'])
-        Student.objects.create(
-            name='学生1',
-            student_type='学硕',
-            mentor_name='同名老师',
-            campus='创新港',
-            defense_types=['预答辩'],
-        )
-
-        response = self._generate()
-
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('教师姓名重复', response.data['error'])
-        self.assertIn('同名老师', response.data['error'])
-
 
 class AlgorithmGroupSizeTests(TestCase):
     """每组人数上下限的算法行为"""

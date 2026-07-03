@@ -162,6 +162,35 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.data['studentCount']['target'], 6)
         self.assertEqual(response.data['endDate'], '2025-05-12')
 
+    def test_rule_config_rejects_end_date_before_start_date(self):
+        response = self.client.post(
+            '/api/rule-config/',
+            {
+                'defense_type': 'pre',
+                'defenseType': '预答辩',
+                'startDate': '2025-05-12',
+                'endDate': '2025-05-10',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('endDate', response.data)
+
+    def test_rule_config_rejects_invalid_student_count_bounds(self):
+        response = self.client.post(
+            '/api/rule-config/',
+            {
+                'defense_type': 'pre',
+                'defenseType': '预答辩',
+                'studentCount': {'target': 6, 'min': 7, 'max': 8},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('studentCount', response.data)
+
     def test_operation_logs_api_supports_frontend_contract(self):
         create_response = self.client.post(
             '/api/operation-logs/',
@@ -818,6 +847,22 @@ class AlgorithmGroupSizeTests(TestCase):
     @staticmethod
     def _students(count):
         return [algorithm.Student(id=i, name=f'S{i}', campus='创新港') for i in range(1, count + 1)]
+
+    def test_validate_inputs_rejects_end_date_before_start_date(self):
+        rules = {
+            'start_date': '2025-05-12',
+            'end_date': '2025-05-10',
+            'group_size': 1,
+            'expert_count': 1,
+        }
+
+        with self.assertRaisesRegex(algorithm.SchedulingError, 'end_date must be >= start_date'):
+            algorithm.validate_inputs(
+                teachers=[algorithm.Teacher(id=1, name='教师')],
+                students=[algorithm.Student(id=1, name='学生')],
+                rooms=[algorithm.Room(id=1, name='A101')],
+                rules=rules,
+            )
 
     def test_small_tail_group_merges_into_previous(self):
         rules = {'group_size': 3, 'group_min': 2, 'group_max': 5}

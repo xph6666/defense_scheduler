@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from rest_framework import serializers
 
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
@@ -10,6 +12,7 @@ DEFENSE_TYPE_LABELS = {
 }
 
 DEFENSE_TYPE_VALUES = {value: key for key, value in DEFENSE_TYPE_LABELS.items()}
+DATE_FORMAT = '%Y-%m-%d'
 
 
 def default_rule_config(defense_type='pre'):
@@ -38,6 +41,49 @@ def default_rule_config(defense_type='pre'):
             'preferAcademicMasterFirst': 50,
         },
     }
+
+
+def parse_rule_config_date(config, key):
+    try:
+        return datetime.strptime(config.get(key), DATE_FORMAT).date()
+    except (TypeError, ValueError):
+        raise serializers.ValidationError({key: ['日期格式必须为 YYYY-MM-DD']})
+
+
+def parse_non_negative_int(value, field_path):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise serializers.ValidationError({field_path: ['必须是非负整数']})
+    if number < 0:
+        raise serializers.ValidationError({field_path: ['必须是非负整数']})
+    return number
+
+
+def validate_count_bounds(config, key, *, require_max):
+    value = config.get(key)
+    if not isinstance(value, dict):
+        raise serializers.ValidationError({key: ['配置格式不正确']})
+
+    target = parse_non_negative_int(value.get('target'), f'{key}.target')
+    minimum = parse_non_negative_int(value.get('min'), f'{key}.min')
+    if minimum > target:
+        raise serializers.ValidationError({key: ['最小值不能大于目标值']})
+
+    if require_max:
+        maximum = parse_non_negative_int(value.get('max'), f'{key}.max')
+        if target > maximum:
+            raise serializers.ValidationError({key: ['目标值不能大于最大值']})
+
+
+def validate_rule_config(config):
+    start_date = parse_rule_config_date(config, 'startDate')
+    end_date = parse_rule_config_date(config, 'endDate')
+    if end_date < start_date:
+        raise serializers.ValidationError({'endDate': ['排期结束日期不能早于开始日期']})
+
+    validate_count_bounds(config, 'studentCount', require_max=True)
+    validate_count_bounds(config, 'expertCount', require_max=False)
 
 
 class TeacherSerializer(serializers.ModelSerializer):
@@ -157,6 +203,7 @@ class RuleConfigSerializer(serializers.ModelSerializer):
         config.update(payload)
         config['defenseType'] = DEFENSE_TYPE_LABELS.get(defense_type, config.get('defenseType', defense_type))
         config.pop('updatedAt', None)
+        validate_rule_config(config)
         return {
             'defense_type': defense_type,
             'config': config,

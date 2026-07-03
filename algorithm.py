@@ -215,6 +215,14 @@ def validate_inputs(
     if missing:
         raise SchedulingError(f"missing required rules: {', '.join(missing)}")
 
+    try:
+        start_date = datetime.strptime(rules["start_date"], DATE_FMT).date()
+        end_date = datetime.strptime(rules["end_date"], DATE_FMT).date()
+    except (TypeError, ValueError) as exc:
+        raise SchedulingError("start_date and end_date must use YYYY-MM-DD") from exc
+    if end_date < start_date:
+        raise SchedulingError("end_date must be >= start_date")
+
     if int(rules["group_size"]) <= 0:
         raise SchedulingError("group_size must be > 0")
     if int(rules["expert_count"]) < 0:

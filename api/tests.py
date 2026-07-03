@@ -375,6 +375,58 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.data['errors'][0]['row'], 3)
         self.assertIn('name', response.data['errors'][0]['errors'])
 
+    def test_teacher_import_accepts_chinese_headers_and_separators(self):
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            (
+                '教师姓名,所属学院,职称,是否外院,可担任角色,参加答辩类型\n'
+                '张老师,计算机学院,教授,否,主席，普通专家,预答辩；正式答辩\n'
+            ).encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        teacher = Teacher.objects.get(name='张老师')
+        self.assertEqual(teacher.college, '计算机学院')
+        self.assertEqual(teacher.roles, ['主席', '普通专家'])
+        self.assertEqual(teacher.available_types, ['预答辩', '正式答辩'])
+
+    def test_student_import_accepts_chinese_headers(self):
+        upload = SimpleUploadedFile(
+            'students.csv',
+            (
+                '学生姓名,学生类型,导师姓名,所属校区,参加答辩类型,对应秘书姓名\n'
+                '学生甲,学硕,张老师,创新港,预答辩，正式答辩,秘书王\n'
+            ).encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='学生甲')
+        self.assertEqual(student.student_type, '学硕')
+        self.assertEqual(student.mentor_name, '张老师')
+        self.assertEqual(student.defense_types, ['预答辩', '正式答辩'])
+        self.assertEqual(student.secretary_name, '秘书王')
+
+    def test_room_import_accepts_chinese_headers(self):
+        upload = SimpleUploadedFile(
+            'rooms.csv',
+            '校区,教室名称,容量,可用时间段\n创新港,A101,30,2025-05-10 09:00-12:00\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/rooms/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        room = Room.objects.get(name='A101')
+        self.assertEqual(room.campus, '创新港')
+        self.assertEqual(room.capacity, 30)
+        self.assertEqual(room.available_times, '2025-05-10 09:00-12:00')
+
 
 class ScheduleContractTests(TestCase):
     def setUp(self):

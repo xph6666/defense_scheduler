@@ -26,6 +26,32 @@ from .serializers import (
 
 MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024
 MAX_IMPORT_ROWS = 1000
+IMPORT_HEADER_ALIASES = {
+    '姓名': 'name',
+    '教师姓名': 'name',
+    '学生姓名': 'name',
+    '所属学院': 'college',
+    '学院': 'college',
+    '是否外院': 'isExternal',
+    '职称': 'title',
+    '可担任角色': 'roles',
+    '角色': 'roles',
+    '校区偏好': 'campusPreference',
+    '不可用时间': 'unavailableTimes',
+    '不宜同组名单': 'avoidTeacherNames',
+    '学生类型': 'studentType',
+    '导师姓名': 'mentorName',
+    '所属校区': 'campus',
+    '校区': 'campus',
+    '对应秘书姓名': 'secretaryName',
+    '教室名称': 'name',
+    '教室': 'name',
+    '容量': 'capacity',
+    '容纳人数': 'capacity',
+    '可用时间段': 'availableTimes',
+    '可用时间': 'availableTimes',
+    '备注': 'remark',
+}
 
 
 def split_time_text(value):
@@ -33,6 +59,11 @@ def split_time_text(value):
         return []
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
+    normalized = str(value).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
+    return [item.strip() for item in normalized.split(',') if item.strip()]
+
+
+def split_import_list_text(value):
     normalized = str(value).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
     return [item.strip() for item in normalized.split(',') if item.strip()]
 
@@ -88,9 +119,14 @@ class AuthLoginView(APIView):
 
 
 class ImportMixin:
+    import_header_aliases = {}
+
     def _get_import_unique_fields(self):
         serializer_class = self.get_serializer_class()
         return getattr(serializer_class, 'import_unique_fields', [])
+
+    def _get_import_header_aliases(self):
+        return {**IMPORT_HEADER_ALIASES, **self.import_header_aliases}
 
     def _normalize_import_unique_value(self, value):
         if isinstance(value, str):
@@ -116,7 +152,8 @@ class ImportMixin:
             else:
                 return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
             
-            df.columns = [c.strip() for c in df.columns]
+            header_aliases = self._get_import_header_aliases()
+            df.columns = [header_aliases.get(str(c).strip(), str(c).strip()) for c in df.columns]
             if df.empty:
                 return Response({'error': '文件中没有可导入的数据'}, status=status.HTTP_400_BAD_REQUEST)
             if len(df) > MAX_IMPORT_ROWS:
@@ -151,9 +188,9 @@ class ImportMixin:
                                 try:
                                     processed_row[field] = json.loads(val.replace("'", '"'))
                                 except:
-                                    processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
+                                    processed_row[field] = split_import_list_text(val)
                             else:
-                                processed_row[field] = [item.strip() for item in val.split(',') if item.strip()]
+                                processed_row[field] = split_import_list_text(val)
                     
                     bool_fields = ['isExternal', 'is_external']
                     for field in bool_fields:
@@ -233,12 +270,19 @@ class TeacherViewSet(ImportMixin, ModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
     permission_classes = [IsAdminOrReadOnly]
+    import_header_aliases = {
+        '可参加答辩类型': 'availableTypes',
+        '参加答辩类型': 'availableTypes',
+    }
 
 
 class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     permission_classes = [IsAdminOrReadOnly]
+    import_header_aliases = {
+        '参加答辩类型': 'defenseTypes',
+    }
 
 
 class RoomViewSet(ImportMixin, ModelViewSet):

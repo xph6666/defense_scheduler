@@ -32,6 +32,7 @@ export interface RuleConfig {
   defenseType: DefenseType
   enabled: boolean
   startDate: string
+  endDate: string
   avoidWeekend: boolean
   avoidHoliday: boolean
   mentorAvoidance: boolean

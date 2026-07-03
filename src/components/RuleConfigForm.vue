@@ -118,6 +118,18 @@
           </el-form-item>
         </el-col>
         <el-col :span="8">
+          <el-form-item label="排期结束日期">
+            <el-date-picker
+              v-model="form.endDate"
+              type="date"
+              placeholder="选择日期"
+              value-format="YYYY-MM-DD"
+              :disabled-date="disableEndDate"
+              style="width: 100%"
+            />
+          </el-form-item>
+        </el-col>
+        <el-col :span="8">
           <el-form-item label="避开周末">
             <el-switch v-model="form.avoidWeekend" />
           </el-form-item>
@@ -199,6 +211,12 @@ const emit = defineEmits<{
 
 const form = ref<RuleConfig>(JSON.parse(JSON.stringify(props.modelValue)))
 
+const disableEndDate = (date: Date) => {
+  if (!form.value.startDate) return false
+  const start = new Date(form.value.startDate)
+  return date < start
+}
+
 // 同步外部 props 到内部 form
 watch(() => props.modelValue, (newVal) => {
   // 只有当内容真正改变时才更新，且使用合并而非替换，以保持引用稳定性
@@ -211,6 +229,9 @@ watch(() => props.modelValue, (newVal) => {
 
 // 监听内部 form 变化并通知外部
 watch(form, (newVal) => {
+  if (newVal.startDate && (!newVal.endDate || new Date(newVal.endDate) < new Date(newVal.startDate))) {
+    newVal.endDate = newVal.startDate
+  }
   emit('update:modelValue', newVal)
 }, { deep: true })
 </script>

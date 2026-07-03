@@ -2,11 +2,22 @@ import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 
 const STORAGE_KEY_PREFIX = 'rule_config_'
 
+function addDays(dateText: string, days: number): string {
+  const date = new Date(dateText)
+  if (Number.isNaN(date.getTime())) {
+    return dateText
+  }
+  date.setDate(date.getDate() + days)
+  return date.toISOString().split('T')[0]
+}
+
 export function getDefaultRuleConfig(defenseType: DefenseType): RuleConfig {
+  const startDate = new Date().toISOString().split('T')[0]
   const base: RuleConfig = {
     defenseType,
     enabled: true,
-    startDate: new Date().toISOString().split('T')[0],
+    startDate,
+    endDate: addDays(startDate, 10),
     avoidWeekend: true,
     avoidHoliday: true,
     mentorAvoidance: false,

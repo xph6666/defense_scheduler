@@ -144,12 +144,15 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['defenseType'], '预答辩')
         self.assertIn('studentCount', response.data)
+        self.assertEqual(response.data['endDate'], '2025-05-20')
 
         response = self.client.post(
             '/api/rule-config/',
             {
                 'defense_type': 'pre',
                 'defenseType': '预答辩',
+                'startDate': '2025-05-10',
+                'endDate': '2025-05-12',
                 'studentCount': {'target': 6, 'min': 3, 'max': 8},
             },
             format='json',
@@ -157,6 +160,7 @@ class IntegrationContractTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['studentCount']['target'], 6)
+        self.assertEqual(response.data['endDate'], '2025-05-12')
 
     def test_operation_logs_api_supports_frontend_contract(self):
         create_response = self.client.post(

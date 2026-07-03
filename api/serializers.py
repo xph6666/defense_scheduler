@@ -17,6 +17,7 @@ def default_rule_config(defense_type='pre'):
         'defenseType': DEFENSE_TYPE_LABELS.get(defense_type, defense_type),
         'enabled': True,
         'startDate': '2025-05-10',
+        'endDate': '2025-05-20',
         'avoidWeekend': True,
         'avoidHoliday': True,
         'mentorAvoidance': True,

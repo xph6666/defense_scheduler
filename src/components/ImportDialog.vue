@@ -70,6 +70,43 @@ const selectedFile = ref<File | null>(null)
 const loading = ref(false)
 const previewVisible = ref(false)
 
+type ImportRowError = {
+  row?: number
+  errors?: Record<string, unknown> | string
+}
+
+const stringifyImportMessages = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item)).join('、')
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).map(stringifyImportMessages).join('、')
+  }
+  return String(value)
+}
+
+const formatImportError = (entry: unknown): string => {
+  if (typeof entry === 'string') {
+    return entry
+  }
+  if (entry && typeof entry === 'object') {
+    const rowError = entry as ImportRowError
+    const prefix = rowError.row ? `第 ${rowError.row} 行` : '数据行'
+    if (typeof rowError.errors === 'string') {
+      return `${prefix}: ${rowError.errors}`
+    }
+    if (rowError.errors && typeof rowError.errors === 'object') {
+      const details = Object.entries(rowError.errors)
+        .map(([field, messages]) => `${field}: ${stringifyImportMessages(messages)}`)
+      if (details.length > 0) {
+        return `${prefix}: ${details.join('；')}`
+      }
+    }
+    return prefix
+  }
+  return String(entry)
+}
+
 watch(() => props.modelValue, (val) => {
   visible.value = val
 })
@@ -118,7 +155,7 @@ const handleConfirm = async () => {
 
     if (subErrors && subErrors.length > 0) {
       ElMessage.error({
-        message: `${errorMsg}: ${subErrors[0]}`,
+        message: `${errorMsg}: ${formatImportError(subErrors[0])}`,
         duration: 5000
       })
     } else {

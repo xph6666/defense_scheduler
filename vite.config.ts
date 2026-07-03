@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     build: {
-      sourcemap: 'hidden',
+      sourcemap: mode === 'production' ? false : 'hidden',
       rollupOptions: {
         output: {
           manualChunks(id) {
@@ -37,7 +37,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       vue(),
-      Inspector(),
+      ...(mode === 'development' ? [Inspector()] : []),
     ],
     resolve: {
       alias: {

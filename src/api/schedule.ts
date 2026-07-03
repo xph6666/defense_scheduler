@@ -48,7 +48,10 @@ const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
     expert_count: config?.expertCount?.target || 3,
     avoid_weekend: config?.avoidWeekend ?? true,
     avoid_holiday: config?.avoidHoliday ?? true,
-    mentor_avoidance: config?.mentorAvoidance ?? false
+    // 算法读取的键是 avoid_supervisor；后端另有 mentor_avoidance 别名兼容
+    avoid_supervisor: config?.mentorAvoidance ?? false,
+    need_chair: true,
+    chair_title: config?.roleQualification?.chairmanMinTitle || '教授'
   }
 }
 

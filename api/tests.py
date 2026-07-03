@@ -3,6 +3,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+import algorithm
 from .models import Group, Room, ScheduleVersion, Student, Teacher
 
 
@@ -320,3 +321,129 @@ class ScheduleContractTests(TestCase):
         group.refresh_from_db()
         self.assertEqual(group.group_id, 'G1')
         self.assertEqual(list(group.experts.values_list('id', flat=True)), [teacher.id])
+
+
+class ScheduleConflictContractTests(TestCase):
+    """生成排期时的冲突链路与规则键契约"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
+
+    def _generate(self, rules):
+        return self.client.post('/api/schedule/generate/', {'rules': rules}, format='json')
+
+    def test_generate_persists_and_returns_frontend_shaped_conflicts(self):
+        # 唯一的老师同时是学生导师，且开启导师回避 → 必然缺专家、缺秘书
+        mentor = Teacher.objects.create(name='导师张', college='计算机学院', title='教授')
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+        Student.objects.create(
+            name='学生1', student_type='学硕', mentor_name=mentor.name,
+            campus='创新港', defense_types=['预答辩'],
+        )
+
+        response = self._generate({
+            'defense_type': 'pre',
+            'start_date': '2025-05-10',
+            'end_date': '2025-05-10',
+            'group_size': 1,
+            'expert_count': 1,
+            'avoid_weekend': False,
+            'avoid_supervisor': True,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        conflicts = response.data['conflicts']
+        self.assertTrue(conflicts, '数据不足时生成结果必须携带冲突提示')
+        for conflict in conflicts:
+            self.assertIn('type', conflict)
+            self.assertIn(conflict['level'], ['error', 'warning', 'info'])
+            self.assertTrue(conflict['reason'])
+            self.assertEqual(conflict['defenseType'], '预答辩')
+        self.assertIn('人员冲突', [conflict['type'] for conflict in conflicts])
+
+        version = ScheduleVersion.objects.get(defense_type='pre', is_current=True)
+        self.assertTrue(version.conflicts_snapshot, '冲突快照必须持久化')
+
+        current_response = self.client.get('/api/schedule/current/', {'defense_type': 'pre'})
+        self.assertEqual(current_response.status_code, 200)
+        self.assertEqual(current_response.data['conflicts'], conflicts)
+
+    def test_generate_normalizes_mentor_avoidance_alias(self):
+        mentor = Teacher.objects.create(name='导师张', college='计算机学院', title='教授')
+        Teacher.objects.create(name='专家李', college='计算机学院', title='副教授')
+        Teacher.objects.create(name='秘书王', college='计算机学院', title='讲师')
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+        Student.objects.create(
+            name='学生1', student_type='学硕', mentor_name=mentor.name,
+            campus='创新港', defense_types=['预答辩'],
+        )
+
+        # 旧键名 mentor_avoidance 也必须触发导师回避
+        response = self._generate({
+            'defense_type': 'pre',
+            'start_date': '2025-05-10',
+            'end_date': '2025-05-10',
+            'group_size': 1,
+            'expert_count': 1,
+            'avoid_weekend': False,
+            'mentor_avoidance': True,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        version = ScheduleVersion.objects.get(defense_type='pre', is_current=True)
+        self.assertTrue(version.rules_snapshot.get('avoid_supervisor'))
+        group = response.data['groups'][0]
+        self.assertNotIn(mentor.name, [teacher['name'] for teacher in group['teachers']])
+
+    def test_generate_assigns_chair_when_need_chair_rule_sent(self):
+        Teacher.objects.create(name='教授A', college='计算机学院', title='教授')
+        Teacher.objects.create(name='讲师B', college='计算机学院', title='讲师')
+        Teacher.objects.create(name='讲师C', college='计算机学院', title='讲师')
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+        Student.objects.create(
+            name='学生1', student_type='学硕', mentor_name='',
+            campus='创新港', defense_types=['预答辩'],
+        )
+
+        response = self._generate({
+            'defense_type': 'pre',
+            'start_date': '2025-05-10',
+            'end_date': '2025-05-10',
+            'group_size': 1,
+            'expert_count': 1,
+            'avoid_weekend': False,
+            'avoid_supervisor': False,
+            'need_chair': True,
+            'chair_title': '教授',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['groups'][0]['chairman'], '教授A')
+
+
+class AlgorithmTitleRankTests(TestCase):
+    """算法职称等级判断：不允许"教授" in "副教授"这类子串误配"""
+
+    def _teacher(self, title):
+        return algorithm.Teacher(id=1, name='教师', title=title)
+
+    def test_associate_professor_does_not_satisfy_professor_requirement(self):
+        rules = {'chair_title': '教授'}
+        self.assertFalse(algorithm.meets_chair_requirement(self._teacher('副教授'), rules))
+        self.assertTrue(algorithm.meets_chair_requirement(self._teacher('教授'), rules))
+
+    def test_higher_title_satisfies_lower_requirement(self):
+        rules = {'chair_title': '副教授'}
+        self.assertTrue(algorithm.meets_chair_requirement(self._teacher('教授'), rules))
+        self.assertFalse(algorithm.meets_chair_requirement(self._teacher('讲师'), rules))
+
+    def test_no_requirement_always_passes(self):
+        self.assertTrue(algorithm.meets_chair_requirement(self._teacher('讲师'), {}))
+        self.assertTrue(algorithm.meets_chair_requirement(self._teacher(None), {'chair_title': ''}))
+
+    def test_unknown_requirement_falls_back_to_exact_match(self):
+        rules = {'chair_title': '特聘研究员'}
+        self.assertTrue(algorithm.meets_chair_requirement(self._teacher('特聘研究员'), rules))
+        self.assertFalse(algorithm.meets_chair_requirement(self._teacher('教授'), rules))

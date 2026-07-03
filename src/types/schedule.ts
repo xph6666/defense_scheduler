@@ -1,3 +1,5 @@
+import type { ScheduleConflict } from './conflict'
+
 export type DefenseType = '预答辩' | '正式答辩' | '中期答辩'
 
 export interface ScheduleStudent {
@@ -38,4 +40,6 @@ export interface ScheduleResult {
   defenseType: DefenseType
   generatedAt: string
   groups: ScheduleGroup[]
+  /** 后端生成排期时的冲突快照；旧后端/Mock 模式下不存在 */
+  conflicts?: ScheduleConflict[]
 }

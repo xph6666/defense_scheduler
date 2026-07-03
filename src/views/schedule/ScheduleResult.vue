@@ -232,6 +232,16 @@ const loadOptions = async () => {
   classroomOptions.value = (classrooms as Classroom[]).map(c => ({ campus: c.campus, name: c.name }))
 }
 
+// 后端排期响应自带生成时的冲突快照；带了就直接用，否则回退到本地/远程检测
+const applyConflictsFromResult = (scheduleResult: ScheduleResult): boolean => {
+  if (Array.isArray(scheduleResult.conflicts)) {
+    conflicts.value = scheduleResult.conflicts
+    currentConflict.value = null
+    return true
+  }
+  return false
+}
+
 const fetchResult = async () => {
   const currentDefenseType = defenseType.value
   loading.value = true
@@ -240,7 +250,9 @@ const fetchResult = async () => {
     const scheduleResult = await getScheduleResults(currentDefenseType)
     if (currentDefenseType !== defenseType.value) return
     result.value = scheduleResult
-    await handleCheckConflicts(currentDefenseType)
+    if (!applyConflictsFromResult(scheduleResult)) {
+      await handleCheckConflicts(currentDefenseType)
+    }
     await updateOptimizationScore()
   } catch (e) {
     if (currentDefenseType !== defenseType.value) return
@@ -270,7 +282,9 @@ const handleGenerate = async () => {
     if (currentDefenseType !== defenseType.value) return
     result.value = scheduleResult
     ElMessage.success('排期生成成功')
-    await handleCheckConflicts(currentDefenseType)
+    if (!applyConflictsFromResult(scheduleResult)) {
+      await handleCheckConflicts(currentDefenseType)
+    }
     await updateOptimizationScore()
   } catch (e) {
     if (currentDefenseType !== defenseType.value) return

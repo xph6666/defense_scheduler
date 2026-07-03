@@ -82,4 +82,26 @@ python manage.py check --deploy
 
 ## 打包说明
 
-当前仓库已具备单服务运行基础：先 `npm run build`，再由 Django 服务前端与 API。若要生成真正的 Windows `.exe`，建议下一步引入 PyInstaller 或桌面壳；本机当前未安装 PyInstaller。
+仓库已支持生成单文件 Windows 可执行程序：
+
+```powershell
+.\scripts\build-exe.ps1
+.\release\DefenseScheduler.exe
+```
+
+可执行程序会在 `release\app-data` 下保存运行数据：
+
+- `db.sqlite3`：本机数据库
+- `secret.key`：本机 Django 密钥
+- `INITIAL_ADMIN.txt`：首次启动自动生成的管理员账号和密码
+
+首次登录后请立即修改管理员密码，并妥善保管 `release\app-data` 目录。默认会监听 `http://127.0.0.1:8000` 并打开浏览器；可通过环境变量调整：
+
+```powershell
+$env:DEFENSE_SCHEDULER_PORT = "8080"
+$env:DEFENSE_SCHEDULER_HOST = "127.0.0.1"
+$env:DEFENSE_SCHEDULER_OPEN_BROWSER = "false"
+.\release\DefenseScheduler.exe
+```
+
+这个 exe 面向本机单用户或小范围离线使用。若要作为多人局域网/公网服务部署，建议改用标准 Django 部署方式，配置独立数据库、HTTPS、反向代理和生产级 WSGI 服务。

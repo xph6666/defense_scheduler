@@ -40,10 +40,23 @@ def frontend_asset(_request, path):
     content_type = mimetypes.guess_type(asset_path.name)[0] or 'application/octet-stream'
     return HttpResponse(asset_path.read_bytes(), content_type=content_type)
 
+
+def frontend_public_file(_request, path):
+    try:
+        file_path = Path(safe_join(settings.FRONTEND_DIST_DIR, path))
+    except ValueError as exc:
+        raise Http404('Frontend file not found.') from exc
+    if not file_path.exists() or not file_path.is_file():
+        raise Http404('Frontend file not found.')
+    content_type = mimetypes.guess_type(file_path.name)[0] or 'application/octet-stream'
+    return HttpResponse(file_path.read_bytes(), content_type=content_type)
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
     re_path(r'^assets/(?P<path>.*)$', frontend_asset),
+    re_path(r'^(?P<path>favicon\.svg)$', frontend_public_file),
     path('', frontend_index),
     re_path(r'^(?!api/|admin/|assets/).*$', frontend_index),
 ]

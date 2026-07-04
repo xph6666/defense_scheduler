@@ -12,7 +12,7 @@
         :auto-upload="false"
         :on-change="handleFileChange"
         :show-file-list="false"
-        accept=".xlsx,.csv"
+        accept=".xlsx,.xls,.csv"
       >
         <el-icon class="el-icon--upload"><upload-filled /></el-icon>
         <div class="el-upload__text">
@@ -20,7 +20,7 @@
         </div>
         <template #tip>
           <div class="el-upload__tip text-center mt-2">
-            支持 .xlsx, .csv 格式文件
+            支持 .xlsx, .xls, .csv 格式文件
           </div>
         </template>
       </el-upload>

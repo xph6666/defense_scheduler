@@ -1,4 +1,5 @@
 import ast
+from io import BytesIO
 from pathlib import Path
 
 from django.contrib.auth.models import User
@@ -9,6 +10,22 @@ from rest_framework.test import APIClient
 
 import algorithm
 from .models import Group, Room, ScheduleVersion, Student, Teacher
+
+
+def make_xlsx_upload(filename, rows):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    for row in rows:
+        sheet.append(row)
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return SimpleUploadedFile(
+        filename,
+        buffer.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 class BaseDataConstraintTests(TestCase):
@@ -426,6 +443,175 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(room.campus, '创新港')
         self.assertEqual(room.capacity, 30)
         self.assertEqual(room.available_times, '2025-05-10 09:00-12:00')
+
+    def test_teacher_import_accepts_assigned_leader_secretary_roster(self):
+        upload = make_xlsx_upload(
+            '指定组长秘书.xlsx',
+            [
+                ['序号', '姓名', '所在学院', '性别', '职称', None],
+                [1, '宋永红', '软件学院', '女', '研究员', '组长/主席'],
+                [2, '田暄', '软件学院', '男', '工程师', '秘书'],
+            ],
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        leader = Teacher.objects.get(name='宋永红')
+        secretary = Teacher.objects.get(name='田暄')
+        self.assertEqual(leader.college, '软件学院')
+        self.assertEqual(leader.roles, ['组长', '主席'])
+        self.assertEqual(secretary.roles, ['秘书'])
+
+    def test_student_import_accepts_midterm_location_sheet_with_header_after_blank_row(self):
+        upload = make_xlsx_upload(
+            '22级中期考核答辩地点.xlsx',
+            [
+                [None, None, None, None, None, None, None, None],
+                ['序号', '学号', '姓名', '性别', '学科', '导师', '答辩地点', '答辩地点填：兴庆/创新港'],
+                [1, '3122158001', '崔东森', '男', '计算机科学与技术', '王晨旭', '创新港', None],
+            ],
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='崔东森')
+        self.assertEqual(student.student_type, '计算机科学与技术')
+        self.assertEqual(student.mentor_name, '王晨旭')
+        self.assertEqual(student.campus, '创新港')
+        self.assertEqual(student.defense_types, ['中期答辩'])
+
+    def test_student_import_accepts_formal_location_sheet_with_title_rows(self):
+        upload = make_xlsx_upload(
+            '23级答辩地点统计-含学生信息-导师信息-答辩地点.xlsx',
+            [
+                ['软件工程硕士23级答辩地点统计', None, None, None, None, None, None, None, None],
+                ['2023年9月入学', None, None, None, None, None, None, None, None],
+                ['序号', '学号', '姓名', '性别', '学科', '导师', '答辩地点', '备注', '答辩地点填：兴庆/创新港'],
+                [1, '3123158001', '卓佳麟', '男', '计算机科学与技术', '王志', '创新港', None, None],
+            ],
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='卓佳麟')
+        self.assertEqual(student.student_type, '计算机科学与技术')
+        self.assertEqual(student.mentor_name, '王志')
+        self.assertEqual(student.campus, '创新港')
+        self.assertEqual(student.defense_types, ['正式答辩'])
+
+    def test_student_import_merges_defense_types_for_existing_real_data_rows(self):
+        Student.objects.create(
+            name='同名学生',
+            student_type='计算机科学与技术',
+            mentor_name='旧导师',
+            campus='创新港',
+            defense_types=['中期答辩'],
+        )
+        upload = make_xlsx_upload(
+            '23级答辩地点统计-含学生信息-导师信息-答辩地点.xlsx',
+            [
+                ['序号', '学号', '姓名', '性别', '学科', '导师', '答辩地点'],
+                [1, '3123158999', '同名学生', '男', '计算机科学与技术', '新导师', '兴庆'],
+            ],
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='同名学生')
+        self.assertEqual(student.mentor_name, '新导师')
+        self.assertEqual(student.campus, '兴庆')
+        self.assertEqual(student.defense_types, ['中期答辩', '正式答辩'])
+
+    def test_student_import_merges_explicit_defense_type_text_for_existing_rows(self):
+        Student.objects.create(
+            name='已有学生',
+            student_type='学硕',
+            mentor_name='旧导师',
+            campus='创新港',
+            defense_types=['中期答辩'],
+        )
+        upload = SimpleUploadedFile(
+            'students.csv',
+            (
+                '学生姓名,学生类型,导师姓名,所属校区,参加答辩类型\n'
+                '已有学生,专硕,新导师,兴庆,预答辩，正式答辩\n'
+            ).encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='已有学生')
+        self.assertEqual(student.student_type, '专硕')
+        self.assertEqual(student.mentor_name, '新导师')
+        self.assertEqual(student.campus, '兴庆')
+        self.assertEqual(student.defense_types, ['中期答辩', '预答辩', '正式答辩'])
+
+    def test_room_import_accepts_borrow_request_sheet_with_date_and_class_periods(self):
+        upload = make_xlsx_upload(
+            '教室借用申请-兴庆教室.xlsx',
+            [
+                ['审核状态', '借用人姓名', '校区', '教学楼', '教室名称', '使用日期', '使用时间'],
+                ['已通过', '冯硕', '兴庆校区', '中2楼', '中2-1209', '2024-03-28', '第1节-第4节'],
+            ],
+        )
+
+        response = self.client.post('/api/rooms/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        room = Room.objects.get(name='中2-1209')
+        self.assertEqual(room.campus, '兴庆')
+        self.assertEqual(room.capacity, 30)
+        self.assertEqual(room.available_times, '2024-03-28 08:00-12:00')
+
+    def test_room_import_accepts_card_style_innovation_harbor_borrow_sheet(self):
+        upload = make_xlsx_upload(
+            '教室借用申请-创新港教室.xlsx',
+            [
+                ['预答辩(不公开)', None, None, None],
+                ['状态：正在审核单号:101990393详情', None, None, None],
+                ['4-3214 电子与信息学部 等待审核 2026-04-10 09:00至13:00 服务： 撤销 | 评价', None, None, None],
+                ['详细 | 复制申请', None, '审核通过', None],
+            ],
+        )
+
+        response = self.client.post('/api/rooms/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        room = Room.objects.get(name='4-3214')
+        self.assertEqual(room.campus, '创新港')
+        self.assertEqual(room.capacity, 30)
+        self.assertEqual(room.available_times, '2026-04-10 09:00-13:00')
+
+    def test_room_import_skips_card_style_noise_rows_and_merges_duplicate_rooms(self):
+        upload = make_xlsx_upload(
+            '教室借用申请-创新港教室.xlsx',
+            [
+                ['预答辩(不公开)', None, None, None, None, None],
+                ['状态：正在审核单号:101990393详情', None, None, None, None, None],
+                ['4-3214', '电子与信息学部', '等待审核', '2026-04-10 09:00至13:00', '服务：', '撤销 | 评价'],
+                ['详细 | 复制申请', None, '审核通过', None, None, None],
+                ['预答辩(不公开)', None, None, None, None, None],
+                ['状态：正在审核单号:101990363详情', None, None, None, None, None],
+                ['4-3214', '电子与信息学部', '等待审核', '2026-04-09 08:50至18:10', '服务：', '撤销 | 评价'],
+            ],
+        )
+
+        response = self.client.post('/api/rooms/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Room.objects.count(), 1)
+        room = Room.objects.get(name='4-3214')
+        self.assertEqual(room.campus, '创新港')
+        self.assertEqual(
+            room.available_times,
+            '2026-04-10 09:00-13:00,2026-04-09 08:50-18:10',
+        )
 
 
 class ScheduleContractTests(TestCase):

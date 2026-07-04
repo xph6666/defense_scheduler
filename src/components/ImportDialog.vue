@@ -11,7 +11,7 @@
         drag
         action="#"
         :auto-upload="false"
-        accept=".xlsx, .csv"
+        accept=".xlsx, .xls, .csv"
         :on-change="handleFileChange"
         :limit="1"
       >

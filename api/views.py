@@ -31,6 +31,7 @@ IMPORT_HEADER_ALIASES = {
     '教师姓名': 'name',
     '学生姓名': 'name',
     '所属学院': 'college',
+    '所在学院': 'college',
     '学院': 'college',
     '是否外院': 'isExternal',
     '职称': 'title',
@@ -40,9 +41,12 @@ IMPORT_HEADER_ALIASES = {
     '不可用时间': 'unavailableTimes',
     '不宜同组名单': 'avoidTeacherNames',
     '学生类型': 'studentType',
+    '学科': 'studentType',
     '导师姓名': 'mentorName',
+    '导师': 'mentorName',
     '所属校区': 'campus',
     '校区': 'campus',
+    '答辩地点': 'campus',
     '对应秘书姓名': 'secretaryName',
     '教室名称': 'name',
     '教室': 'name',
@@ -50,7 +54,29 @@ IMPORT_HEADER_ALIASES = {
     '容纳人数': 'capacity',
     '可用时间段': 'availableTimes',
     '可用时间': 'availableTimes',
+    '使用日期': 'useDate',
+    '使用时间': 'useTime',
     '备注': 'remark',
+}
+
+IMPORT_KNOWN_FIELDS = {
+    'id', 'name', 'college', 'isExternal', 'is_external', 'title', 'roles',
+    'availableTypes', 'available_types', 'campusPreference', 'campus_preference',
+    'unavailableTimes', 'unavailable_times', 'avoidTeacherNames', 'avoid_teacher_names',
+    'remark', 'studentType', 'student_type', 'mentorName', 'mentor_name', 'campus',
+    'defenseTypes', 'defense_types', 'secretaryName', 'secretary_name', 'capacity',
+    'availableTimes', 'available_times', 'useDate', 'use_date', 'useTime', 'use_time',
+}
+
+CLASS_PERIOD_TIME_RANGES = {
+    (1, 2): '08:00-10:00',
+    (1, 4): '08:00-12:00',
+    (3, 4): '10:00-12:00',
+    (5, 6): '14:00-16:00',
+    (5, 8): '14:00-18:00',
+    (7, 8): '16:00-18:00',
+    (9, 10): '19:00-21:00',
+    (9, 12): '19:00-22:00',
 }
 
 
@@ -64,8 +90,130 @@ def split_time_text(value):
 
 
 def split_import_list_text(value):
-    normalized = str(value).replace('，', ',').replace(';', ',').replace('；', ',').replace('\n', ',')
+    normalized = (
+        str(value)
+        .replace('，', ',')
+        .replace('、', ',')
+        .replace(';', ',')
+        .replace('；', ',')
+        .replace('/', ',')
+        .replace('\n', ',')
+    )
     return [item.strip() for item in normalized.split(',') if item.strip()]
+
+
+def normalize_import_cell(value):
+    if value is None:
+        return None
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, str):
+        value = value.replace('\xa0', ' ').strip()
+        return value if value else None
+    if hasattr(value, 'strftime'):
+        return value.strftime('%Y-%m-%d')
+    return value
+
+
+def normalize_import_header(value, header_aliases, index):
+    text = normalize_import_cell(value)
+    if text is None:
+        return f'__column_{index}'
+    text = str(text).strip()
+    if text.startswith('Unnamed:'):
+        return f'__column_{index}'
+    return header_aliases.get(text, text)
+
+
+def import_header_score(row, header_aliases):
+    score = 0
+    for index, value in enumerate(row):
+        header = normalize_import_header(value, header_aliases, index)
+        if header in IMPORT_KNOWN_FIELDS:
+            score += 1
+    return score
+
+
+def read_import_dataframe(file, filename, header_aliases):
+    import pandas as pd
+
+    if filename.endswith('.csv'):
+        raw = pd.read_csv(file, header=None)
+    elif filename.endswith(('.xls', '.xlsx')):
+        raw = pd.read_excel(file, header=None)
+    else:
+        raise ValueError('不支持的文件格式')
+
+    if raw.empty:
+        return raw
+
+    scores = [import_header_score(row, header_aliases) for row in raw.values[:10]]
+    header_index = max(range(len(scores)), key=lambda index: scores[index])
+    if scores[header_index] == 0:
+        header_index = 0
+
+    columns = [
+        normalize_import_header(value, header_aliases, index)
+        for index, value in enumerate(raw.iloc[header_index].tolist())
+    ]
+    df = raw.iloc[header_index + 1:].copy()
+    df.columns = columns
+    return df.dropna(how='all')
+
+
+def normalize_campus_text(value):
+    if value is None:
+        return value
+    text = str(value).strip()
+    if text.endswith('校区'):
+        text = text[:-2]
+    return text
+
+
+def infer_defense_types_from_filename(filename):
+    if '中期' in filename:
+        return ['中期答辩']
+    if '预答辩' in filename:
+        return ['预答辩']
+    if '正式' in filename or '答辩地点统计' in filename:
+        return ['正式答辩']
+    return []
+
+
+def normalize_class_period_time(value):
+    import re
+
+    if not value:
+        return ''
+    text = str(value).strip()
+    match = re.search(r'第\s*(\d+)\s*节\s*-\s*第?\s*(\d+)\s*节', text)
+    if not match:
+        return text
+    start, end = int(match.group(1)), int(match.group(2))
+    return CLASS_PERIOD_TIME_RANGES.get((start, end), text)
+
+
+def parse_card_style_room_text(text, filename):
+    import re
+
+    match = re.search(
+        r'(?P<room>\d+-\d+).*?(?P<date>\d{4}-\d{2}-\d{2})\s+'
+        r'(?P<start>\d{1,2}:\d{2})\s*至\s*(?P<end>\d{1,2}:\d{2})',
+        text,
+    )
+    if not match:
+        return None
+    campus = '创新港' if '创新港' in filename else '兴庆' if '兴庆' in filename else ''
+    return {
+        'campus': campus,
+        'name': match.group('room'),
+        'availableTimes': f"{match.group('date')} {match.group('start')}-{match.group('end')}",
+    }
 
 
 def normalize_time_text(value):
@@ -144,6 +292,15 @@ class ImportMixin:
             return value.strip()
         return value
 
+    def prepare_import_row(self, processed_row, filename):
+        return processed_row
+
+    def prepare_import_rows(self, prepared_rows, filename):
+        return prepared_rows
+
+    def get_import_instance(self, processed_row):
+        return None
+
     @action(detail=False, methods=['post'])
     def import_data(self, request):
         file = request.FILES.get('file')
@@ -153,18 +310,13 @@ class ImportMixin:
             return Response({'error': '文件大小不能超过 5MB'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            import pandas as pd
-
             filename = file.name.lower()
-            if filename.endswith('.csv'):
-                df = pd.read_csv(file)
-            elif filename.endswith(('.xls', '.xlsx')):
-                df = pd.read_excel(file)
-            else:
-                return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
-            
             header_aliases = self._get_import_header_aliases()
-            df.columns = [header_aliases.get(str(c).strip(), str(c).strip()) for c in df.columns]
+            try:
+                df = read_import_dataframe(file, filename, header_aliases)
+            except ValueError as exc:
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
             if df.empty:
                 return Response({'error': '文件中没有可导入的数据'}, status=status.HTTP_400_BAD_REQUEST)
             if len(df) > MAX_IMPORT_ROWS:
@@ -172,22 +324,30 @@ class ImportMixin:
                     {'error': f'单次最多导入 {MAX_IMPORT_ROWS} 行数据'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            df = df.where(pd.notnull(df), None)
+            df = df.where(df.notnull(), None)
             data_list = df.to_dict(orient='records')
             
             valid_serializers = []
             errors = []
             
             batch_unique_values = {}
+            prepared_rows = []
 
             for index, row in enumerate(data_list):
                 try:
                     processed_row = {}
                     for k, v in row.items():
+                        v = normalize_import_cell(v)
+                        if v is None:
+                            continue
                         processed_row[k] = v
                         snake_k = ''.join(['_' + i.lower() if i.isupper() else i for i in k]).lstrip('_')
                         if snake_k not in processed_row:
                             processed_row[snake_k] = v
+
+                    processed_row = self.prepare_import_row(processed_row, filename)
+                    if not processed_row:
+                        continue
 
                     json_fields = ['roles', 'available_types', 'availableTypes', 'defense_types', 'defenseTypes']
                     for field in json_fields:
@@ -208,6 +368,17 @@ class ImportMixin:
                         if field in processed_row and isinstance(processed_row[field], str):
                             processed_row[field] = processed_row[field].lower() in ['true', '1', '是', 'yes']
 
+                    prepared_rows.append((index + 2, processed_row))
+                except Exception as e:
+                    errors.append({
+                        'row': index + 2,
+                        'errors': {'non_field_errors': [str(e)]},
+                    })
+
+            prepared_rows = self.prepare_import_rows(prepared_rows, filename)
+
+            for row_number, processed_row in prepared_rows:
+                try:
                     row_errors = {}
                     for field, message in self._get_import_unique_fields():
                         fields = field if isinstance(field, (tuple, list)) else (field,)
@@ -229,17 +400,22 @@ class ImportMixin:
                         })
                         continue
 
-                    serializer = self.get_serializer(data=processed_row)
+                    instance = self.get_import_instance(processed_row)
+                    serializer = self.get_serializer(
+                        instance,
+                        data=processed_row,
+                        partial=bool(instance),
+                    )
                     if serializer.is_valid():
                         valid_serializers.append(serializer)
                     else:
                         errors.append({
-                            'row': index + 2,
+                            'row': row_number,
                             'errors': serializer.errors,
                         })
                 except Exception as e:
                     errors.append({
-                        'row': index + 2,
+                        'row': row_number,
                         'errors': {'non_field_errors': [str(e)]},
                     })
             
@@ -286,6 +462,27 @@ class TeacherViewSet(ImportMixin, ModelViewSet):
         '参加答辩类型': 'availableTypes',
     }
 
+    def prepare_import_row(self, processed_row, filename):
+        role_value = processed_row.get('roles')
+        if not role_value:
+            for key, value in processed_row.items():
+                if not str(key).startswith('__column_') or not isinstance(value, str):
+                    continue
+                if any(token in value for token in ['组员', '组长', '主席', '秘书']):
+                    role_value = value
+                    break
+
+        if isinstance(role_value, str):
+            roles = []
+            for role in split_import_list_text(role_value):
+                if role == '组员':
+                    role = '普通专家'
+                if role not in roles:
+                    roles.append(role)
+            processed_row['roles'] = roles
+
+        return processed_row
+
 
 class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
@@ -295,11 +492,93 @@ class StudentViewSet(ImportMixin, ModelViewSet):
         '参加答辩类型': 'defenseTypes',
     }
 
+    def prepare_import_row(self, processed_row, filename):
+        if processed_row.get('campus'):
+            processed_row['campus'] = normalize_campus_text(processed_row.get('campus'))
+
+        defense_types = processed_row.get('defenseTypes') or processed_row.get('defense_types')
+        if isinstance(defense_types, str):
+            defense_types = split_import_list_text(defense_types)
+            processed_row['defenseTypes'] = defense_types
+
+        if not defense_types:
+            inferred = infer_defense_types_from_filename(filename)
+            if inferred:
+                defense_types = inferred
+                processed_row['defenseTypes'] = defense_types
+
+        existing = Student.objects.filter(name=processed_row.get('name')).first()
+        if existing:
+            merged_defense_types = list(existing.defense_types or [])
+            for defense_type in defense_types or []:
+                if defense_type not in merged_defense_types:
+                    merged_defense_types.append(defense_type)
+            processed_row['defenseTypes'] = merged_defense_types
+
+        return processed_row
+
+    def get_import_instance(self, processed_row):
+        name = processed_row.get('name')
+        if not name:
+            return None
+        return Student.objects.filter(name=name).first()
+
 
 class RoomViewSet(ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
     permission_classes = [IsAdminOrReadOnly]
+
+    def prepare_import_row(self, processed_row, filename):
+        if not processed_row.get('name'):
+            combined_text = ' '.join(str(value) for value in processed_row.values() if value is not None)
+            card_row = parse_card_style_room_text(combined_text, filename)
+            if card_row:
+                processed_row.update(card_row)
+            if not processed_row.get('name') and any(str(key).startswith('__column_') for key in processed_row):
+                return None
+            if not processed_row.get('name') and '教室借用申请' in filename:
+                return None
+
+        if processed_row.get('campus'):
+            processed_row['campus'] = normalize_campus_text(processed_row.get('campus'))
+
+        if not processed_row.get('availableTimes') and processed_row.get('useDate') and processed_row.get('useTime'):
+            processed_row['availableTimes'] = (
+                f"{processed_row.get('useDate')} {normalize_class_period_time(processed_row.get('useTime'))}"
+            ).strip()
+
+        return processed_row
+
+    def prepare_import_rows(self, prepared_rows, filename):
+        merged = {}
+        ordered = []
+        for row_number, row in prepared_rows:
+            key = (
+                self._normalize_import_unique_value(row.get('campus') or ''),
+                self._normalize_import_unique_value(row.get('name') or ''),
+            )
+            if not all(key):
+                ordered.append((row_number, row))
+                continue
+            if key not in merged:
+                merged[key] = (row_number, row)
+                ordered.append((row_number, row))
+                continue
+
+            existing_row = merged[key][1]
+            if not existing_row.get('availableTimes') and not row.get('availableTimes'):
+                ordered.append((row_number, row))
+                continue
+
+            current_times = split_time_text(existing_row.get('availableTimes', ''))
+            next_times = split_time_text(row.get('availableTimes', ''))
+            for time_text in next_times:
+                if time_text not in current_times:
+                    current_times.append(time_text)
+            existing_row['availableTimes'] = ','.join(current_times)
+
+        return ordered
 
 
 class RuleConfigViewSet(ModelViewSet):

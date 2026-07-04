@@ -39,3 +39,6 @@ db.sqlite3
 .env
 *.xlsx
 generate_large_test_data.py
+
+# Local defense scheduling source/output documents
+排答辩文档/

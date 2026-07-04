@@ -99,14 +99,14 @@ import { listTeachers } from '../api/teacher'
 import { listStudents } from '../api/student'
 import { listClassrooms } from '../api/classroom'
 import { Avatar, User, OfficeBuilding, Timer, DataAnalysis, WarningFilled } from '@element-plus/icons-vue'
-import type { DefenseType } from '../types/schedule'
-import type { ScheduleConflict } from '../types/conflict'
-import { getAllScheduleResults } from '../utils/scheduleStorage'
+import type { DefenseType, ScheduleResult } from '../types/schedule'
 import { readLocalConflicts } from '../api/conflict'
 import { resetDemoData } from '../utils/demoSeed'
 import { addOperationLog } from '../utils/operationLogStorage'
 import { enableDemoTools } from '../config/features'
 import { useAdminGuard } from '../utils/adminGuard'
+import { getScheduleResults } from '../api/schedule'
+import { summarizeConflictOverview, summarizeScheduleOverview } from '../utils/dashboardOverview'
 
 const stats = ref({
   teachers: 0,
@@ -130,46 +130,28 @@ const conflictOverview = ref({
 })
 
 const defenseTypes: DefenseType[] = ['预答辩', '正式答辩', '中期答辩']
+const scheduleResults = ref<ScheduleResult[]>([])
 
-const refreshScheduleOverview = () => {
-  const all = getAllScheduleResults()
-  const typeCount = all.length
-  const totalGroups = all.reduce((sum, r) => sum + r.groups.length, 0)
-  const latest = all.reduce((max, r) => {
-    const t = Date.parse(r.generatedAt)
-    if (Number.isNaN(t)) return max
-    return Math.max(max, t)
-  }, 0)
+const loadScheduleResults = async () => {
+  const loaded = await Promise.all(defenseTypes.map(async defenseType => {
+    try {
+      return await getScheduleResults(defenseType)
+    } catch {
+      return null
+    }
+  }))
+  return loaded.filter((result): result is ScheduleResult => !!result)
+}
 
-  scheduleOverview.value = {
-    typeCount,
-    totalGroups,
-    latestGeneratedAt: latest ? new Date(latest).toLocaleString() : '-'
-  }
+const refreshScheduleOverview = async () => {
+  scheduleResults.value = await loadScheduleResults()
+  scheduleOverview.value = summarizeScheduleOverview(scheduleResults.value)
+  refreshConflictOverview()
 }
 
 const refreshConflictOverview = () => {
-  let latest = 0
-  let latestAt = ''
-  let latestConflicts: ScheduleConflict[] = []
-
-  for (const dt of defenseTypes) {
-    const { conflicts, checkedAt } = readLocalConflicts(dt)
-    if (!checkedAt) continue
-    const t = Date.parse(checkedAt)
-    if (Number.isNaN(t)) continue
-    if (t >= latest) {
-      latest = t
-      latestAt = checkedAt
-      latestConflicts = conflicts
-    }
-  }
-
-  conflictOverview.value = {
-    errorCount: latestConflicts.filter(c => c.level === 'error').length,
-    warningCount: latestConflicts.filter(c => c.level === 'warning').length,
-    checkedAt: latestAt ? new Date(latestAt).toLocaleString() : '-'
-  }
+  const localRecords = defenseTypes.map(defenseType => readLocalConflicts(defenseType))
+  conflictOverview.value = summarizeConflictOverview(scheduleResults.value, localRecords)
 }
 
 const goSchedule = () => {
@@ -191,9 +173,8 @@ const handleResetDemoData = async () => {
       module: 'Dashboard',
       description: '重置教师、学生、教室演示数据并清空排期结果'
     })
-    fetchStats()
-    refreshScheduleOverview()
-    refreshConflictOverview()
+    await fetchStats()
+    await refreshScheduleOverview()
     ElMessage.success('演示数据已重置')
   } catch {
     return
@@ -219,7 +200,8 @@ const fetchStats = async () => {
 
 onMounted(() => {
   fetchStats()
-  refreshScheduleOverview()
-  refreshConflictOverview()
+  refreshScheduleOverview().catch(error => {
+    console.error('获取排期概览失败', error)
+  })
 })
 </script>

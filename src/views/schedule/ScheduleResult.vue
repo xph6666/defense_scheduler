@@ -134,7 +134,7 @@ import { checkScheduleConflicts, readLocalConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
 import { getGroupConflictCount, getGroupStatus } from '../../utils/conflictMock'
-import { exportScheduleExcel } from '../../api/export'
+import { exportScheduleExcel, exportScheduleWord } from '../../api/export'
 import type { ExportStatus } from '../../types/export'
 import type { OptimizationSummary } from '../../types/optimization'
 import { evaluateSoftConstraints } from '../../utils/optimizationMock'
@@ -200,10 +200,14 @@ const handleExportClick = () => {
   exportDialogVisible.value = true
 }
 
-const handleExportConfirm = async () => {
+const handleExportConfirm = async (format: 'excel' | 'word' = 'excel') => {
   exportStatus.value = 'exporting'
   try {
-    await exportScheduleExcel(defenseType.value)
+    if (format === 'word') {
+      await exportScheduleWord(defenseType.value)
+    } else {
+      await exportScheduleExcel(defenseType.value)
+    }
     exportStatus.value = 'success'
   } catch {
     exportStatus.value = 'error'

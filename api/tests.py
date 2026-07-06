@@ -2204,3 +2204,102 @@ class SoftWeightTests(TestCase):
         groups_by_time = sorted(result['groups'], key=lambda g: g['time'] or '9999')
         first_students = set(groups_by_time[0]['student_ids'])
         self.assertTrue(first_students.issuperset({611, 612, 613, 614}))
+
+
+class ScheduleExportColorTests(TestCase):
+    """Word/Excel 导出的导师-学生同色标注"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_superuser(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
+
+        Teacher.objects.create(name='导师王', title='副教授')
+        Teacher.objects.create(name='导师李', title='副教授')
+        Teacher.objects.create(name='主席张', title='教授')
+        Teacher.objects.create(name='秘书赵', title='讲师')
+        Teacher.objects.create(name='专家钱', title='副教授')
+        for index in range(1, 7):
+            Student.objects.create(
+                name=f'学生{index}',
+                student_no=f'31231580{index:02d}',
+                mentor_name='导师王' if index <= 3 else '导师李',
+                campus='创新港',
+                defense_types=['预答辩'],
+            )
+        Room.objects.create(campus='创新港', name='A101', capacity=30)
+
+    def _generate(self):
+        return self.client.post('/api/schedule/generate/', {
+            'rules': {
+                'defense_type': 'pre',
+                'start_date': '2026-04-06',
+                'end_date': '2026-04-10',
+                'group_size': 6,
+                'group_min': 3,
+                'group_max': 8,
+                'expert_count': 2,
+                'expert_min': 2,
+                'need_chair': True,
+                'chair_title': '教授',
+                'supervisor_policy': 'same_group',
+                'grouping': 'supervisor',
+                'avoid_weekend': True,
+            },
+        }, format='json')
+
+    def test_word_export_colors_students_with_their_mentors(self):
+        self.assertEqual(self._generate().status_code, 200)
+
+        response = self.client.get('/api/schedule/export_word/', {'defense_type': 'pre'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('wordprocessingml', response['Content-Type'])
+
+        from docx import Document as ReadDocument
+        doc = ReadDocument(BytesIO(response.content))
+        self.assertIn('预答辩时间安排', doc.paragraphs[0].text)
+
+        run_colors = {}
+        for table in doc.tables:
+            for docx_row in table.rows:
+                for cell in docx_row.cells:
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            text = run.text.strip()
+                            if text and run.font.color and run.font.color.rgb:
+                                run_colors[text] = str(run.font.color.rgb)
+
+        # 结构标签为红色
+        self.assertEqual(run_colors.get('时间'), 'FF0000')
+        # 学生与其导师（组内专家）同色且非红
+        self.assertIsNotNone(run_colors.get('学生1'))
+        self.assertEqual(run_colors.get('学生1'), run_colors.get('导师王'))
+        self.assertEqual(run_colors.get('学生4'), run_colors.get('导师李'))
+        self.assertNotEqual(run_colors.get('学生1'), run_colors.get('学生4'))
+        self.assertNotEqual(run_colors.get('学生1'), 'FF0000')
+
+    def test_excel_export_uses_mentor_font_colors(self):
+        self.assertEqual(self._generate().status_code, 200)
+
+        response = self.client.get('/api/schedule/export/', {'defense_type': 'pre'})
+
+        self.assertEqual(response.status_code, 200)
+
+        from openpyxl import load_workbook
+        workbook = load_workbook(BytesIO(response.content), rich_text=True)
+        sheet = workbook.worksheets[0]
+
+        color_by_text = {}
+        for excel_row in sheet.iter_rows():
+            for cell in excel_row:
+                if isinstance(cell.value, str) and cell.font and cell.font.color and cell.font.color.rgb:
+                    color_by_text[cell.value] = str(cell.font.color.rgb)
+
+        student_color = color_by_text.get('学生1')
+        mentor_color = color_by_text.get('导师王')
+        self.assertIsNotNone(student_color)
+        self.assertEqual(student_color, mentor_color)
+        other_color = color_by_text.get('学生4')
+        self.assertIsNotNone(other_color)
+        self.assertNotEqual(student_color, other_color)

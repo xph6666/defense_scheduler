@@ -31,3 +31,17 @@ export async function exportScheduleExcel(defenseType: DefenseType) {
   downloadBlob(blob, `defense_schedule_${toBackendDefenseType(defenseType)}.xlsx`)
   return blob
 }
+
+export async function exportScheduleWord(defenseType: DefenseType) {
+  if (USE_MOCK) {
+    await sleep(600)
+    return createCsvBlob('Mock 模式不支持 Word 导出')
+  }
+
+  const blob = await request.get('/schedule/export_word/', {
+    params: { defense_type: toBackendDefenseType(defenseType) },
+    responseType: 'blob'
+  }) as Blob
+  downloadBlob(blob, `${defenseType}时间安排.docx`)
+  return blob
+}

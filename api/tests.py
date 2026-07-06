@@ -1933,3 +1933,274 @@ class RealDocumentSmokeTests(TestCase):
 
             excel_response = self.client.get('/api/schedule/export/', {'defense_type': defense_type})
             self.assertEqual(excel_response.status_code, 200, defense_type)
+
+
+class SupervisorPolicyTests(TestCase):
+    """导师约束三态、秘书跟随绑定与聚类分组的算法行为"""
+
+    def _teachers(self):
+        return [
+            {'id': 1, 'name': '导师一', 'title': '副教授'},
+            {'id': 2, 'name': '导师二', 'title': '副教授'},
+            {'id': 3, 'name': '导师三', 'title': '副教授'},
+            {'id': 4, 'name': '主席候选', 'title': '教授'},
+            {'id': 5, 'name': '秘书候选', 'title': '讲师'},
+            {'id': 6, 'name': '专家甲', 'title': '副教授'},
+            {'id': 7, 'name': '专家乙', 'title': '副教授'},
+            {'id': 8, 'name': '专家丙', 'title': '副教授'},
+        ]
+
+    def _students(self, secretary_id=None):
+        supervisors = [1, 1, 2, 2, 3, 3]
+        return [
+            {
+                'id': 100 + index,
+                'name': f'学生{index}',
+                'supervisor_id': supervisors[index - 1],
+                'campus': '创新港',
+                'secretary_id': secretary_id,
+            }
+            for index in range(1, 7)
+        ]
+
+    def _rules(self, **overrides):
+        rules = {
+            'defense_type': 'pre',
+            'start_date': '2026-04-06',
+            'end_date': '2026-04-10',
+            'group_size': 6,
+            'group_min': 3,
+            'group_max': 8,
+            'expert_count': 3,
+            'expert_min': 3,
+            'need_chair': True,
+            'chair_title': '教授',
+            'prefer_senior': True,
+            'avoid_weekend': True,
+        }
+        rules.update(overrides)
+        return rules
+
+    def _generate(self, teachers=None, students=None, rooms=None, **rule_overrides):
+        return algorithm.generate_schedule(
+            teachers=teachers or self._teachers(),
+            students=students or self._students(),
+            rooms=rooms or [{'id': 1, 'campus': '创新港', 'name': 'A101'}],
+            rules=self._rules(**rule_overrides),
+        )
+
+    def test_same_group_policy_places_supervisors_with_students(self):
+        result = self._generate(supervisor_policy='same_group')
+
+        self.assertEqual(len(result['groups']), 1)
+        group = result['groups'][0]
+        assigned = {group['chair_id'], group['secretary_id'], *group['expert_ids']}
+        for supervisor_id in (1, 2, 3):
+            self.assertIn(supervisor_id, assigned)
+        conflict_types = {c['type'] for c in result['conflicts']}
+        self.assertNotIn('supervisor_missing', conflict_types)
+        # 秘书不能是组内学生的导师
+        self.assertNotIn(group['secretary_id'], {1, 2, 3})
+
+    def test_avoid_policy_keeps_supervisors_out(self):
+        result = self._generate(supervisor_policy='avoid')
+
+        group = result['groups'][0]
+        assigned = {group['chair_id'], group['secretary_id'], *group['expert_ids']}
+        for supervisor_id in (1, 2, 3):
+            self.assertNotIn(supervisor_id, assigned)
+        conflict_types = {c['type'] for c in result['conflicts']}
+        self.assertNotIn('supervisor_avoidance', conflict_types)
+
+    def test_secretary_follows_students_previous_binding(self):
+        result = self._generate(
+            students=self._students(secretary_id=5),
+            supervisor_policy='avoid',
+            grouping='secretary',
+        )
+
+        group = result['groups'][0]
+        self.assertEqual(group['secretary_id'], 5)
+        conflict_types = {c['type'] for c in result['conflicts']}
+        self.assertNotIn('secretary_continuity_broken', conflict_types)
+
+    def test_bound_secretary_rejected_when_supervising_group_students(self):
+        # 学生绑定的秘书同时是组内两名学生的导师：绑定被拒并生成连续性提示
+        students = self._students(secretary_id=5)
+        students[0]['supervisor_id'] = 5
+        students[1]['supervisor_id'] = 5
+
+        result = self._generate(students=students, supervisor_policy='none')
+
+        group = result['groups'][0]
+        self.assertNotEqual(group['secretary_id'], 5)
+        conflict_types = {c['type'] for c in result['conflicts']}
+        self.assertIn('secretary_continuity_broken', conflict_types)
+
+    def test_supervisor_grouping_keeps_same_mentor_students_together(self):
+        supervisors = [1] * 4 + [2] * 4 + [3] * 4
+        students = [
+            {'id': 200 + index, 'name': f'学生{index}', 'supervisor_id': supervisors[index - 1], 'campus': '创新港'}
+            for index in range(1, 13)
+        ]
+
+        result = self._generate(students=students, supervisor_policy='same_group', grouping='supervisor')
+
+        student_map = {s['id']: s for s in students}
+        for group in result['groups']:
+            group_supervisors = {student_map[sid]['supervisor_id'] for sid in group['student_ids']}
+            # 每组内不应出现"同导师学生被拆到别组"的情况
+            for supervisor_id in group_supervisors:
+                all_ids = {s['id'] for s in students if s['supervisor_id'] == supervisor_id}
+                self.assertTrue(all_ids.issubset(set(group['student_ids'])))
+
+    def test_secretary_grouping_reuses_previous_groups(self):
+        students = []
+        for index in range(1, 13):
+            students.append({
+                'id': 300 + index,
+                'name': f'学生{index}',
+                'supervisor_id': 1 if index <= 6 else 2,
+                'campus': '创新港',
+                'secretary_id': 5 if index <= 6 else 6,
+            })
+
+        result = self._generate(
+            students=students,
+            supervisor_policy='avoid',
+            grouping='secretary',
+            rooms=[
+                {'id': 1, 'campus': '创新港', 'name': 'A101'},
+                {'id': 2, 'campus': '创新港', 'name': 'A102'},
+            ],
+        )
+
+        self.assertEqual(len(result['groups']), 2)
+        grouped_ids = [set(group['student_ids']) for group in result['groups']]
+        self.assertIn({301, 302, 303, 304, 305, 306}, grouped_ids)
+        self.assertIn({307, 308, 309, 310, 311, 312}, grouped_ids)
+
+    def test_exclude_dates_skips_configured_holidays(self):
+        result = self._generate(
+            supervisor_policy='same_group',
+            start_date='2026-04-06',
+            end_date='2026-04-07',
+            exclude_dates=['2026-04-06'],
+        )
+
+        group = result['groups'][0]
+        self.assertIsNotNone(group['time'])
+        self.assertTrue(group['time'].startswith('2026-04-07'), group['time'])
+
+    def test_exclude_dates_filters_room_available_slots(self):
+        rooms = [{
+            'id': 1, 'campus': '创新港', 'name': 'A101',
+            'available_time': ['2026-04-06 09:00-12:00', '2026-04-07 09:00-12:00'],
+        }]
+
+        result = self._generate(
+            rooms=rooms,
+            supervisor_policy='same_group',
+            exclude_dates=['2026-04-06'],
+        )
+
+        group = result['groups'][0]
+        self.assertTrue((group['time'] or '').startswith('2026-04-07'), group['time'])
+
+
+class SoftWeightTests(TestCase):
+    """软约束权重对分组与教师挑选的影响"""
+
+    def _rules(self, **overrides):
+        rules = {
+            'defense_type': 'pre',
+            'start_date': '2026-04-06',
+            'end_date': '2026-04-10',
+            'group_size': 4,
+            'group_min': 2,
+            'group_max': 6,
+            'expert_count': 1,
+            'need_chair': False,
+            'avoid_weekend': True,
+            'supervisor_policy': 'none',
+            'grouping': 'supervisor',
+        }
+        rules.update(overrides)
+        return rules
+
+    def test_low_balance_weight_fills_groups_to_max(self):
+        # 6 位导师各带 2 名学生：均衡权重高 → 贴目标人数 4 人/组；权重低 → 填到上限 6 人/组
+        students = [
+            {'id': 400 + index, 'name': f'学生{index}', 'supervisor_id': (index + 1) // 2, 'campus': '创新港'}
+            for index in range(1, 13)
+        ]
+        teachers = [{'id': i, 'name': f'教师{i}', 'title': '副教授'} for i in range(1, 10)]
+        rooms = [{'id': i, 'campus': '创新港', 'name': f'A{i}'} for i in range(1, 5)]
+
+        balanced = algorithm.build_student_groups(
+            [algorithm.parse_student(s) for s in students],
+            self._rules(soft_weights={'balance_student_count': 80}),
+        )
+        compact = algorithm.build_student_groups(
+            [algorithm.parse_student(s) for s in students],
+            self._rules(soft_weights={'balance_student_count': 20}),
+        )
+
+        self.assertEqual(sorted(len(g) for g in balanced), [4, 4, 4])
+        self.assertEqual(sorted(len(g) for g in compact), [6, 6])
+
+    def test_cross_campus_weight_defers_teachers_already_elsewhere(self):
+        teachers = [
+            {'id': 1, 'name': '教师甲', 'title': '副教授'},
+            {'id': 2, 'name': '教师乙', 'title': '副教授'},
+            {'id': 3, 'name': '教师丙', 'title': '副教授'},
+            {'id': 4, 'name': '教师丁', 'title': '副教授'},
+        ]
+        students = [
+            {'id': 501, 'name': '港学生', 'campus': '创新港'},
+            {'id': 502, 'name': '兴学生', 'campus': '兴庆'},
+        ]
+        rooms = [
+            {'id': 1, 'campus': '创新港', 'name': 'A101', 'available_time': ['2026-04-07 09:00-12:00']},
+            {'id': 2, 'campus': '兴庆', 'name': 'B201', 'available_time': ['2026-04-07 14:00-17:00']},
+        ]
+
+        def run(weight):
+            return algorithm.generate_schedule(
+                teachers=teachers,
+                students=students,
+                rooms=rooms,
+                rules=self._rules(
+                    group_size=1, group_min=1, group_max=1,
+                    soft_weights={'avoid_cross_campus': weight},
+                ),
+            )
+
+        without_penalty = run(0)
+        with_penalty = run(80)
+
+        # 兴庆组先处理并占用教师甲乙；后处理的创新港组在无惩罚时继续用教师甲，
+        # 有惩罚时甲（当天已在兴庆）被排到队尾，换成当天空闲的其他教师
+        second_group_without = next(g for g in without_penalty['groups'] if g['campus'] == '创新港')
+        second_group_with = next(g for g in with_penalty['groups'] if g['campus'] == '创新港')
+        self.assertIn(1, second_group_without['expert_ids'])
+        self.assertNotIn(1, second_group_with['expert_ids'])
+
+    def test_academic_master_weight_gives_master_groups_earlier_slots(self):
+        students = (
+            [{'id': 600 + i, 'name': f'专硕{i}', 'type': '专硕', 'supervisor_id': 1, 'campus': '创新港'} for i in range(1, 5)]
+            + [{'id': 610 + i, 'name': f'学硕{i}', 'type': '学硕', 'supervisor_id': 2, 'campus': '创新港'} for i in range(1, 5)]
+        )
+        teachers = [{'id': i, 'name': f'教师{i}', 'title': '副教授'} for i in range(1, 8)]
+        rooms = [{'id': 1, 'campus': '创新港', 'name': 'A101'}]
+
+        result = algorithm.generate_schedule(
+            teachers=teachers,
+            students=students,
+            rooms=rooms,
+            rules=self._rules(soft_weights={'prefer_academic_master_first': 80}),
+        )
+
+        groups_by_time = sorted(result['groups'], key=lambda g: g['time'] or '9999')
+        first_students = set(groups_by_time[0]['student_ids'])
+        self.assertTrue(first_students.issuperset({611, 612, 613, 614}))

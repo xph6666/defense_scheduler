@@ -56,12 +56,28 @@ const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
     expert_min: config?.expertCount?.min || 0,
     avoid_weekend: config?.avoidWeekend ?? true,
     avoid_holiday: config?.avoidHoliday ?? true,
+    // 避开节假日开启时，把配置的排除日期传给算法
+    exclude_dates: (config?.avoidHoliday ?? true) ? (config?.excludeDates ?? []) : [],
+    // 导师约束三态：预答辩/中期=导师必须与学生同组；正式答辩按"导师回避"开关取 avoid/none
+    supervisor_policy: defenseType === '正式答辩'
+      ? ((config?.mentorAvoidance ?? true) ? 'avoid' : 'none')
+      : 'same_group',
+    // 分组策略：正式答辩沿用预答辩的"秘书+学生组"；其余按导师聚类
+    grouping: defenseType === '正式答辩' ? 'secretary' : 'supervisor',
     // 算法读取的键是 avoid_supervisor；后端另有 mentor_avoidance 别名兼容
-    avoid_supervisor: config?.mentorAvoidance ?? false,
+    avoid_supervisor: defenseType === '正式答辩' && (config?.mentorAvoidance ?? true),
     need_chair: true,
     chair_title: chairTitle || '教授',
     secretary_title: config?.roleQualification?.secretaryMinTitle || '',
-    prefer_senior: config?.roleQualification?.preferSeniorTitle ?? false
+    prefer_senior: config?.roleQualification?.preferSeniorTitle ?? false,
+    // 软约束权重（0-100）：人数均衡、正高优先、减少跨校区、学硕优先参与算法排序
+    soft_weights: {
+      balance_student_count: config?.softWeights?.balanceStudentCount ?? 50,
+      prefer_senior_teacher: config?.softWeights?.preferSeniorTeacher ?? 50,
+      avoid_cross_campus: config?.softWeights?.avoidCrossCampus ?? 50,
+      external_mentor_concentration: config?.softWeights?.externalMentorConcentration ?? 50,
+      prefer_academic_master_first: config?.softWeights?.preferAcademicMasterFirst ?? 50
+    }
   }
 }
 

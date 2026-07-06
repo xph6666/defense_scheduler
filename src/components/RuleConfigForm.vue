@@ -13,9 +13,16 @@
             <el-switch v-model="form.enabled" />
           </el-form-item>
         </el-col>
-        <el-col :span="8">
+        <el-col :span="8" v-if="form.defenseType === '正式答辩'">
           <el-form-item label="启用导师回避">
             <el-switch v-model="form.mentorAvoidance" />
+            <span class="ml-2 text-xs text-gray-400">开启后导师不进入其学生所在组</span>
+          </el-form-item>
+        </el-col>
+        <el-col :span="10" v-else>
+          <el-form-item label="导师与学生同组">
+            <el-switch :model-value="true" disabled />
+            <span class="ml-2 text-xs text-gray-400">{{ form.defenseType }}固定要求导师在学生所在组</span>
           </el-form-item>
         </el-col>
       </el-row>
@@ -136,8 +143,20 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="避开节假日">
-            <el-switch v-model="form.avoidHoliday" disabled />
-            <span class="ml-2 text-xs text-gray-400">暂未生效，请通过教师/教室的不可用时间设置</span>
+            <el-switch v-model="form.avoidHoliday" />
+            <span class="ml-2 text-xs text-gray-400">跳过下方配置的节假日日期</span>
+          </el-form-item>
+        </el-col>
+        <el-col :span="16">
+          <el-form-item label="节假日日期">
+            <el-date-picker
+              v-model="form.excludeDates"
+              type="dates"
+              placeholder="选择需要避开的法定节假日（可多选）"
+              value-format="YYYY-MM-DD"
+              :disabled="!form.avoidHoliday"
+              style="width: 100%"
+            />
           </el-form-item>
         </el-col>
       </el-row>
@@ -147,40 +166,35 @@
     <el-card shadow="never" class="mb-6">
       <template #header>
         <div class="font-bold text-gray-800 flex items-center gap-2">
-          <el-icon><Operation /></el-icon>软约束权重 (0-10)
-          <el-tag size="small" type="warning">暂未参与排期计算</el-tag>
+          <el-icon><Operation /></el-icon>软约束权重 (0-100)
         </div>
       </template>
       <div class="space-y-4">
         <WeightSlider
           v-model="form.softWeights.balanceStudentCount"
           label="学生人数均衡"
-          description="尽量使各组学生人数接近目标值"
-          disabled
+          description="50 及以上：各组贴近目标人数；50 以下：允许填到人数上限以减少组数"
         />
         <WeightSlider
           v-model="form.softWeights.preferSeniorTeacher"
           label="正高专家优先"
-          description="优先安排教授担任组长或主席"
-          disabled
+          description="高于 50 时强制按职称从高到低挑选主席/专家（与'高级职称优先'开关叠加）"
         />
         <WeightSlider
           v-model="form.softWeights.avoidCrossCampus"
           label="减少跨校区"
-          description="尽量减少教师在同一天跨校区排期"
-          disabled
+          description="大于 0 时，当天已在其他校区有安排的教师排到候选队尾"
         />
         <WeightSlider
           v-model="form.softWeights.externalMentorConcentration"
           label="外院导师集中"
-          description="尽量将同一外院导师的学生集中排期"
+          description="由导师聚类分组自动保证：同一导师的学生分在同一组、同一时段"
           disabled
         />
         <WeightSlider
           v-model="form.softWeights.preferAcademicMasterFirst"
           label="学硕优先排期"
-          description="在场次选择上优先考虑学术型硕士"
-          disabled
+          description="高于 50 时学硕占比高的组优先获得靠前的时间槽"
         />
       </div>
     </el-card>

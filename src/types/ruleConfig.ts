@@ -35,6 +35,8 @@ export interface RuleConfig {
   endDate: string
   avoidWeekend: boolean
   avoidHoliday: boolean
+  // 需要排除的具体日期（法定节假日等），格式 YYYY-MM-DD
+  excludeDates?: string[]
   mentorAvoidance: boolean
   studentCount: StudentCountConfig
   expertCount: ExpertCountConfig

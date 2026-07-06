@@ -740,7 +740,10 @@ class ScheduleViewSet(GenericViewSet):
         'chair_unavailable': ('人员冲突', 'error'),
         'secretary_unavailable': ('人员冲突', 'error'),
         'supervisor_avoidance': ('导师回避冲突', 'error'),
+        'supervisor_missing': ('导师未与学生同组', 'error'),
         'secretary_student_conflict': ('秘书学生冲突', 'error'),
+        'secretary_is_supervisor': ('秘书学生冲突', 'error'),
+        'secretary_continuity_broken': ('秘书连续性提示', 'warning'),
         'campus_mismatch': ('校区切换提示', 'warning'),
         'student_defense_type_missing': ('数据完整性提示', 'warning'),
         'group_size_out_of_range': ('人数规则提示', 'warning'),
@@ -859,6 +862,17 @@ class ScheduleViewSet(GenericViewSet):
                 'forbidden_with': forbidden_with,
             })
 
+        # 正式答辩沿用预答辩分组：把预答辩当前版本的组号随学生传给算法
+        previous_group_map = {}
+        if defense_type == 'formal':
+            previous_version = ScheduleVersion.objects.filter(
+                defense_type='pre', is_current=True
+            ).first()
+            if previous_version:
+                for previous_group in previous_version.groups.prefetch_related('students'):
+                    for member in previous_group.students.all():
+                        previous_group_map[member.id] = previous_group.id
+
         student_payload = []
         missing_type_students = []
         for student in students:
@@ -877,6 +891,7 @@ class ScheduleViewSet(GenericViewSet):
                 'supervisor_id': mentor.id if mentor else None,
                 'campus': student.campus,
                 'secretary_id': secretary.id if secretary else None,
+                'previous_group_id': previous_group_map.get(student.id),
             })
 
         if missing_type_students:
@@ -992,9 +1007,23 @@ class ScheduleViewSet(GenericViewSet):
             schedule_version.conflicts_snapshot = conflicts_snapshot
             schedule_version.save(update_fields=['conflicts_snapshot'])
 
+            # 预答辩确定的秘书回写学生档案："学生从预答辩开始全程跟着同一个秘书"，
+            # 正式答辩生成时依据该绑定沿用秘书并保持组不变
+            if rules['defense_type'] == 'pre':
+                self._sync_student_secretaries(schedule_version)
+
         request.query_params._mutable = True
         request.query_params['defense_type'] = rules['defense_type']
         return self.current(request)
+
+    def _sync_student_secretaries(self, schedule_version):
+        """把预答辩各组的秘书写回组内学生的"对应秘书姓名"字段"""
+        for group in schedule_version.groups.select_related('secretary').prefetch_related('students'):
+            secretary_name = group.secretary.name if group.secretary else ''
+            for student in group.students.all():
+                if student.secretary_name != secretary_name:
+                    student.secretary_name = secretary_name
+                    student.save(update_fields=['secretary_name'])
 
     def _mock_schedule_result(self, input_data):
         return {
@@ -1342,6 +1371,12 @@ class ScheduleViewSet(GenericViewSet):
         with transaction.atomic():
             from_group.students.remove(student)
             to_group.students.add(student)
+            # 预答辩阶段移动学生后，学生跟随目标组的秘书（保持跨场次绑定一致）
+            if from_group.schedule_version.defense_type == 'pre':
+                new_secretary_name = to_group.secretary.name if to_group.secretary else ''
+                if student.secretary_name != new_secretary_name:
+                    student.secretary_name = new_secretary_name
+                    student.save(update_fields=['secretary_name'])
 
         conflicts = self._check_conflicts(from_group.schedule_version)
 
@@ -1433,6 +1468,13 @@ class ScheduleViewSet(GenericViewSet):
 
         group.secretary = secretary
         group.save()
+
+        # 预答辩阶段手动更换秘书时同步学生绑定，保持"学生跟随同一秘书"
+        if group.schedule_version.defense_type == 'pre':
+            for student in group.students.all():
+                if student.secretary_name != secretary.name:
+                    student.secretary_name = secretary.name
+                    student.save(update_fields=['secretary_name'])
 
         conflicts = self._check_conflicts(group.schedule_version)
 

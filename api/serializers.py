@@ -23,6 +23,7 @@ def default_rule_config(defense_type='pre'):
         'endDate': '2025-05-20',
         'avoidWeekend': True,
         'avoidHoliday': True,
+        'excludeDates': [],
         'mentorAvoidance': True,
         'studentCount': {'target': 5, 'min': 3, 'max': 8},
         'expertCount': {'target': 2, 'min': 1},
@@ -81,6 +82,15 @@ def validate_rule_config(config):
     end_date = parse_rule_config_date(config, 'endDate')
     if end_date < start_date:
         raise serializers.ValidationError({'endDate': ['排期结束日期不能早于开始日期']})
+
+    exclude_dates = config.get('excludeDates') or []
+    if not isinstance(exclude_dates, list):
+        raise serializers.ValidationError({'excludeDates': ['节假日日期必须是数组']})
+    for raw in exclude_dates:
+        try:
+            datetime.strptime(str(raw), DATE_FORMAT)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({'excludeDates': [f'日期格式必须为 YYYY-MM-DD：{raw}']})
 
     validate_count_bounds(config, 'studentCount', require_max=True)
     validate_count_bounds(config, 'expertCount', require_max=False)

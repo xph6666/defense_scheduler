@@ -1203,11 +1203,43 @@ class ScheduleViewSet(GenericViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    @action(detail=False, methods=['get'], url_path='export_word')
+    def export_word(self, request):
+        """导出当前排期为 Word 时间安排表（版式对齐学院归档样例，导师与学生同色）"""
+        defense_type = request.query_params.get('defense_type', 'pre')
+        schedule_version = ScheduleVersion.objects.filter(
+            defense_type=defense_type,
+            is_current=True
+        ).first()
+
+        if not schedule_version:
+            return Response({'error': '暂无排期结果可导出'}, status=404)
+
+        from urllib.parse import quote
+
+        from .export_word import export_schedule_word
+
+        defense_label = DEFENSE_TYPE_LABELS.get(defense_type, defense_type)
+        doc = export_schedule_word(schedule_version, defense_label)
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+        ascii_name = f'defense_schedule_{defense_type}.docx'
+        utf8_name = quote(f'{defense_label}时间安排.docx')
+        response['Content-Disposition'] = (
+            f"attachment; filename={ascii_name}; filename*=UTF-8''{utf8_name}"
+        )
+        doc.save(response)
+        return response
+
     @action(detail=False, methods=['get'])
     def export(self, request):
         """导出当前排期为 Excel 文件"""
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+        from .export_colors import build_mentor_color_map
 
         defense_type = request.query_params.get('defense_type', 'pre')
         schedule_version = ScheduleVersion.objects.filter(
@@ -1222,14 +1254,15 @@ class ScheduleViewSet(GenericViewSet):
         default_sheet = wb.active
         wb.remove(default_sheet)
 
-        groups = schedule_version.groups.all()
+        groups = list(
+            schedule_version.groups
+            .select_related('room', 'chair', 'secretary')
+            .prefetch_related('experts', 'students')
+            .order_by('id')
+        )
 
-        colors = [
-            'FFB3B3', 'B3FFB3', 'B3B3FF', 'FFFFB3', 'FFB3FF', 'B3FFFF',
-        ]
-
-        supervisor_color_map = {}
-        color_index = 0
+        # 导师与其学生同色（与 Word 导出同一套配色语义）
+        mentor_color_map = build_mentor_color_map(groups)
 
         for group in groups:
             sheet = wb.create_sheet(title=f"组{group.group_id}")
@@ -1246,24 +1279,43 @@ class ScheduleViewSet(GenericViewSet):
             sheet.merge_cells('A1:D1')
 
             row = 3
+            chair_name = group.chair.name if group.chair else '未分配'
             info_data = [
-                ('时间', group.time),
-                ('教室', group.room.name if group.room else '未分配'),
-                ('校区', group.campus),
-                ('主席/组长', group.chair.name if group.chair else '未分配'),
-                ('秘书', group.secretary.name if group.secretary else '未分配'),
+                ('时间', group.time, None),
+                ('教室', group.room.name if group.room else '未分配', None),
+                ('校区', group.campus, None),
+                ('主席/组长', chair_name, mentor_color_map.get(chair_name)),
+                ('秘书', group.secretary.name if group.secretary else '未分配', None),
             ]
 
-            for label, value in info_data:
+            for label, value, value_color in info_data:
                 sheet[f'A{row}'] = label
                 sheet[f'B{row}'] = value
                 sheet[f'A{row}'].font = Font(bold=True)
+                if value_color:
+                    sheet[f'B{row}'].font = Font(color=value_color, bold=True)
                 row += 1
 
             sheet[f'A{row}'] = '专家'
             sheet[f'A{row}'].font = Font(bold=True)
             expert_names = [e.name for e in group.experts.all()]
-            sheet[f'B{row}'] = '、'.join(expert_names) if expert_names else '未分配'
+            # 专家逐名着色（富文本）：专家若是某学生导师则与其学生同色
+            if expert_names:
+                from openpyxl.cell.rich_text import CellRichText, TextBlock
+                from openpyxl.cell.text import InlineFont
+
+                rich_parts = []
+                for expert_index, expert_name in enumerate(expert_names):
+                    if expert_index:
+                        rich_parts.append('、')
+                    expert_color = mentor_color_map.get(expert_name)
+                    if expert_color:
+                        rich_parts.append(TextBlock(InlineFont(color=expert_color, b=True), expert_name))
+                    else:
+                        rich_parts.append(expert_name)
+                sheet[f'B{row}'] = CellRichText(*rich_parts)
+            else:
+                sheet[f'B{row}'] = '未分配'
             row += 2
 
             headers = ['学生姓名', '学生类型', '导师姓名', '导师职称']
@@ -1275,27 +1327,23 @@ class ScheduleViewSet(GenericViewSet):
             row += 1
 
             for student in group.students.all():
-                mentor_key = student.mentor_name or f"student-{student.id}"
-                if mentor_key not in supervisor_color_map:
-                    supervisor_color_map[mentor_key] = colors[color_index % len(colors)]
-                    color_index += 1
-
-                color = supervisor_color_map[mentor_key]
-                fill = PatternFill(start_color=color, end_color=color, fill_type='solid')
+                mentor_name = (student.mentor_name or '').strip()
+                mentor_color = mentor_color_map.get(mentor_name)
+                # 学生与其导师同色（字体着色），未匹配到导师时保持默认黑色
+                row_font = Font(color=mentor_color, bold=True) if mentor_color else Font()
 
                 cell = sheet.cell(row=row, column=1, value=student.name)
-                cell.fill = fill
+                cell.font = row_font
 
                 cell = sheet.cell(row=row, column=2, value=student.student_type)
-                cell.fill = fill
+                cell.font = row_font
 
-                supervisor_name = student.mentor_name or '未分配'
-                cell = sheet.cell(row=row, column=3, value=supervisor_name)
-                cell.fill = fill
+                cell = sheet.cell(row=row, column=3, value=mentor_name or '未分配')
+                cell.font = row_font
 
                 supervisor_title = Teacher.objects.filter(name=student.mentor_name).values_list('title', flat=True).first() or ''
                 cell = sheet.cell(row=row, column=4, value=supervisor_title)
-                cell.fill = fill
+                cell.font = row_font
 
                 row += 1
 

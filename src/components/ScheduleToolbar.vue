@@ -33,7 +33,7 @@
       </el-button>
       <el-button type="success" :disabled="!hasResult" @click="emit('export')">
         <template #icon><el-icon><Download /></el-icon></template>
-        导出 Excel
+        导出 Word/Excel
       </el-button>
     </div>
   </div>

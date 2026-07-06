@@ -20,7 +20,9 @@ hiddenimports = project_modules + [
     'django.contrib.messages.storage.fallback',
     'django.contrib.sessions.backends.db',
     'django.db.backends.sqlite3',
+    'docx',
     'openpyxl',
+    'openpyxl.cell.rich_text',
     'rest_framework.authtoken',
     'xlrd',
 ]
@@ -59,6 +61,8 @@ def collect_frontend_dist():
 datas = collect_frontend_dist()
 datas += collect_data_files('django', include_py_files=False)
 datas += collect_data_files('rest_framework', include_py_files=False)
+# python-docx 依赖包内默认模板（default.docx 等部件），需随包收集
+datas += collect_data_files('docx', include_py_files=False)
 
 a = Analysis(
     ['defense_scheduler/desktop_entry.py'],

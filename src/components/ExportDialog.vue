@@ -43,9 +43,17 @@
         </div>
       </div>
 
+      <div class="p-2">
+        <div class="text-xs text-gray-500 mb-2">导出格式</div>
+        <el-radio-group v-model="format">
+          <el-radio value="word">Word 时间安排表（推荐，含导师-学生同色标注）</el-radio>
+          <el-radio value="excel">Excel 分组明细（每组一个工作表，同色标注）</el-radio>
+        </el-radio-group>
+      </div>
+
       <div class="text-xs text-gray-400 p-2">
         <el-icon class="mr-1"><InfoFilled /></el-icon>
-        提示：当前版本优先导出排期基础字段，颜色导出将在后续版本支持。
+        提示：导师与其学生使用同一颜色标注；红色为组号、时间等结构信息。
       </div>
     </div>
 
@@ -59,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import type { ExportOptions } from '../types/export'
 
@@ -77,8 +85,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm'): void
+  (e: 'confirm', format: 'excel' | 'word'): void
 }>()
+
+const format = ref<'excel' | 'word'>('word')
 
 const visible = computed({
   get: () => props.modelValue,
@@ -87,6 +97,6 @@ const visible = computed({
 
 const handleConfirm = () => {
   visible.value = false
-  emit('confirm')
+  emit('confirm', format.value)
 }
 </script>

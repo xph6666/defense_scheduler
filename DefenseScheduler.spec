@@ -22,6 +22,7 @@ hiddenimports = project_modules + [
     'django.db.backends.sqlite3',
     'openpyxl',
     'rest_framework.authtoken',
+    'xlrd',
 ]
 
 excludes = [

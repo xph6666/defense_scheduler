@@ -33,6 +33,9 @@
         <el-button type="success" @click="openImport">
           <el-icon class="mr-1"><Upload /></el-icon>导入
         </el-button>
+        <el-button type="warning" @click="openTimetableImport">
+          <el-icon class="mr-1"><Calendar /></el-icon>导入课表
+        </el-button>
         <el-button 
           type="danger" 
           :disabled="!selectedIds.length" 
@@ -164,6 +167,7 @@
     </el-dialog>
 
     <ImportDialog v-if="canManage" v-model="importVisible" type="teacher" @success="fetchData" />
+    <TimetableImportDialog v-if="canManage" v-model="timetableImportVisible" @success="fetchData" />
   </div>
 </template>
 
@@ -171,8 +175,9 @@
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
+import { Search, Plus, Upload, Delete, Calendar } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
+import TimetableImportDialog from '../../components/TimetableImportDialog.vue'
 import { listTeachers, createTeacher, updateTeacher, deleteTeacher, batchDeleteTeachers } from '../../api/teacher'
 import type { Teacher } from '../../types/teacher'
 import { useAdminGuard } from '../../utils/adminGuard'
@@ -182,6 +187,7 @@ const submitLoading = ref(false)
 const batchDeleteLoading = ref(false)
 const dialogVisible = ref(false)
 const importVisible = ref(false)
+const timetableImportVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()
 const allData = ref<Teacher[]>([])
@@ -359,6 +365,11 @@ const submitForm = async () => {
 const openImport = () => {
   if (!requireAdmin()) return
   importVisible.value = true
+}
+
+const openTimetableImport = () => {
+  if (!requireAdmin()) return
+  timetableImportVisible.value = true
 }
 
 onMounted(() => {

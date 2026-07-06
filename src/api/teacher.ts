@@ -83,6 +83,42 @@ export const importTeachers = async (file: File) => {
   })
 }
 
+export interface TimetableImportResult {
+  message: string
+  updatedTeachers: number
+  matchedTeachers: number
+  unknownTeachers: number
+  unknownTeacherNames: string[]
+  warnings: string[]
+  entryCount: number
+}
+
+export const importTimetable = async (file: File, semesterFirstMonday: string) => {
+  if (!USE_MOCK) {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('semesterFirstMonday', semesterFirstMonday)
+    return request.post('/teachers/import_timetable/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    }) as Promise<TimetableImportResult>
+  }
+  return new Promise<TimetableImportResult>(resolve => {
+    setTimeout(() => {
+      resolve({
+        message: 'Mock: 课表导入成功（Mock 模式下仅模拟）',
+        updatedTeachers: 0,
+        matchedTeachers: 0,
+        unknownTeachers: 0,
+        unknownTeacherNames: [],
+        warnings: [],
+        entryCount: 0
+      })
+    }, 500)
+  })
+}
+
 export const batchDeleteTeachers = async (ids: number[]) => {
   if (!USE_MOCK) {
     return request.post('/teachers/batch_delete/', { ids })

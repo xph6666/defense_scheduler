@@ -10,8 +10,10 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
 import json
+from datetime import datetime
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
 from .permissions import IsAdminOrReadOnly, IsAdminUser, is_admin_user
+from .timetable import CLASS_PERIOD_TIME_RANGES, TimetableParseError, extract_timetable_unavailable_times
 from .serializers import (
     DEFENSE_TYPE_LABELS,
     OperationLogSerializer,
@@ -42,6 +44,8 @@ IMPORT_HEADER_ALIASES = {
     '不宜同组名单': 'avoidTeacherNames',
     '学生类型': 'studentType',
     '学科': 'studentType',
+    '学号': 'studentNo',
+    '性别': 'gender',
     '导师姓名': 'mentorName',
     '导师': 'mentorName',
     '所属校区': 'campus',
@@ -64,19 +68,9 @@ IMPORT_KNOWN_FIELDS = {
     'availableTypes', 'available_types', 'campusPreference', 'campus_preference',
     'unavailableTimes', 'unavailable_times', 'avoidTeacherNames', 'avoid_teacher_names',
     'remark', 'studentType', 'student_type', 'mentorName', 'mentor_name', 'campus',
+    'studentNo', 'student_no', 'gender',
     'defenseTypes', 'defense_types', 'secretaryName', 'secretary_name', 'capacity',
     'availableTimes', 'available_times', 'useDate', 'use_date', 'useTime', 'use_time',
-}
-
-CLASS_PERIOD_TIME_RANGES = {
-    (1, 2): '08:00-10:00',
-    (1, 4): '08:00-12:00',
-    (3, 4): '10:00-12:00',
-    (5, 6): '14:00-16:00',
-    (5, 8): '14:00-18:00',
-    (7, 8): '16:00-18:00',
-    (9, 10): '19:00-21:00',
-    (9, 12): '19:00-22:00',
 }
 
 
@@ -483,6 +477,89 @@ class TeacherViewSet(ImportMixin, ModelViewSet):
 
         return processed_row
 
+    @action(detail=False, methods=['post'])
+    def import_timetable(self, request):
+        """导入课表（矩阵式/行式），把上课时间展开为教师不可用时间条目。
+
+        只更新系统中已有的教师；课表中出现但系统中不存在的姓名会统计返回，
+        不会自动创建教师。重复导入按条目字符串去重，幂等。
+        """
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': '未提供文件'}, status=status.HTTP_400_BAD_REQUEST)
+        if file.size > MAX_IMPORT_FILE_SIZE:
+            return Response({'error': '文件大小不能超过 5MB'}, status=status.HTTP_400_BAD_REQUEST)
+
+        first_monday_text = request.data.get('semesterFirstMonday') or request.data.get('semester_first_monday')
+        if not first_monday_text:
+            return Response(
+                {'error': '请提供学期第一周周一的日期（semesterFirstMonday，格式 YYYY-MM-DD）'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            first_monday = datetime.strptime(str(first_monday_text).strip(), '%Y-%m-%d').date()
+        except ValueError:
+            return Response({'error': '学期起始日期格式必须为 YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        if first_monday.weekday() != 0:
+            return Response(
+                {'error': f'{first_monday.isoformat()} 不是周一，请填写学期第一周的周一日期'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        filename = file.name.lower()
+        if not filename.endswith(('.xls', '.xlsx', '.csv')):
+            return Response({'error': '不支持的文件格式'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            import pandas as pd
+
+            if filename.endswith('.csv'):
+                raw = pd.read_csv(file, header=None)
+            else:
+                raw = pd.read_excel(file, header=None)
+        except Exception as exc:
+            return Response({'error': f'解析文件失败: {exc}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        grid = raw.where(raw.notnull(), None).values.tolist()
+        try:
+            entries_by_name, warnings = extract_timetable_unavailable_times(
+                grid,
+                first_monday,
+                known_teacher_names=list(Teacher.objects.values_list('name', flat=True)),
+            )
+        except TimetableParseError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_count = 0
+        matched_names = []
+        unknown_names = []
+        with transaction.atomic():
+            for name in sorted(entries_by_name):
+                teacher = Teacher.objects.filter(name=name).first()
+                if teacher is None:
+                    unknown_names.append(name)
+                    continue
+                matched_names.append(name)
+                existing_entries = split_time_text(teacher.unavailable_times)
+                merged_entries = list(existing_entries)
+                for entry in entries_by_name[name]:
+                    if entry not in merged_entries:
+                        merged_entries.append(entry)
+                if len(merged_entries) != len(existing_entries):
+                    teacher.unavailable_times = '\n'.join(merged_entries)
+                    teacher.save(update_fields=['unavailable_times'])
+                    updated_count += 1
+
+        return Response({
+            'message': f'课表导入完成：更新 {updated_count} 位教师的不可用时间'
+                       f'（课表中另有 {len(unknown_names)} 位教师不在系统中，已跳过）',
+            'updatedTeachers': updated_count,
+            'matchedTeachers': len(matched_names),
+            'unknownTeachers': len(unknown_names),
+            'unknownTeacherNames': unknown_names[:30],
+            'warnings': warnings[:30],
+            'entryCount': sum(len(entries) for entries in entries_by_name.values()),
+        }, status=status.HTTP_200_OK)
+
 
 class StudentViewSet(ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
@@ -492,7 +569,37 @@ class StudentViewSet(ImportMixin, ModelViewSet):
         '参加答辩类型': 'defenseTypes',
     }
 
+    def _normalize_student_no(self, processed_row):
+        """学号统一转为字符串：Excel 数值单元格会被读成 int/float，需去掉小数尾巴"""
+        raw = processed_row.get('studentNo')
+        if raw is None:
+            raw = processed_row.get('student_no')
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        if text.endswith('.0'):
+            text = text[:-2]
+        if not text:
+            return None
+        processed_row['studentNo'] = text
+        processed_row['student_no'] = text
+        return text
+
+    def _find_existing_student(self, processed_row):
+        """学号优先匹配已有学生；无学号时仅匹配同名且无学号的老记录（避免误并同名不同人）"""
+        student_no = processed_row.get('studentNo') or processed_row.get('student_no')
+        if student_no:
+            existing = Student.objects.filter(student_no=student_no).first()
+            if existing:
+                return existing
+        name = processed_row.get('name')
+        if not name:
+            return None
+        return Student.objects.filter(name=name, student_no__isnull=True).first()
+
     def prepare_import_row(self, processed_row, filename):
+        self._normalize_student_no(processed_row)
+
         if processed_row.get('campus'):
             processed_row['campus'] = normalize_campus_text(processed_row.get('campus'))
 
@@ -507,7 +614,7 @@ class StudentViewSet(ImportMixin, ModelViewSet):
                 defense_types = inferred
                 processed_row['defenseTypes'] = defense_types
 
-        existing = Student.objects.filter(name=processed_row.get('name')).first()
+        existing = self._find_existing_student(processed_row)
         if existing:
             merged_defense_types = list(existing.defense_types or [])
             for defense_type in defense_types or []:
@@ -517,11 +624,14 @@ class StudentViewSet(ImportMixin, ModelViewSet):
 
         return processed_row
 
+    def prepare_import_rows(self, prepared_rows, filename):
+        # 初始化批内"无学号姓名"查重状态，由 StudentSerializer.validate 逐行消费，
+        # 使同名且无学号的行在对应行号上报 name 字段错误
+        self._import_seen_unnumbered_names = set()
+        return prepared_rows
+
     def get_import_instance(self, processed_row):
-        name = processed_row.get('name')
-        if not name:
-            return None
-        return Student.objects.filter(name=name).first()
+        return self._find_existing_student(processed_row)
 
 
 class RoomViewSet(ImportMixin, ModelViewSet):

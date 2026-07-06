@@ -5,6 +5,9 @@
       <el-form-item label="姓名">
         <el-input v-model="searchForm.name" placeholder="请输入姓名" clearable @keyup.enter="handleSearch" style="width: 180px" />
       </el-form-item>
+      <el-form-item label="学号">
+        <el-input v-model="searchForm.studentNo" placeholder="请输入学号" clearable @keyup.enter="handleSearch" style="width: 180px" />
+      </el-form-item>
       <el-form-item label="导师">
         <el-input v-model="searchForm.mentorName" placeholder="请输入导师" clearable @keyup.enter="handleSearch" style="width: 180px" />
       </el-form-item>
@@ -54,8 +57,15 @@
       @selection-change="handleSelectionChange"
     >
       <el-table-column v-if="canManage" type="selection" width="55" />
-      <el-table-column prop="name" label="姓名" width="120" />
-      <el-table-column prop="studentType" label="学生类型" width="100">
+      <el-table-column prop="studentNo" label="学号" width="120">
+        <template #default="{ row }">
+          <span v-if="row.studentNo">{{ row.studentNo }}</span>
+          <span v-else class="text-gray-400">—</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="name" label="姓名" width="100" />
+      <el-table-column prop="gender" label="性别" width="70" />
+      <el-table-column prop="studentType" label="学科/类型" width="150">
         <template #default="{ row }">
           <el-tag :type="row.studentType === '学硕' ? 'primary' : 'success'">{{ row.studentType }}</el-tag>
         </template>
@@ -106,10 +116,28 @@
         <el-form-item label="姓名" prop="name">
           <el-input v-model="form.name" placeholder="请输入学生姓名" />
         </el-form-item>
-        <el-form-item label="学生类型" prop="studentType">
-          <el-select v-model="form.studentType" placeholder="请选择学生类型" style="width: 100%">
+        <el-form-item label="学号" prop="studentNo">
+          <el-input v-model="form.studentNo" placeholder="请输入学号（同名学生必填以区分）" />
+        </el-form-item>
+        <el-form-item label="性别" prop="gender">
+          <el-select v-model="form.gender" placeholder="请选择性别" clearable style="width: 100%">
+            <el-option label="男" value="男" />
+            <el-option label="女" value="女" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="学科/类型" prop="studentType">
+          <el-select
+            v-model="form.studentType"
+            placeholder="选择或输入学科/类型"
+            filterable
+            allow-create
+            default-first-option
+            style="width: 100%"
+          >
             <el-option label="学硕" value="学硕" />
             <el-option label="专硕" value="专硕" />
+            <el-option label="计算机科学与技术" value="计算机科学与技术" />
+            <el-option label="软件工程" value="软件工程" />
           </el-select>
         </el-form-item>
         <el-form-item label="导师" prop="mentorName">
@@ -209,12 +237,15 @@ const handleBatchDelete = () => {
 
 const searchForm = reactive({
   name: '',
+  studentNo: '',
   mentorName: '',
   campus: ''
 })
 
 const defaultForm: Omit<Student, 'id'> = {
   name: '',
+  studentNo: '',
+  gender: '',
   studentType: '学硕',
   mentorName: '',
   campus: '创新港',
@@ -250,9 +281,10 @@ const fetchData = async () => {
 const handleSearch = () => {
   filteredData.value = allData.value.filter(item => {
     const matchName = !searchForm.name || item.name.includes(searchForm.name)
+    const matchStudentNo = !searchForm.studentNo || (item.studentNo || '').includes(searchForm.studentNo)
     const matchMentor = !searchForm.mentorName || item.mentorName.includes(searchForm.mentorName)
     const matchCampus = !searchForm.campus || item.campus === searchForm.campus
-    return matchName && matchMentor && matchCampus
+    return matchName && matchStudentNo && matchMentor && matchCampus
   })
   currentPage.value = 1
   selectedIds.value = []
@@ -269,6 +301,7 @@ const handlePageSizeChange = () => {
 
 const resetSearch = () => {
   searchForm.name = ''
+  searchForm.studentNo = ''
   searchForm.mentorName = ''
   searchForm.campus = ''
   handleSearch()

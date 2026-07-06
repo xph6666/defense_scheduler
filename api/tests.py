@@ -1,4 +1,6 @@
 import ast
+import unittest
+from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
 
@@ -35,11 +37,18 @@ class BaseDataConstraintTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Teacher.objects.create(name='同名教师', college='软件学院', title='副教授')
 
-    def test_student_name_is_unique_at_database_level(self):
-        Student.objects.create(name='同名学生', student_type='学硕', campus='创新港')
+    def test_student_no_is_unique_at_database_level(self):
+        Student.objects.create(name='同名学生', student_no='3122158001', student_type='学硕', campus='创新港')
 
         with self.assertRaises(IntegrityError), transaction.atomic():
-            Student.objects.create(name='同名学生', student_type='专硕', campus='兴庆')
+            Student.objects.create(name='另一学生', student_no='3122158001', student_type='专硕', campus='兴庆')
+
+    def test_student_name_allows_duplicates_with_different_student_no(self):
+        Student.objects.create(name='同名学生', student_no='3122158001', student_type='学硕', campus='创新港')
+
+        Student.objects.create(name='同名学生', student_no='3122158002', student_type='专硕', campus='兴庆')
+
+        self.assertEqual(Student.objects.filter(name='同名学生').count(), 2)
 
     def test_room_name_is_unique_per_campus_at_database_level(self):
         Room.objects.create(campus='创新港', name='A101', capacity=30)
@@ -477,6 +486,8 @@ class IntegrationContractTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         student = Student.objects.get(name='崔东森')
+        self.assertEqual(student.student_no, '3122158001')
+        self.assertEqual(student.gender, '男')
         self.assertEqual(student.student_type, '计算机科学与技术')
         self.assertEqual(student.mentor_name, '王晨旭')
         self.assertEqual(student.campus, '创新港')
@@ -497,10 +508,46 @@ class IntegrationContractTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         student = Student.objects.get(name='卓佳麟')
+        self.assertEqual(student.student_no, '3123158001')
+        self.assertEqual(student.gender, '男')
         self.assertEqual(student.student_type, '计算机科学与技术')
         self.assertEqual(student.mentor_name, '王志')
         self.assertEqual(student.campus, '创新港')
         self.assertEqual(student.defense_types, ['正式答辩'])
+
+    def test_student_import_normalizes_numeric_student_no_cells(self):
+        # Excel 数值单元格的学号会被读成 int，必须归一化为不带小数尾巴的字符串
+        upload = make_xlsx_upload(
+            '23级答辩地点统计.xlsx',
+            [
+                ['序号', '学号', '姓名', '性别', '学科', '导师', '答辩地点'],
+                [1, 3123158777, '数值学号学生', '女', '软件工程', '王志', '创新港'],
+            ],
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        student = Student.objects.get(name='数值学号学生')
+        self.assertEqual(student.student_no, '3123158777')
+
+    def test_student_import_allows_same_name_students_with_different_student_no(self):
+        upload = make_xlsx_upload(
+            '23级答辩地点统计.xlsx',
+            [
+                ['序号', '学号', '姓名', '性别', '学科', '导师', '答辩地点'],
+                [1, '3123158801', '重名学生', '男', '软件工程', '王志', '创新港'],
+                [2, '3123158802', '重名学生', '女', '软件工程', '李明', '兴庆'],
+            ],
+        )
+
+        response = self.client.post('/api/students/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 200)
+        students = Student.objects.filter(name='重名学生').order_by('student_no')
+        self.assertEqual(students.count(), 2)
+        self.assertEqual([s.student_no for s in students], ['3123158801', '3123158802'])
+        self.assertEqual([s.mentor_name for s in students], ['王志', '李明'])
 
     def test_student_import_merges_defense_types_for_existing_real_data_rows(self):
         Student.objects.create(
@@ -1498,3 +1545,391 @@ class TimeToleranceAndTimezoneTests(TestCase):
         version = ScheduleVersion.objects.get(defense_type='pre', is_current=True)
         expected = dj_timezone.localtime(version.created_at).strftime('%Y-%m-%d %H:%M')
         self.assertEqual(response.data['generatedAt'], expected)
+
+
+class TimetableImportTests(TestCase):
+    """课表导入：矩阵式/行式课表 → 教师不可用时间"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_superuser(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
+
+    def _matrix_upload(self):
+        # 模拟真实矩阵课表的脏格式：全角/半角/无括号周次、双师、周次与教师名分行、连写姓名
+        return make_xlsx_upload(
+            '软件学院课表.xlsx',
+            [
+                ['2025—2026学年第二学期课程表', None, None, None, None, None],
+                ['上课时间', None, '星期一', None, '星期二', None],
+                [None, None, '1-8周', '9-16周', '1-8周', '9-16周'],
+                ['上午', '1节', '【5-12】\n张甲', None, '【9-16】', None],
+                [None, '2节', None, None, '李乙', None],
+                [None, '3节', '【1-8】王丙 赵丁', '9-16\n钱戊', None, '[9-16]\n孙己'],
+                [None, '4节', None, None, None, '郑帅祝继华'],
+            ],
+        )
+
+    def test_matrix_timetable_import_expands_teacher_busy_times(self):
+        for name in ['张甲', '李乙', '王丙', '赵丁', '钱戊', '孙己', '郑帅', '祝继华']:
+            Teacher.objects.create(name=name, title='副教授')
+
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {'file': self._matrix_upload(), 'semesterFirstMonday': '2026-03-02'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['unknownTeachers'], 0)
+
+        zhang = Teacher.objects.get(name='张甲')
+        zhang_entries = zhang.unavailable_times.split('\n')
+        # 5-12 周共 8 周，周一 1-2 节 08:00-10:00，第 5 周周一 = 2026-03-30
+        self.assertEqual(len(zhang_entries), 8)
+        self.assertIn('2026-03-30 08:00-10:00', zhang_entries)
+
+        # 周次【9-16】与教师名"李乙"分处上下两行单元格（真实课表常见溢出）
+        li = Teacher.objects.get(name='李乙')
+        self.assertEqual(len(li.unavailable_times.split('\n')), 8)
+        self.assertIn('2026-04-28 08:00-10:00', li.unavailable_times)
+
+        # 同格双师
+        for name in ['王丙', '赵丁']:
+            teacher = Teacher.objects.get(name=name)
+            self.assertIn('2026-03-02 10:00-12:00', teacher.unavailable_times)
+
+        # 无括号周次 "9-16\n钱戊"
+        qian = Teacher.objects.get(name='钱戊')
+        self.assertEqual(len(qian.unavailable_times.split('\n')), 8)
+
+        # 半角括号 "[9-16]\n孙己"
+        sun = Teacher.objects.get(name='孙己')
+        self.assertEqual(len(sun.unavailable_times.split('\n')), 8)
+
+        # 连写姓名"郑帅祝继华"按系统教师名单切分（星期二 3-4 节，列默认 9-16 周）
+        zheng = Teacher.objects.get(name='郑帅')
+        zhu = Teacher.objects.get(name='祝继华')
+        self.assertIn('2026-04-28 10:00-12:00', zheng.unavailable_times)
+        self.assertIn('2026-04-28 10:00-12:00', zhu.unavailable_times)
+
+    def test_roster_timetable_import_parses_time_location_text(self):
+        Teacher.objects.create(name='高庚', title='教授')
+        Teacher.objects.create(name='周辛', title='讲师')
+
+        upload = make_xlsx_upload(
+            '学部课表.xlsx',
+            [
+                ['课程名称', '主讲教师', '时间地点'],
+                ['最优控制', '高庚', '创新港校区-5-6043周次:第9-16周 连续周 星期三 上3,上4,下7,下8'],
+                ['网络', '周辛', '兴庆校区-中2周次:第1-2周 连续周 星期二 上1,上2 星期四 下5,下6'],
+            ],
+        )
+
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {'file': upload, 'semesterFirstMonday': '2026-03-02'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        gao = Teacher.objects.get(name='高庚')
+        gao_entries = gao.unavailable_times.split('\n')
+        # 8 周 × (3-4 节 + 7-8 节) = 16 条；第 9 周周三 = 2026-04-29
+        self.assertEqual(len(gao_entries), 16)
+        self.assertIn('2026-04-29 10:00-12:00', gao_entries)
+        self.assertIn('2026-04-29 16:00-18:00', gao_entries)
+
+        zhou = Teacher.objects.get(name='周辛')
+        zhou_entries = zhou.unavailable_times.split('\n')
+        # 2 周 × 2 段 = 4 条：周二上午 + 周四下午
+        self.assertEqual(len(zhou_entries), 4)
+        self.assertIn('2026-03-03 08:00-10:00', zhou_entries)
+        self.assertIn('2026-03-05 14:00-16:00', zhou_entries)
+
+    def test_timetable_import_is_idempotent(self):
+        Teacher.objects.create(name='张甲', title='副教授')
+
+        for _ in range(2):
+            response = self.client.post(
+                '/api/teachers/import_timetable/',
+                {'file': self._matrix_upload(), 'semesterFirstMonday': '2026-03-02'},
+                format='multipart',
+            )
+            self.assertEqual(response.status_code, 200)
+
+        zhang = Teacher.objects.get(name='张甲')
+        self.assertEqual(len(zhang.unavailable_times.split('\n')), 8)
+
+    def test_timetable_import_skips_unknown_teachers_and_keeps_existing_times(self):
+        Teacher.objects.create(
+            name='张甲', title='副教授', unavailable_times='2026-05-01 09:00-12:00'
+        )
+
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {'file': self._matrix_upload(), 'semesterFirstMonday': '2026-03-02'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreater(response.data['unknownTeachers'], 0)
+        self.assertNotIn('张甲', response.data['unknownTeacherNames'])
+
+        zhang = Teacher.objects.get(name='张甲')
+        entries = zhang.unavailable_times.split('\n')
+        # 手工录入的既有条目保留，课表条目追加
+        self.assertEqual(entries[0], '2026-05-01 09:00-12:00')
+        self.assertEqual(len(entries), 9)
+
+    def test_timetable_import_rejects_non_monday_semester_start(self):
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {'file': self._matrix_upload(), 'semesterFirstMonday': '2026-03-03'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('周一', response.data['error'])
+
+    def test_timetable_import_requires_semester_start_date(self):
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {'file': self._matrix_upload()},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('semesterFirstMonday', response.data['error'])
+
+
+REAL_DOCS_DIR = Path(__file__).resolve().parent.parent / '排答辩文档'
+
+
+def real_doc_upload(filename):
+    path = REAL_DOCS_DIR / filename
+    return SimpleUploadedFile(filename, path.read_bytes())
+
+
+@unittest.skipUnless(REAL_DOCS_DIR.exists(), '真实答辩文档目录不存在，跳过冒烟验证')
+class RealDocumentSmokeTests(TestCase):
+    """用 排答辩文档/ 下的真实文件做端到端导入冒烟验证（仅在本机文件存在时运行）"""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_superuser(username='admin', password='strong-pass-123')
+        self.client.force_authenticate(self.user)
+
+    def test_all_real_documents_import_end_to_end(self):
+        # 1. 教师：指定组长秘书（角色列无表头，靠内容嗅探）
+        response = self.client.post(
+            '/api/teachers/import_data/',
+            {'file': real_doc_upload('指定组长秘书.xlsx')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        teacher_count = Teacher.objects.count()
+        self.assertGreater(teacher_count, 30)
+        self.assertTrue(Teacher.objects.exclude(roles=[]).exists())
+
+        # 2. 学生：23 级答辩地点统计（标题行 + 学号/性别/学科/导师）
+        response = self.client.post(
+            '/api/students/import_data/',
+            {'file': real_doc_upload('23级答辩地点统计-含学生信息-导师信息-答辩地点.xlsx')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        formal_students = Student.objects.count()
+        self.assertGreater(formal_students, 300)
+        # 学号全部落库且非空
+        self.assertEqual(Student.objects.filter(student_no__isnull=True).count(), 0)
+        self.assertGreater(Student.objects.exclude(gender='').count(), 300)
+
+        # 3. 学生：22 级中期考核答辩地点（空行后表头，另一批学生）
+        response = self.client.post(
+            '/api/students/import_data/',
+            {'file': real_doc_upload('22级中期考核答辩地点.xlsx')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertGreater(Student.objects.count(), formal_students)
+        # SQLite 的 JSONField 不支持 contains 查询，用 Python 侧断言
+        self.assertTrue(any(
+            '中期答辩' in (student.defense_types or [])
+            for student in Student.objects.all()
+        ))
+
+        # 4. 教室：创新港（卡片式导出格式，.xlsx）
+        response = self.client.post(
+            '/api/rooms/import_data/',
+            {'file': real_doc_upload('教室借用申请-创新港教室.xlsx')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        innovation_rooms = Room.objects.filter(campus='创新港').count()
+        self.assertGreater(innovation_rooms, 0)
+
+        # 5. 教室：兴庆（教务系统标准表格，.xls 老格式）
+        response = self.client.post(
+            '/api/rooms/import_data/',
+            {'file': real_doc_upload('教室借用申请-兴庆教室.xls')},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertGreater(Room.objects.filter(campus='兴庆').count(), 0)
+
+        # 6. 课表：软件学院矩阵式课表（.xlsx）
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {
+                'file': real_doc_upload('2025—2026学年第二学期软件学院课表(1).xlsx'),
+                'semesterFirstMonday': '2026-03-02',
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        matrix_updated = response.data['updatedTeachers']
+        self.assertGreater(matrix_updated, 0)
+        self.assertEqual(response.data['warnings'], [])
+
+        # 7. 课表：学部行式课表（.xls）
+        response = self.client.post(
+            '/api/teachers/import_timetable/',
+            {
+                'file': real_doc_upload('学部课表.xls'),
+                'semesterFirstMonday': '2026-03-02',
+            },
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['warnings'], [])
+
+        # 课表导入后确有教师拿到了格式合法的不可用时间
+        busy_teacher = Teacher.objects.exclude(unavailable_times='').first()
+        self.assertIsNotNone(busy_teacher)
+        from .views import parse_time_entries
+        valid_entries, invalid_entries = parse_time_entries(busy_teacher.unavailable_times)
+        self.assertGreater(len(valid_entries), 0)
+        self.assertEqual(invalid_entries, [])
+
+    def _import_real_documents(self):
+        """依次导入全部真实文件（每步断言成功），供全链路演练复用"""
+        steps = [
+            ('/api/teachers/import_data/', '指定组长秘书.xlsx', {}),
+            ('/api/students/import_data/', '23级答辩地点统计-含学生信息-导师信息-答辩地点.xlsx', {}),
+            ('/api/students/import_data/', '22级中期考核答辩地点.xlsx', {}),
+            ('/api/rooms/import_data/', '教室借用申请-创新港教室.xlsx', {}),
+            ('/api/rooms/import_data/', '教室借用申请-兴庆教室.xls', {}),
+            ('/api/teachers/import_timetable/', '2025—2026学年第二学期软件学院课表(1).xlsx',
+             {'semesterFirstMonday': '2026-03-02'}),
+            ('/api/teachers/import_timetable/', '学部课表.xls', {'semesterFirstMonday': '2026-03-02'}),
+        ]
+        for url, filename, extra in steps:
+            payload = {'file': real_doc_upload(filename), **extra}
+            response = self.client.post(url, payload, format='multipart')
+            self.assertEqual(response.status_code, 200, f'{filename}: {getattr(response, "data", "")}')
+
+    def _append_room_slots(self, start_day, end_day):
+        """给教室补录指定日期范围的工作日可用时段（模拟新学期教室借用到位）"""
+        slots = []
+        current = start_day
+        while current <= end_day:
+            if current.weekday() < 5:
+                slots.append(f'{current.isoformat()} 09:00-12:00')
+                slots.append(f'{current.isoformat()} 14:00-18:00')
+            current += timedelta(days=1)
+        for room in Room.objects.all():
+            entries = [entry for entry in (room.available_times or '').split('\n') if entry]
+            room.available_times = '\n'.join(entries + slots)
+            room.save(update_fields=['available_times'])
+
+    def test_full_real_data_schedule_pipeline(self):
+        self._import_real_documents()
+
+        # 23 级学生先参加预答辩、再参加正式答辩（同一批人，正式沿用预答辩分组）
+        formal_students = [s for s in Student.objects.all() if '正式答辩' in (s.defense_types or [])]
+        self.assertGreater(len(formal_students), 300)
+        for student in formal_students:
+            student.defense_types = ['预答辩'] + [t for t in student.defense_types if t != '预答辩']
+            student.save(update_fields=['defense_types'])
+
+        # 真实借用记录只有 4 月（预答辩）教室：给 5 月正式答辩、7 月中期补录教室时段
+        self._append_room_slots(date(2026, 5, 6), date(2026, 5, 22))
+        self._append_room_slots(date(2026, 7, 6), date(2026, 7, 17))
+
+        base_rules = {
+            'group_size': 6, 'group_min': 4, 'group_max': 8,
+            'expert_count': 3, 'expert_min': 3,
+            'need_chair': True, 'chair_title': '副教授',
+            'avoid_weekend': True,
+        }
+
+        # 1) 预答辩：导师必须同组，按导师聚类分组，避开清明假期
+        response = self.client.post('/api/schedule/generate/', {'rules': {
+            **base_rules,
+            'defense_type': 'pre',
+            'start_date': '2026-04-01', 'end_date': '2026-04-30',
+            'exclude_dates': ['2026-04-06'],
+            'supervisor_policy': 'same_group', 'grouping': 'supervisor',
+        }}, format='json')
+        self.assertEqual(response.status_code, 200, getattr(response, 'data', ''))
+
+        pre_version = ScheduleVersion.objects.get(defense_type='pre', is_current=True)
+        pre_group_count = pre_version.groups.count()
+        self.assertGreater(pre_group_count, 40)
+
+        # 预答辩生成后秘书绑定已回写学生档案
+        bound_students = Student.objects.exclude(secretary_name='').count()
+        self.assertGreater(bound_students, 250)
+
+        # 清明及周末未被排期
+        for group in pre_version.groups.all():
+            if group.time:
+                day = date.fromisoformat(group.time.split(' ')[0])
+                self.assertNotEqual(day.isoformat(), '2026-04-06')
+                self.assertLess(day.weekday(), 5)
+
+        # 2) 正式答辩：导师回避，按秘书聚类沿用预答辩分组
+        response = self.client.post('/api/schedule/generate/', {'rules': {
+            **base_rules,
+            'defense_type': 'formal',
+            'start_date': '2026-05-06', 'end_date': '2026-05-22',
+            'expert_count': 4, 'expert_min': 4, 'chair_title': '教授',
+            'supervisor_policy': 'avoid', 'grouping': 'secretary',
+        }}, format='json')
+        self.assertEqual(response.status_code, 200, getattr(response, 'data', ''))
+
+        formal_version = ScheduleVersion.objects.get(defense_type='formal', is_current=True)
+        pre_sets = {
+            frozenset(group.students.values_list('id', flat=True))
+            for group in pre_version.groups.all()
+        }
+        formal_sets = {
+            frozenset(group.students.values_list('id', flat=True))
+            for group in formal_version.groups.all()
+        }
+        preserved = len(pre_sets & formal_sets)
+        # 绝大多数组从预答辩原样延续（个别组因秘书缺失可能被重新装箱）
+        self.assertGreater(preserved / max(len(pre_sets), 1), 0.7,
+                           f'仅 {preserved}/{len(pre_sets)} 组保持不变')
+
+        # 3) 中期考核：22 级学生，每组 10-12 人、专家 5 人（含组长）
+        response = self.client.post('/api/schedule/generate/', {'rules': {
+            'defense_type': 'mid',
+            'start_date': '2026-07-06', 'end_date': '2026-07-17',
+            'group_size': 11, 'group_min': 10, 'group_max': 12,
+            'expert_count': 4, 'expert_min': 4,
+            'need_chair': True, 'chair_title': '副教授',
+            'avoid_weekend': True,
+            'supervisor_policy': 'same_group', 'grouping': 'supervisor',
+        }}, format='json')
+        self.assertEqual(response.status_code, 200, getattr(response, 'data', ''))
+
+        # 4) 三种答辩类型的 Word 与 Excel 导出全部可用
+        for defense_type in ('pre', 'formal', 'mid'):
+            word_response = self.client.get('/api/schedule/export_word/', {'defense_type': defense_type})
+            self.assertEqual(word_response.status_code, 200, defense_type)
+            self.assertIn('wordprocessingml', word_response['Content-Type'])
+
+            excel_response = self.client.get('/api/schedule/export/', {'defense_type': defense_type})
+            self.assertEqual(excel_response.status_code, 200, defense_type)

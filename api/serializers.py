@@ -115,8 +115,10 @@ class TeacherSerializer(serializers.ModelSerializer):
 
 
 class StudentSerializer(serializers.ModelSerializer):
-    import_unique_fields = [('name', '学生姓名重复，请使用唯一姓名')]
+    import_unique_fields = [('studentNo', '学号重复，请检查导入数据')]
 
+    studentNo = serializers.CharField(source='student_no', allow_blank=True, allow_null=True, required=False)
+    gender = serializers.CharField(allow_blank=True, required=False)
     studentType = serializers.CharField(source='student_type', required=False)
     mentorName = serializers.CharField(source='mentor_name', allow_blank=True, required=False)
     defenseTypes = serializers.JSONField(source='defense_types', default=list, required=False)
@@ -126,18 +128,47 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = [
-            'id', 'name', 'studentType', 'mentorName', 'campus',
-            'defenseTypes', 'secretaryName', 'remark'
+            'id', 'name', 'studentNo', 'gender', 'studentType', 'mentorName',
+            'campus', 'defenseTypes', 'secretaryName', 'remark'
         ]
 
     def validate_name(self, value):
-        name = value.strip()
-        queryset = Student.objects.filter(name=name)
+        return value.strip()
+
+    def validate_studentNo(self, value):
+        # 空学号统一存 NULL，避免空字符串之间触发唯一约束冲突
+        if value is None:
+            return None
+        student_no = str(value).strip()
+        if not student_no:
+            return None
+        queryset = Student.objects.filter(student_no=student_no)
         if self.instance:
             queryset = queryset.exclude(pk=self.instance.pk)
         if queryset.exists():
-            raise serializers.ValidationError('学生姓名已存在，请使用唯一姓名')
-        return name
+            raise serializers.ValidationError('学号已存在，请检查是否重复录入')
+        return student_no
+
+    def validate(self, attrs):
+        # 未提供学号时按姓名兜底查重，防止同名学生在无学号场景下混淆；
+        # 有学号的同名学生是合法数据（真实名单存在重名），不做姓名唯一限制
+        name = attrs.get('name', self.instance.name if self.instance else None)
+        student_no = attrs.get('student_no', self.instance.student_no if self.instance else None)
+        if name and not student_no:
+            # 批量导入时的批内查重：状态挂在 view 上，逐行按顺序消费
+            view = self.context.get('view')
+            seen_names = getattr(view, '_import_seen_unnumbered_names', None) if view else None
+            if seen_names is not None:
+                if name in seen_names:
+                    raise serializers.ValidationError({'name': ['文件中存在同名且无学号的学生，无法区分，请补充学号']})
+                seen_names.add(name)
+
+            queryset = Student.objects.filter(name=name, student_no__isnull=True)
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError({'name': ['已存在同名且无学号的学生，请补充学号以区分']})
+        return attrs
 
 
 class RoomSerializer(serializers.ModelSerializer):

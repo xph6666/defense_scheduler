@@ -5,7 +5,9 @@ export type DefenseType = '预答辩' | '正式答辩' | '中期答辩'
 export interface ScheduleStudent {
   id: number
   name: string
-  studentType: '学硕' | '专硕'
+  studentNo?: string
+  // 真实名单中该列为学科（如"计算机科学与技术"），不再限定为 学硕/专硕
+  studentType: string
   mentorName: string
   secretaryName?: string
 }

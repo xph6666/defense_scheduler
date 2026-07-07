@@ -15,9 +15,10 @@ dist-ssr
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
+.agents/
+.claude/
 .DS_Store
 *.suo
 *.ntvs*
@@ -30,6 +31,7 @@ dist-ssr
 # Python / Backend
 venv/ 
 __pycache__/ 
+.pytest_cache/
 *.pyc 
 db.sqlite3 
 .idea/ 
@@ -42,4 +44,5 @@ generate_large_test_data.py
 
 # Local defense scheduling source/output documents
 排答辩文档/
-newrealease/
+newrelease/
+.tmp/

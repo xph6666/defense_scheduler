@@ -1,8 +1,8 @@
 <template>
   <el-dialog
     v-model="visible"
-    title="导入数据"
-    width="400px"
+    :title="{ teacher: '导入教师与专家名单', student: '导入学生名单', classroom: '导入教室资料' }[type]"
+    width="min(480px, 94vw)"
     destroy-on-close
   >
     <div class="py-4 text-center">
@@ -51,6 +51,7 @@ import type { UploadFile } from 'element-plus'
 import { importTeachers } from '../api/teacher'
 import { importStudents } from '../api/student'
 import { importClassrooms } from '../api/classroom'
+import { ApiRequestError } from '../api/request'
 import ImportPreviewDialog from './ImportPreviewDialog.vue'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
@@ -142,21 +143,52 @@ const handleConfirm = async () => {
     }
 
     ElMessage.success(res.message || '导入成功')
+    if (res.warnings && res.warnings.length > 0) {
+      const extra = res.warningCount > res.warnings.length
+        ? `（共 ${res.warningCount} 条提醒，仅显示前 ${res.warnings.length} 条）`
+        : ''
+      ElMessage.warning({
+        message: `${res.warnings.join('\n')}${extra}`,
+        duration: 8000,
+        showClose: true
+      })
+    }
     if (res.errors && res.errors.length > 0) {
-      console.warn('部分数据导入失败:', res.errors)
-      ElMessage.warning(`部分数据可能导入失败，详见控制台。`)
+      ElMessage.warning(`部分数据可能导入失败：${formatImportError(res.errors[0])}`)
     }
     emit('success')
     visible.value = false
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error(e)
-    const errorMsg = e.response?.data?.message || e.response?.data?.error || '导入失败，请检查文件格式'
-    const subErrors = e.response?.data?.errors
+    const apiError = e instanceof ApiRequestError ? e : null
+    const rawPayload =
+      apiError?.data && typeof apiError.data === 'object'
+        ? (apiError.data as Record<string, unknown>)
+        : e && typeof e === 'object' && 'response' in e
+          ? ((e as { response?: { data?: Record<string, unknown> } }).response?.data || {})
+          : {}
 
-    if (subErrors && subErrors.length > 0) {
+    const errorMsg =
+      apiError?.message ||
+      (typeof rawPayload.message === 'string' && rawPayload.message) ||
+      (typeof rawPayload.error === 'string' && rawPayload.error) ||
+      (e instanceof Error ? e.message : '') ||
+      '导入失败，请检查文件格式'
+
+    const subErrors = Array.isArray(rawPayload.errors) ? rawPayload.errors : []
+
+    if (subErrors.length > 0) {
+      const shown = subErrors.slice(0, 3).map(formatImportError).join('；')
+      const more =
+        typeof rawPayload.errorCount === 'number' && rawPayload.errorCount > subErrors.length
+          ? `（共 ${rawPayload.errorCount} 处错误）`
+          : subErrors.length > 3
+            ? `（另有 ${subErrors.length - 3} 处）`
+            : ''
       ElMessage.error({
-        message: `${errorMsg}: ${formatImportError(subErrors[0])}`,
-        duration: 5000
+        message: `${errorMsg}：${shown}${more}`,
+        duration: 8000,
+        showClose: true
       })
     } else {
       ElMessage.error(errorMsg)

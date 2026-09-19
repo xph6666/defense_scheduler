@@ -9,7 +9,7 @@ const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-export async function exportScheduleExcel(defenseType: DefenseType) {
+export async function exportScheduleExcel(defenseType: DefenseType, versionId?: number) {
   if (USE_MOCK) {
     await sleep(600)
 
@@ -25,21 +25,21 @@ export async function exportScheduleExcel(defenseType: DefenseType) {
   }
 
   const blob = await request.get('/schedule/export/', {
-    params: { defense_type: toBackendDefenseType(defenseType) },
+    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId },
     responseType: 'blob'
   }) as Blob
   downloadBlob(blob, `defense_schedule_${toBackendDefenseType(defenseType)}.xlsx`)
   return blob
 }
 
-export async function exportScheduleWord(defenseType: DefenseType) {
+export async function exportScheduleWord(defenseType: DefenseType, versionId?: number) {
   if (USE_MOCK) {
     await sleep(600)
     return createCsvBlob('Mock 模式不支持 Word 导出')
   }
 
   const blob = await request.get('/schedule/export_word/', {
-    params: { defense_type: toBackendDefenseType(defenseType) },
+    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId },
     responseType: 'blob'
   }) as Blob
   downloadBlob(blob, `${defenseType}时间安排.docx`)

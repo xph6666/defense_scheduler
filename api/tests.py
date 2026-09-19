@@ -239,7 +239,7 @@ class IntegrationContractTests(TestCase):
 
         clear_response = self.client.delete('/api/operation-logs/')
         self.assertEqual(clear_response.status_code, 200)
-        self.assertEqual(clear_response.data['message'], '日志已清空')
+        self.assertIn('审计记录已保留', clear_response.data['message'])
         self.assertEqual(self.client.get('/api/operation-logs/').data, [])
 
     def test_import_rejects_oversized_files_before_parsing(self):
@@ -334,6 +334,45 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(Teacher.objects.count(), 0)
         self.assertEqual(response.data['errors'][0]['row'], 3)
         self.assertIn('name', response.data['errors'][0]['errors'])
+
+    def test_import_duplicate_row_number_is_not_last_row_index(self):
+        """批内查重报错行号应指向重复行本身，而不是文件最后一行。"""
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            (
+                'name,title\n'
+                '张三,教授\n'
+                '张三,副教授\n'
+                '李四,讲师\n'
+            ).encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Teacher.objects.count(), 0)
+        self.assertEqual(response.data['errors'][0]['row'], 3)
+        self.assertIn('name', response.data['errors'][0]['errors'])
+
+    def test_import_error_envelope_preserves_row_errors_in_rendered_body(self):
+        """HTTP 渲染后的错误信封必须把 errors 放在 data 中，前端才能展示行级问题。"""
+        import json
+
+        upload = SimpleUploadedFile(
+            'teachers.csv',
+            'name,college,title\n有效教师,计算机学院,教授\n无职称教师,计算机学院,\n'.encode('utf-8'),
+            content_type='text/csv',
+        )
+
+        response = self.client.post('/api/teachers/import_data/', {'file': upload}, format='multipart')
+
+        self.assertEqual(response.status_code, 400)
+        body = json.loads(response.content.decode('utf-8'))
+        self.assertFalse(body['success'])
+        self.assertIsInstance(body['data'], dict)
+        self.assertIn('errors', body['data'])
+        self.assertEqual(body['data']['errors'][0]['row'], 3)
 
     def test_student_api_rejects_duplicate_names(self):
         Student.objects.create(name='重复学生', student_type='学硕', campus='创新港')
@@ -755,6 +794,109 @@ class ScheduleContractTests(TestCase):
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         )
 
+    def test_check_conflicts_allows_bound_secretary_but_flags_mentor_as_secretary(self):
+        """组秘书=学生绑定秘书是正常沿用；组秘书=学生导师才应报冲突。"""
+        mentor = Teacher.objects.get(name='教师1')
+        secretary = Teacher.objects.get(name='教师4')
+        room = Room.objects.first()
+        student = Student.objects.first()
+        student.mentor_name = mentor.name
+        student.secretary_name = secretary.name
+        student.save(update_fields=['mentor_name', 'secretary_name'])
+
+        version = ScheduleVersion.objects.create(
+            version=1, defense_type='pre', is_current=True, rules_snapshot={},
+        )
+        ok_group = Group.objects.create(
+            schedule_version=version,
+            group_id='G1',
+            time='2025-05-10 09:00-12:00',
+            room=room,
+            campus='创新港',
+            chair=mentor,
+            secretary=secretary,
+        )
+        ok_group.experts.add(Teacher.objects.get(name='教师2'))
+        ok_group.students.add(student)
+
+        ok_response = self.client.post(
+            '/api/schedule/check-conflicts/',
+            {'defense_type': 'pre'},
+            format='json',
+        )
+        self.assertEqual(ok_response.status_code, 200)
+        ok_types = {item['type'] for item in ok_response.data}
+        self.assertNotIn('秘书学生冲突', ok_types)
+
+        # 把秘书改成学生的导师，应报秘书学生冲突
+        ok_group.secretary = mentor
+        ok_group.save(update_fields=['secretary'])
+        bad_response = self.client.post(
+            '/api/schedule/check-conflicts/',
+            {'defense_type': 'pre'},
+            format='json',
+        )
+        self.assertEqual(bad_response.status_code, 200)
+        bad_types = {item['type'] for item in bad_response.data}
+        self.assertIn('秘书学生冲突', bad_types)
+        self.assertTrue(any('导师' in item.get('reason', '') for item in bad_response.data))
+
+    def test_generate_notices_when_mentor_name_unmatched_or_filtered(self):
+        Teacher.objects.all().delete()
+        Student.objects.all().delete()
+        Room.objects.all().delete()
+
+        Teacher.objects.create(
+            name='可参加导师',
+            title='教授',
+            available_types=['预答辩'],
+        )
+        Teacher.objects.create(
+            name='仅正式导师',
+            title='教授',
+            available_types=['正式答辩'],
+        )
+        Teacher.objects.create(name='秘书甲', title='讲师', available_types=['预答辩'])
+        Teacher.objects.create(name='专家乙', title='副教授', available_types=['预答辩'])
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+        Student.objects.create(
+            name='学生甲',
+            student_type='学硕',
+            mentor_name='不存在的导师',
+            campus='创新港',
+            defense_types=['预答辩'],
+            secretary_name='也不存在的秘书',
+        )
+        Student.objects.create(
+            name='学生乙',
+            student_type='学硕',
+            mentor_name='仅正式导师',
+            campus='创新港',
+            defense_types=['预答辩'],
+        )
+
+        response = self.client.post(
+            '/api/schedule/generate/',
+            {
+                'rules': {
+                    'defense_type': 'pre',
+                    'start_date': '2025-05-10',
+                    'end_date': '2025-05-10',
+                    'group_size': 2,
+                    'expert_count': 1,
+                    'avoid_weekend': False,
+                    'supervisor_policy': 'same_group',
+                }
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        reasons = [item.get('reason', '') for item in response.data.get('conflicts', [])]
+        self.assertTrue(any('不存在的导师' in text for text in reasons))
+        self.assertTrue(all(student.secretary_name != '也不存在的秘书' for student in Student.objects.all()))
+        self.assertTrue(any('仅正式导师' in text and '可参加' in text for text in reasons))
+
     def test_schedule_generation_maps_frontend_model_fields_for_constraints(self):
         Teacher.objects.all().delete()
         Student.objects.all().delete()
@@ -839,11 +981,12 @@ class ScheduleContractTests(TestCase):
             {
                 'defense_type': 'pre',
                 'group_id': group.id,
+                'expected_revision': version.revision,
                 'group_data': {
                     'groupName': 'G1-调整',
                     'date': '2025-05-11',
                     'timeRange': '14:00-16:00',
-                    'campus': '兴庆',
+                    'campus': room.campus,
                     'classroom': room.name,
                     'chairman': teacher.name,
                     'secretary': secretary.name,
@@ -1038,9 +1181,7 @@ class ScheduleContractTests(TestCase):
 
     def test_adjust_action_rejects_missing_student_without_partial_update(self):
         group = self._create_manual_adjustment_group()
-        target_group = self._create_manual_adjustment_group()
-        target_group.group_id = 'G2'
-        target_group.save()
+        target_group = Group.objects.create(schedule_version=group.schedule_version, group_id='G2', time=group.time, campus=group.campus)
         original_student_ids = list(group.students.values_list('id', flat=True))
         target_student_ids = list(target_group.students.values_list('id', flat=True))
 
@@ -1317,7 +1458,7 @@ class AlgorithmGroupSizeTests(TestCase):
             'expert_count': 1,
         }
 
-        with self.assertRaisesRegex(algorithm.SchedulingError, 'end_date must be >= start_date'):
+        with self.assertRaisesRegex(algorithm.SchedulingError, '结束日期不能早于开始日期'):
             algorithm.validate_inputs(
                 teachers=[algorithm.Teacher(id=1, name='教师')],
                 students=[algorithm.Student(id=1, name='学生')],
@@ -1432,7 +1573,7 @@ class ScheduleRuleEffectTests(TestCase):
         response = self._generate(avoid_supervisor=True, expert_count=3, expert_min=2)
 
         self.assertEqual(response.status_code, 200)
-        shortage = [c for c in response.data['conflicts'] if 'experts' in c['reason']]
+        shortage = [c for c in response.data['conflicts'] if '专家' in c['reason']]
         self.assertEqual(len(shortage), 1)
         self.assertEqual(shortage[0]['level'], 'warning')
 
@@ -1447,7 +1588,7 @@ class ScheduleRuleEffectTests(TestCase):
         response = self._generate(avoid_supervisor=True, expert_count=3, expert_min=2)
 
         self.assertEqual(response.status_code, 200)
-        shortage = [c for c in response.data['conflicts'] if 'experts' in c['reason']]
+        shortage = [c for c in response.data['conflicts'] if '专家' in c['reason']]
         self.assertEqual(len(shortage), 1)
         self.assertEqual(shortage[0]['level'], 'error')
 
@@ -1503,8 +1644,8 @@ class TimeToleranceAndTimezoneTests(TestCase):
         notices = [c for c in response.data['conflicts'] if c['type'] == '数据完整性提示']
         self.assertEqual(notices, [])
 
-    def test_unparseable_time_generates_notice_instead_of_error(self):
-        Teacher.objects.create(name='王老师', title='教授', unavailable_times='周一上午')
+    def test_unparseable_time_excludes_teacher_with_notice(self):
+        Teacher.objects.create(name='王老师', title='教授', unavailable_times='待定')
         Teacher.objects.create(name='李老师', title='讲师')
         Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
 
@@ -1514,11 +1655,42 @@ class TimeToleranceAndTimezoneTests(TestCase):
         notices = [c for c in response.data['conflicts'] if c['type'] == '数据完整性提示']
         self.assertEqual(len(notices), 1)
         self.assertIn('王老师', notices[0]['reason'])
-        self.assertIn('周一上午', notices[0]['reason'])
-        # 无法解析的时间被忽略，教师本身仍参与排期
+        self.assertIn('待定', notices[0]['reason'])
+        # 未确认的时间不能按无限制处理，教师不参与分配。
+        self.assertNotIn('王老师', self._assigned_teacher_names(response))
+        self.assertEqual(notices[0]['level'], 'error')
+
+    def test_recurring_time_outside_range_is_silently_ignored(self):
+        # "周一上午"是可识别的周期写法；排期范围只有周六，展开后无匹配日，
+        # 不应再报"格式无法识别"，教师照常参与排期
+        Teacher.objects.create(name='王老师', title='教授', unavailable_times='周一上午')
+        Teacher.objects.create(name='李老师', title='讲师')
+        Room.objects.create(campus='创新港', name='A101', capacity=30, available_times='')
+
+        response = self._generate()
+
+        self.assertEqual(response.status_code, 200)
+        notices = [c for c in response.data['conflicts'] if c['type'] == '数据完整性提示']
+        self.assertEqual(notices, [])
         self.assertIn('王老师', self._assigned_teacher_names(response))
 
-    def test_room_invalid_time_falls_back_with_notice(self):
+    def test_room_invalid_time_is_unavailable_with_notice(self):
+        Teacher.objects.create(name='王老师', title='教授')
+        Teacher.objects.create(name='李老师', title='讲师')
+        Room.objects.create(campus='创新港', name='B202', capacity=30, available_times='另行通知')
+
+        response = self._generate()
+
+        self.assertEqual(response.status_code, 200)
+        notices = [c for c in response.data['conflicts'] if c['type'] == '数据完整性提示']
+        self.assertEqual(len(notices), 1)
+        self.assertIn('B202', notices[0]['reason'])
+        # 无有效时段时保留未完成草稿，不能伪造默认时段。
+        self.assertFalse(response.data['groups'][0]['date'])
+        self.assertEqual(notices[0]['level'], 'error')
+
+    def test_room_anytime_means_no_restriction_without_notice(self):
+        # "随时"表示不限时间：不再产生提示，教室按全时段可用参与排期
         Teacher.objects.create(name='王老师', title='教授')
         Teacher.objects.create(name='李老师', title='讲师')
         Room.objects.create(campus='创新港', name='B202', capacity=30, available_times='随时')
@@ -1527,9 +1699,7 @@ class TimeToleranceAndTimezoneTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         notices = [c for c in response.data['conflicts'] if c['type'] == '数据完整性提示']
-        self.assertEqual(len(notices), 1)
-        self.assertIn('B202', notices[0]['reason'])
-        # 教室时间被忽略后回退到默认时段，分组仍可排出时间
+        self.assertEqual(notices, [])
         self.assertTrue(response.data['groups'][0]['date'])
 
     def test_generated_at_uses_local_timezone(self):
@@ -1878,9 +2048,23 @@ class RealDocumentSmokeTests(TestCase):
         pre_group_count = pre_version.groups.count()
         self.assertGreater(pre_group_count, 40)
 
-        # 预答辩生成后秘书绑定已回写学生档案
-        bound_students = Student.objects.exclude(secretary_name='').count()
-        self.assertGreater(bound_students, 250)
+        # 原始借用单不能覆盖全部小组：仅对确实分配了时段/秘书的小组回写绑定。
+        assigned_student_ids = set()
+        for group in pre_version.groups.select_related('secretary').prefetch_related('students'):
+            if group.secretary:
+                self.assertTrue(group.time)
+                for student in group.students.all():
+                    self.assertEqual(student.secretary_name, group.secretary.name)
+                    assigned_student_ids.add(student.id)
+        self.assertTrue(assigned_student_ids)
+        all_grouped = [s for group in response.data['groups'] for s in group['students']]
+        self.assertEqual(len(all_grouped), len(formal_students))
+        self.assertEqual(len({s['id'] for s in all_grouped}), len(formal_students))
+        if pre_version.groups.filter(time='').exists():
+            publish_response = self.client.post('/api/schedule/publish/', {
+                'version_id': pre_version.id, 'expected_revision': pre_version.revision,
+            }, format='json')
+            self.assertEqual(publish_response.status_code, 400)
 
         # 清明及周末未被排期
         for group in pre_version.groups.all():

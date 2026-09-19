@@ -15,6 +15,12 @@ from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+from .env import load_env
+from .runtime import get_app_root, _load_or_create_secret
+from django.core.exceptions import ImproperlyConfigured
+
+load_env(get_app_root() / '.env')
+PRODUCTION = os.environ.get('DJANGO_ENV', 'local') == 'production'
 
 
 # Quick-start development settings - unsuitable for production
@@ -22,8 +28,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-dev-only-change-me')
+if PRODUCTION:
+    if len(SECRET_KEY) < 50 or SECRET_KEY.startswith(('django-insecure-', 'replace-with-', 'change-me')):
+        raise ImproperlyConfigured('生产环境必须配置独立随机 DJANGO_SECRET_KEY（至少 50 字符）')
+elif SECRET_KEY.startswith(('django-insecure-', 'replace-with-', 'change-me')):
+    local_data = get_app_root() / 'app-data'
+    local_data.mkdir(parents=True, exist_ok=True)
+    SECRET_KEY = _load_or_create_secret(local_data / 'secret.key')
 
 DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
+if PRODUCTION and DEBUG:
+    raise ImproperlyConfigured('生产环境必须关闭 DJANGO_DEBUG')
 
 ALLOWED_HOSTS = [
     host.strip()
@@ -87,8 +102,21 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': os.environ.get('DJANGO_DB_PATH', BASE_DIR / 'db.sqlite3'),
+        'OPTIONS': {'timeout': 30},
     }
 }
+
+if os.environ.get('DJANGO_DB_ENGINE') == 'postgresql':
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('POSTGRES_DB', 'defense_scheduler'),
+        'USER': os.environ.get('POSTGRES_USER', 'defense_scheduler'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+        'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'CONN_MAX_AGE': 60,
+        'CONN_HEALTH_CHECKS': True,
+    }
 
 
 # Password validation
@@ -111,7 +139,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'api.authentication.ExpiringTokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -121,6 +149,9 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
 }
+AUTH_TOKEN_TTL_HOURS = int(os.environ.get('AUTH_TOKEN_TTL_HOURS', '12'))
+if os.environ.get('REDIS_URL'):
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.redis.RedisCache', 'LOCATION': os.environ['REDIS_URL']}}
 
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
@@ -138,6 +169,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 FRONTEND_DIST_DIR = Path(os.environ.get('FRONTEND_DIST_DIR', BASE_DIR / 'dist'))
 CORS_ALLOW_ALL_ORIGINS = os.environ.get('DJANGO_CORS_ALLOW_ALL_ORIGINS', 'false').lower() == 'true'
 CORS_ALLOWED_ORIGINS = [
@@ -152,3 +184,17 @@ CSRF_COOKIE_SECURE = os.environ.get('DJANGO_CSRF_COOKIE_SECURE', 'false').lower(
 SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', 'false').lower() == 'true'
 SECURE_HSTS_PRELOAD = os.environ.get('DJANGO_SECURE_HSTS_PRELOAD', 'false').lower() == 'true'
+
+LOG_DIR = get_app_root() / 'logs'
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOGGING = {
+    'version': 1, 'disable_existing_loggers': False,
+    'formatters': {'standard': {'format': '{asctime} {levelname} {name} {message}', 'style': '{'}},
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'standard'},
+        'file': {'class': 'logging.handlers.RotatingFileHandler', 'filename': str(LOG_DIR / 'server.log'),
+                 'maxBytes': 5 * 1024 * 1024, 'backupCount': 5, 'encoding': 'utf-8', 'formatter': 'standard'},
+    },
+    'root': {'handlers': ['console', 'file'], 'level': 'WARNING'},
+    'loggers': {'waitress': {'handlers': ['console', 'file'], 'level': 'INFO', 'propagate': False}},
+}

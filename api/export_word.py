@@ -12,6 +12,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from .schedule_integrity import export_groups
 from .export_colors import LABEL_RED, build_mentor_color_map
 
 WEEKDAY_LABELS = '一二三四五六日'
@@ -57,12 +58,7 @@ def _names_with_colors(cell, names_with_color, separator='、'):
 
 def export_schedule_word(schedule_version, defense_label):
     """生成 Word 时间安排表文档对象；调用方负责写入响应。"""
-    groups = list(
-        schedule_version.groups
-        .select_related('room', 'chair', 'secretary')
-        .prefetch_related('experts', 'students')
-        .order_by('id')
-    )
+    groups = list(export_groups(schedule_version))
     color_map = build_mentor_color_map(groups)
     student_total = sum(len(group.students.all()) for group in groups)
     chair_label = '主席' if schedule_version.defense_type == 'formal' else '组长'
@@ -71,7 +67,8 @@ def export_schedule_word(schedule_version, defense_label):
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _styled_run(title, f'软件工程硕士研究生{defense_label}时间安排', bold=True, size=16)
+    suffix = '（草稿，未发布）' if schedule_version.status != 'published' else ''
+    _styled_run(title, f'软件工程硕士研究生{defense_label}时间安排{suffix}', bold=True, size=16)
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER

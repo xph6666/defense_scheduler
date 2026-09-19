@@ -16,7 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.conf import settings
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.urls import include, path, re_path
 from django.utils._os import safe_join
 from pathlib import Path
@@ -27,7 +27,9 @@ def frontend_index(_request):
     index_path = settings.FRONTEND_DIST_DIR / 'index.html'
     if not index_path.exists():
         raise Http404('Frontend build not found. Run npm run build first.')
-    return HttpResponse(index_path.read_bytes(), content_type='text/html')
+    response = HttpResponse(index_path.read_bytes(), content_type='text/html')
+    response['Cache-Control'] = 'no-cache'
+    return response
 
 
 def frontend_asset(_request, path):
@@ -38,7 +40,9 @@ def frontend_asset(_request, path):
     if not asset_path.exists() or not asset_path.is_file():
         raise Http404('Asset not found.')
     content_type = mimetypes.guess_type(asset_path.name)[0] or 'application/octet-stream'
-    return HttpResponse(asset_path.read_bytes(), content_type=content_type)
+    response = HttpResponse(asset_path.read_bytes(), content_type=content_type)
+    response['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
 
 
 def frontend_public_file(_request, path):
@@ -52,7 +56,18 @@ def frontend_public_file(_request, path):
     return HttpResponse(file_path.read_bytes(), content_type=content_type)
 
 
+def health(_request):
+    from django.db import connection, DatabaseError
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+        return JsonResponse({'status': 'ok'})
+    except DatabaseError:
+        return JsonResponse({'status': 'unavailable'}, status=503)
+
+
 urlpatterns = [
+    path('health/', health),
     path('admin/', admin.site.urls),
     path('api/', include('api.urls')),
     re_path(r'^assets/(?P<path>.*)$', frontend_asset),

@@ -17,13 +17,13 @@
     <div v-else class="space-y-6">
       <!-- 总分展示 -->
       <div class="score-summary text-center p-4 bg-blue-50 rounded-lg border border-blue-100">
-        <div class="text-xs text-blue-600 font-medium mb-1">综合优化得分</div>
+        <div class="text-xs text-blue-600 font-medium mb-1">已评估指标得分</div>
         <div class="flex items-baseline justify-center gap-1">
           <span class="text-4xl font-black text-blue-600">{{ summary.totalScore }}</span>
           <span class="text-sm text-blue-400">/ {{ summary.maxScore }}</span>
         </div>
         <el-progress 
-          :percentage="Math.round((summary.totalScore / summary.maxScore) * 100)" 
+          :percentage="summary.maxScore ? Math.round((summary.totalScore / summary.maxScore) * 100) : 0"
           :show-text="false"
           :stroke-width="10"
           class="mt-3"

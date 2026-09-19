@@ -1,3 +1,8 @@
+# Runtime dependencies for Python 3.12 (recommended and verified version).
+# Install: python -m pip install -r requirements.txt
+# Vue frontend build needs Node.js 20.19+ and npm; run npm ci && npm run build.
+# Optional deployment extras: requirements-production.txt.
+# Optional screenshot verification: requirements-dev.txt.
 asgiref==3.11.1
 Django==6.0.4
 django-cors-headers==4.9.0
@@ -9,3 +14,4 @@ tzdata==2026.1
 pandas==2.2.1
 xlrd==2.0.2
 python-docx==1.2.0
+waitress==3.0.2

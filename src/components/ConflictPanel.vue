@@ -1,5 +1,5 @@
 <template>
-  <el-card shadow="never" class="h-full">
+  <el-card shadow="never">
     <template #header>
       <div class="flex items-center justify-between gap-2">
         <div class="font-bold text-gray-800">冲突检测</div>

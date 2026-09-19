@@ -14,9 +14,10 @@ class EnvelopeJSONRenderer(JSONRenderer):
 
         if status_code >= 400:
             message = self._extract_error_message(data)
+            # 保留原始错误载荷（如导入 errors / 字段校验详情），供前端展示行级问题
             payload = {
                 'success': False,
-                'data': None,
+                'data': data,
                 'message': message,
             }
         else:

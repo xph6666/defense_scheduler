@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { login as loginApi } from '../api/auth'
+import { login as loginApi, logout as logoutApi } from '../api/auth'
 
 export const useUserStore = defineStore('user', () => {
   const username = ref(localStorage.getItem('username') || '')
@@ -17,7 +17,8 @@ export const useUserStore = defineStore('user', () => {
     localStorage.setItem('isAdmin', String(result.isAdmin))
   }
 
-  const logout = () => {
+  const logout = async () => {
+    await logoutApi()
     username.value = ''
     isAdmin.value = false
     isLoggedIn.value = false

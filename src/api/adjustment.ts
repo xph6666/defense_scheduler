@@ -21,6 +21,7 @@ export const updateScheduleGroup = async (data: ScheduleAdjustmentPayload) => {
   return request.post('/schedule/adjust-group/', {
     defense_type: toBackendDefenseType(data.defenseType),
     group_id: data.groupId,
+    expected_revision: data.expectedRevision,
     group_data: data.groupData
   }) as Promise<AdjustmentResult>
 }

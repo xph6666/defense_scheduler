@@ -4,10 +4,8 @@ import type { ScheduleConflict } from '../types/conflict'
 import { getScheduleResult } from '../utils/scheduleStorage'
 import { checkConflictsMock } from '../utils/conflictMock'
 import { toBackendDefenseType } from './schedule'
-import { isNotFoundError } from './request'
 
 const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
-const USE_REMOTE_CONFLICT_CHECK = (import.meta as any).env?.VITE_USE_REMOTE_CONFLICT_CHECK === 'true'
 
 const getConflictsKey = (defenseType: DefenseType) => `schedule_conflicts_${defenseType}`
 const getCheckedAtKey = (defenseType: DefenseType) => `schedule_conflicts_checked_at_${defenseType}`
@@ -31,20 +29,11 @@ export const readLocalConflicts = (defenseType: DefenseType) => {
 }
 
 export const checkScheduleConflicts = async (defenseType: DefenseType, fallbackResult?: ScheduleResult | null) => {
-  if (!USE_MOCK && USE_REMOTE_CONFLICT_CHECK) {
-    try {
-      return await request.post('/schedule/check-conflicts/', {
-        defense_type: toBackendDefenseType(defenseType)
-      }) as ScheduleConflict[]
-    } catch (error) {
-      if (!isNotFoundError(error)) {
-        throw error
-      }
-      const result = fallbackResult || getScheduleResult(defenseType)
-      const conflicts = result ? checkConflictsMock(result) : []
-      writeLocal(defenseType, conflicts)
-      return conflicts
-    }
+  if (!USE_MOCK) {
+    return request.post('/schedule/check-conflicts/', {
+      defense_type: toBackendDefenseType(defenseType),
+      version_id: fallbackResult?.versionId
+    }) as Promise<ScheduleConflict[]>
   }
 
   const result = fallbackResult || getScheduleResult(defenseType)

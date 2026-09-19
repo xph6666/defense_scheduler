@@ -2,7 +2,7 @@
   <div class="h-screen w-screen flex items-center justify-center bg-gray-100">
     <el-card class="w-96 p-6 shadow-lg rounded-xl">
       <div class="text-center mb-8">
-        <h2 class="text-2xl font-bold text-blue-600">答辩排组排期系统</h2>
+        <h2 class="text-2xl font-bold text-[var(--campus-blue)]">答辩排组排期系统</h2>
         <p class="text-gray-500 mt-2">管理员登录</p>
       </div>
       

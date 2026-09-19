@@ -2,7 +2,7 @@
   <div class="weight-slider flex items-center gap-4 py-2">
     <div class="label-box w-32 shrink-0">
       <span class="text-sm font-medium text-gray-700">{{ label }}</span>
-      <p v-if="description" class="text-xs text-gray-400 mt-1">{{ description }}</p>
+      <el-popover v-if="description" :content="description" placement="top" trigger="click" width="280"><template #reference><button type="button" class="form-help-trigger" :aria-label="`${label}说明`">?</button></template></el-popover>
     </div>
     <el-slider
       v-model="internalValue"

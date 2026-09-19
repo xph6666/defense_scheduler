@@ -1,5 +1,6 @@
 <template>
   <div class="bg-white p-6 rounded-lg shadow-sm">
+    <PreparationGuide title="学生名单" description="确认学号、导师、所属校区和参与环节，避免遗漏本次答辩的学生。" />
     <!-- Search Bar -->
     <el-form :inline="true" :model="searchForm" class="mb-4">
       <el-form-item label="姓名">
@@ -27,12 +28,12 @@
 
     <!-- Toolbar -->
     <div v-if="canManage" class="mb-4 flex justify-between items-center">
-      <div class="flex gap-2">
-        <el-button type="primary" @click="handleAdd">
+      <div class="flex flex-wrap gap-2">
+        <el-button @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>新增
         </el-button>
-        <el-button type="success" @click="openImport">
-          <el-icon class="mr-1"><Upload /></el-icon>导入
+        <el-button type="primary" @click="openImport">
+          <el-icon class="mr-1"><Upload /></el-icon>导入 Excel
         </el-button>
         <el-button 
           type="danger" 
@@ -176,6 +177,7 @@
 </template>
 
 <script setup lang="ts">
+import PreparationGuide from '../../components/PreparationGuide.vue'
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'

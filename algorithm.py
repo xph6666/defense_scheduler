@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date
 from math import ceil
+import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
@@ -114,34 +115,33 @@ def generate_schedule(
         )
         conflicts.extend(check_group_size(group.group_id, len(student_batch), rules))
 
-        slot, room, assignment_conflicts = assign_slot_and_room(
-            group=group,
-            students_in_group=student_batch,
-            rooms=parsed_rooms,
-            candidate_slots=candidate_slots,
-            room_busy=room_busy,
-            rules=rules,
-        )
-        conflicts.extend(assignment_conflicts)
-
-        if slot is not None:
-            group.time_slot = slot
-        if room is not None:
-            group.room_id = room.id
-            room_busy.setdefault(room.id, []).append(slot)  # type: ignore[arg-type]
-
-        chair_id, expert_ids, secretary_id, people_conflicts = assign_teachers(
-            group=group,
-            students_in_group=student_batch,
-            teachers=parsed_teachers,
-            teacher_busy=teacher_busy,
-            rules=rules,
-            teacher_day_campus=teacher_day_campus,
-        )
-        group.chair_id = chair_id
-        group.expert_ids = expert_ids
-        group.secretary_id = secretary_id
-        conflicts.extend(people_conflicts)
+        # Evaluate staff before reserving a room. A failed morning assignment must
+        # not hide a feasible afternoon assignment. Only the winning trial commits.
+        best = None
+        best_score = None
+        for slot, room in iter_slot_room_candidates(group, parsed_rooms, candidate_slots, room_busy, rules):
+            trial = GroupDraft(group.group_id, group.campus, group.student_ids,
+                               time_slot=slot, room_id=room.id)
+            chair, experts, secretary, notices = assign_teachers(
+                trial, student_batch, parsed_teachers, teacher_busy, rules, teacher_day_campus)
+            trial.chair_id, trial.expert_ids, trial.secretary_id = chair, experts, secretary
+            hard = sum(1 for c in notices if c['type'] != 'secretary_continuity_broken'
+                       and not (c['type'] == 'insufficient_experts'
+                                and c.get('min_required', 0) > 0
+                                and c.get('assigned', 0) >= c['min_required']))
+            score = (hard, len(notices), int(bool(campus and room.campus != campus)))
+            if best_score is None or score < best_score:
+                best, best_score = (trial, notices), score
+            if score == (0, 0, 0):
+                break
+        if best is not None:
+            group, notices = best
+            conflicts.extend(notices)
+            room_busy.setdefault(group.room_id, []).append(group.time_slot)
+        else:
+            conflicts.append(make_conflict('room_or_time_unavailable',
+                f'{group.group_id} 没有满足时间和容量要求的教室，请检查资源或放宽排期范围',
+                [group.group_id]))
 
         if group.time_slot is not None:
             reserve_teacher_time(teacher_busy, group, teacher_day_campus)
@@ -208,39 +208,41 @@ def validate_inputs(
     rules: Dict[str, Any],
 ) -> None:
     if not students:
-        raise SchedulingError("students cannot be empty")
+        raise SchedulingError("没有可参加排期的学生数据，请先导入学生")
     if not teachers:
-        raise SchedulingError("teachers cannot be empty")
+        raise SchedulingError("没有可参加排期的教师数据，请先导入教师")
     if not rooms:
-        raise SchedulingError("rooms cannot be empty")
+        raise SchedulingError("没有可用的教室数据，请先导入教室")
 
     required_rule_fields = ["start_date", "end_date", "group_size", "expert_count"]
     missing = [key for key in required_rule_fields if key not in rules]
     if missing:
-        raise SchedulingError(f"missing required rules: {', '.join(missing)}")
+        raise SchedulingError(f"排期规则缺少必填项：{', '.join(missing)}")
 
     try:
         start_date = datetime.strptime(rules["start_date"], DATE_FMT).date()
         end_date = datetime.strptime(rules["end_date"], DATE_FMT).date()
     except (TypeError, ValueError) as exc:
-        raise SchedulingError("start_date and end_date must use YYYY-MM-DD") from exc
+        raise SchedulingError("排期开始/结束日期格式应为 YYYY-MM-DD") from exc
     if end_date < start_date:
-        raise SchedulingError("end_date must be >= start_date")
+        raise SchedulingError("排期结束日期不能早于开始日期")
+    if (end_date - start_date).days > 366:
+        raise SchedulingError("一次排期的日期范围不能超过 366 天")
 
     if int(rules["group_size"]) <= 0:
-        raise SchedulingError("group_size must be > 0")
+        raise SchedulingError("每组学生人数必须大于 0")
     if int(rules["expert_count"]) < 0:
-        raise SchedulingError("expert_count must be >= 0")
+        raise SchedulingError("专家人数不能为负数")
 
     teacher_ids = {t.id for t in teachers}
     for student in students:
         if student.supervisor_id is not None and student.supervisor_id not in teacher_ids:
             raise SchedulingError(
-                f"student {student.id} references missing supervisor_id={student.supervisor_id}"
+                f"学生（ID {student.id}）的导师（ID {student.supervisor_id}）不在教师名单中，请核对导师数据"
             )
         if student.secretary_id is not None and student.secretary_id not in teacher_ids:
             raise SchedulingError(
-                f"student {student.id} references missing secretary_id={student.secretary_id}"
+                f"学生（ID {student.id}）的秘书（ID {student.secretary_id}）不在教师名单中，请核对秘书数据"
             )
 
 
@@ -465,7 +467,7 @@ def check_group_size(group_id: str, size: int, rules: Dict[str, Any]) -> List[di
         return [
             make_conflict(
                 conflict_type="group_size_out_of_range",
-                description=f"{group_id} has {size} students, below the configured minimum of {min_size}",
+                description=f"{group_id} 组只有 {size} 名学生，低于规则设置的每组最少 {min_size} 人，请调整分组人数设置或核对学生名单",
                 related_ids=[group_id],
             )
         ]
@@ -473,7 +475,7 @@ def check_group_size(group_id: str, size: int, rules: Dict[str, Any]) -> List[di
         return [
             make_conflict(
                 conflict_type="group_size_out_of_range",
-                description=f"{group_id} has {size} students, above the configured maximum of {max_size}",
+                description=f"{group_id} 组有 {size} 名学生，超过规则设置的每组最多 {max_size} 人，请调整分组人数设置或核对学生名单",
                 related_ids=[group_id],
             )
         ]
@@ -491,6 +493,18 @@ def infer_group_campus(students: Sequence[Student]) -> Optional[str]:
 # Assignment
 # ---------------------------------------------------------------------------
 
+def iter_slot_room_candidates(group, rooms, candidate_slots, room_busy, rules):
+    required_capacity = (len(group.student_ids) + int(rules.get('expert_count', 0))
+                         + int(bool(rules.get('need_chair'))) + 1)
+    preferred = sorted(rooms, key=lambda r: int(bool(group.campus and r.campus != group.campus)))
+    for room in preferred:
+        if room.raw.get('capacity') is not None and int(room.raw['capacity']) < required_capacity:
+            continue
+        for slot in parse_room_available_slots(room, rules, candidate_slots):
+            if is_resource_available(room_busy.get(room.id, []), slot):
+                yield slot, room
+
+
 def assign_slot_and_room(
     group: GroupDraft,
     students_in_group: Sequence[Student],
@@ -500,21 +514,16 @@ def assign_slot_and_room(
     rules: Dict[str, Any],
 ) -> Tuple[Optional[TimeRange], Optional[Room], List[dict]]:
     conflicts: List[dict] = []
-
-    preferred_rooms = [r for r in rooms if group.campus is None or r.campus == group.campus]
-    fallback_rooms = [r for r in rooms if r not in preferred_rooms]
-
-    for room in preferred_rooms + fallback_rooms:
-        room_slots = parse_room_available_slots(room, rules, candidate_slots)
-        for slot in room_slots:
-            if not is_resource_available(room_busy.get(room.id, []), slot):
-                continue
-            return slot, room, conflicts
+    for slot, room in iter_slot_room_candidates(group, rooms, candidate_slots, room_busy, rules):
+        return slot, room, conflicts
 
     conflicts.append(
         make_conflict(
             conflict_type="room_or_time_unavailable",
-            description=f"No available room/time slot could be assigned for {group.group_id}",
+            description=(
+                f"{group.group_id} 组在排期日期范围内找不到可用的教室和时段，"
+                f"请检查教室可用时间、放宽排期日期范围或减少同时段的组数"
+            ),
             related_ids=[group.group_id] + [s.id for s in students_in_group],
         )
     )
@@ -589,10 +598,11 @@ def assign_teachers(
                     make_conflict(
                         conflict_type="supervisor_missing",
                         description=(
-                            f"Supervisor {supervisor_name} cannot join {group.group_id} "
-                            f"although supervisors must sit in their students' group"
+                            f"导师 {supervisor_name} 无法进入其学生所在的 {group.group_id} 组"
+                            f"（可能与该组时间冲突或不可参加此类答辩），请检查该导师的时间和参与设置"
                         ),
                         related_ids=[group.group_id, supervisor_id],
+                        teacher_name=supervisor_name,
                     )
                 )
 
@@ -619,7 +629,10 @@ def assign_teachers(
             conflicts.append(
                 make_conflict(
                     conflict_type="chair_unavailable",
-                    description=f"No eligible chair found for {group.group_id}",
+                    description=(
+                        f"{group.group_id} 组找不到符合职称要求的组长/主席人选，"
+                        f"请检查规则中的组长职称要求，或确认高职称教师的时间安排"
+                    ),
                     related_ids=[group.group_id],
                 )
             )
@@ -639,8 +652,8 @@ def assign_teachers(
         shortage = make_conflict(
             conflict_type="insufficient_experts",
             description=(
-                f"{group.group_id} requires {needed_experts} experts but only {len(expert_ids)} "
-                f"eligible experts were assigned"
+                f"{group.group_id} 组需要 {needed_experts} 位专家，实际只能安排 {len(expert_ids)} 位，"
+                f"请增加可参加该类型答辩的教师、放宽教师时间限制或调低专家人数要求"
             ),
             related_ids=[group.group_id] + expert_ids,
         )
@@ -670,10 +683,11 @@ def assign_teachers(
                 make_conflict(
                     conflict_type="secretary_continuity_broken",
                     description=(
-                        f"Students in {group.group_id} previously followed secretary {preferred_name}, "
-                        f"but the secretary is unavailable for this group"
+                        f"{group.group_id} 组的学生此前一直由秘书 {preferred_name} 负责，"
+                        f"但该秘书本组无法继续担任（可能时间冲突或已承担其他角色），请人工核实秘书安排"
                     ),
                     related_ids=[group.group_id, preferred_id],
+                    teacher_name=preferred_name,
                 )
             )
 
@@ -694,7 +708,11 @@ def assign_teachers(
         conflicts.append(
             make_conflict(
                 conflict_type="secretary_unavailable",
-                description=f"No eligible secretary found for {group.group_id}",
+                description=(
+                    f"{group.group_id} 组找不到可担任秘书的教师"
+                    f"（秘书不能是本组学生的导师，且需满足秘书职称要求），"
+                    f"请增加可参加的教师或放宽秘书职称要求"
+                ),
                 related_ids=[group.group_id],
             )
         )
@@ -709,6 +727,8 @@ def teacher_is_eligible(
     supervisor_ids: Iterable[Optional[int]],
     rules: Dict[str, Any],
 ) -> bool:
+    if teacher.raw.get('availability_invalid'):
+        return False
     if slot is None:
         return True
     if teacher.id in {sid for sid in supervisor_ids if sid is not None} and get_supervisor_policy(rules) == "avoid":
@@ -805,6 +825,71 @@ def detect_global_conflicts(
     student_map = {s.id: s for s in students}
     room_map = {r.id: r for r in rooms}
 
+    # Shared by generation, manual-edit validation and publication.
+    seen_students = {}
+    for draft in drafts:
+        def report(kind, message, **extra):
+            conflicts.append(make_conflict(kind, f'{draft.group_id} {message}', [draft.group_id], **extra))
+
+        conflicts.extend(check_group_size(draft.group_id, len(draft.student_ids), rules))
+        for sid in draft.student_ids:
+            if sid not in student_map:
+                report('missing_student', f'学生 {sid} 未设置为参加本类答辩，请核对学生名单')
+            if sid in seen_students:
+                conflicts.append(make_conflict('duplicate_student', '同一学生被分配到多个组',
+                                               [seen_students[sid], draft.group_id, sid]))
+            seen_students[sid] = draft.group_id
+        people = [p for p in [draft.chair_id, *draft.expert_ids, draft.secretary_id] if p is not None]
+        if draft.secretary_id is not None and draft.secretary_id in {draft.chair_id, *draft.expert_ids}:
+            report('role_conflict', '秘书不能同时担任本组主席或专家')
+        if rules.get('need_chair') and draft.chair_id is None:
+            report('chair_unavailable', '尚未分配主席/组长')
+        if draft.chair_id in teacher_map and not meets_chair_requirement(teacher_map[draft.chair_id], rules):
+            report('chair_unavailable', '主席/组长职称不满足要求')
+        if draft.secretary_id is None:
+            report('secretary_unavailable', '尚未分配秘书')
+        elif (rules.get('secretary_title') and draft.secretary_id in teacher_map
+              and title_rank(teacher_map[draft.secretary_id].title) < title_rank(rules['secretary_title'])):
+            report('secretary_unavailable', '秘书职称不满足要求')
+        target = int(rules.get('expert_count', 0))
+        if len(draft.expert_ids) < target:
+            report('insufficient_experts', '专家人数不足', assigned=len(draft.expert_ids),
+                   required=target, min_required=int(rules.get('expert_min', 0) or 0))
+        for tid in set(people):
+            teacher = teacher_map.get(tid)
+            if teacher is None:
+                report('teacher_unavailable', f'教师 {tid} 不在本场可参与名单中')
+                continue
+            if teacher.raw.get('availability_invalid'):
+                report('teacher_unavailable', f'教师 {teacher.name} 的不可用时间尚未正确解析')
+            elif draft.time_slot and not is_resource_available(
+                    [parse_time_range(t) for t in teacher.available_time], draft.time_slot):
+                report('teacher_unavailable', f'教师 {teacher.name} 在该时段不可用', teacher_name=teacher.name)
+            if conflicts_with_selected_teachers(tid, [p for p in set(people) if p != tid], teachers):
+                report('role_conflict', f'教师 {teacher.name} 与本组成员存在同组回避约束')
+        room = room_map.get(draft.room_id)
+        if room is None or draft.time_slot is None:
+            report('room_or_time_unavailable', '尚未分配有效教室和时间')
+        else:
+            capacity = room.raw.get('capacity')
+            if capacity is not None and int(capacity) < len(draft.student_ids) + len(set(people)):
+                report('room_capacity', '教室容量不足')
+            if room.raw.get('availability_invalid'):
+                report('room_or_time_unavailable', '教室可用时间尚未正确解析')
+            elif room.available_time or room.raw.get('availability_restricted'):
+                allowed = [parse_time_range(t) for t in room.available_time]
+                if not any(t.start <= draft.time_slot.start and draft.time_slot.end <= t.end for t in allowed):
+                    report('room_or_time_unavailable', '教室在该时段不可用')
+            if rules.get('start_date') and rules.get('end_date'):
+                day = draft.time_slot.start.date()
+                if (not datetime.strptime(rules['start_date'], DATE_FMT).date() <= day
+                        <= datetime.strptime(rules['end_date'], DATE_FMT).date()
+                        or not slot_date_is_allowed(day, rules, parse_excluded_dates(rules))):
+                    report('room_or_time_unavailable', '时间不在允许的排期日期内')
+
+    for sid in student_map.keys() - seen_students.keys():
+        conflicts.append(make_conflict('missing_student', f'学生 {student_map[sid].name} 尚未分组', [sid]))
+
     # Duplicate teacher/room at same time.
     for i, left in enumerate(drafts):
         if left.time_slot is None:
@@ -819,26 +904,34 @@ def detect_global_conflicts(
             right_people = {right.chair_id, right.secretary_id, *right.expert_ids}
             shared_people = {pid for pid in left_people & right_people if pid is not None}
             if shared_people:
+                shared_names = "、".join(
+                    teacher_map[pid].name if pid in teacher_map else str(pid)
+                    for pid in sorted(shared_people)
+                )
                 conflicts.append(
                     make_conflict(
                         conflict_type="time_conflict",
                         description=(
-                            f"Teachers {sorted(shared_people)} appear in both {left.group_id} and {right.group_id} "
-                            f"during overlapping time slots"
+                            f"教师 {shared_names} 被同时安排在 {left.group_id} 组和 {right.group_id} 组"
+                            f"的重叠时段，请调整其中一组的时间或更换教师"
                         ),
                         related_ids=[left.group_id, right.group_id, *sorted(shared_people)],
+                        teacher_name=shared_names,
                     )
                 )
 
             if left.room_id is not None and left.room_id == right.room_id:
+                room = room_map.get(left.room_id)
+                room_label = room.name if room is not None else str(left.room_id)
                 conflicts.append(
                     make_conflict(
                         conflict_type="room_conflict",
                         description=(
-                            f"Room {left.room_id} is assigned to both {left.group_id} and {right.group_id} "
-                            f"during overlapping time slots"
+                            f"教室 {room_label} 在重叠时段被同时分配给 {left.group_id} 组和 {right.group_id} 组，"
+                            f"请调整其中一组的时间或更换教室"
                         ),
                         related_ids=[left.group_id, right.group_id, left.room_id],
+                        room_name=room_label,
                     )
                 )
 
@@ -860,9 +953,11 @@ def detect_global_conflicts(
                     make_conflict(
                         conflict_type="supervisor_avoidance",
                         description=(
-                            f"Supervisor {supervisor_name} is assigned to {draft.group_id} while supervisor avoidance is enabled"
+                            f"已开启导师回避，但导师 {supervisor_name} 仍被安排在其学生所在的 "
+                            f"{draft.group_id} 组，请更换该组的专家或秘书"
                         ),
                         related_ids=[draft.group_id, sid, student.supervisor_id],
+                        teacher_name=supervisor_name,
                     )
                 )
             if policy == "same_group" and student.supervisor_id not in assigned_teachers:
@@ -870,10 +965,11 @@ def detect_global_conflicts(
                     make_conflict(
                         conflict_type="supervisor_missing",
                         description=(
-                            f"Supervisor {supervisor_name} cannot join {draft.group_id} "
-                            f"although supervisors must sit in their students' group"
+                            f"导师 {supervisor_name} 未能进入其学生所在的 {draft.group_id} 组"
+                            f"（本类答辩要求导师与学生同组），请检查该导师的时间和参与设置"
                         ),
                         related_ids=[draft.group_id, student.supervisor_id],
+                        teacher_name=supervisor_name,
                     )
                 )
 
@@ -895,9 +991,11 @@ def detect_global_conflicts(
                 make_conflict(
                     conflict_type="secretary_is_supervisor",
                     description=(
-                        f"Secretary {secretary_name} of {draft.group_id} supervises students in the same group"
+                        f"{draft.group_id} 组的秘书 {secretary_name} 是本组学生的导师，"
+                        f"违反\"秘书的学生不能在秘书所在组\"的规则，请更换该组秘书"
                     ),
                     related_ids=[draft.group_id, draft.secretary_id],
+                    teacher_name=secretary_name,
                 )
             )
 
@@ -916,10 +1014,11 @@ def detect_global_conflicts(
                     make_conflict(
                         conflict_type="secretary_continuity_broken",
                         description=(
-                            f"Students in {draft.group_id} previously followed secretary {preferred_name}, "
-                            f"but the secretary is unavailable for this group"
+                            f"{draft.group_id} 组的学生此前一直由秘书 {preferred_name} 负责，"
+                            f"本次未能沿用（可能时间冲突或已承担其他角色），请人工核实秘书安排"
                         ),
                         related_ids=[draft.group_id, preferred_id],
+                        teacher_name=preferred_name,
                     )
                 )
 
@@ -933,9 +1032,11 @@ def detect_global_conflicts(
                 make_conflict(
                     conflict_type="campus_mismatch",
                     description=(
-                        f"{draft.group_id} is inferred for campus {draft.campus} but assigned room {room.id} on campus {room.campus}"
+                        f"{draft.group_id} 组按学生校区应安排在{draft.campus}，"
+                        f"但分配到的教室 {room.name} 位于{room.campus}，涉及跨校区，请核实教室安排"
                     ),
                     related_ids=[draft.group_id, room.id],
+                    room_name=room.name,
                 )
             )
 
@@ -959,12 +1060,14 @@ def serialize_group(group: GroupDraft) -> dict:
     }
 
 
-def make_conflict(conflict_type: str, description: str, related_ids: List[Any]) -> dict:
-    return {
+def make_conflict(conflict_type: str, description: str, related_ids: List[Any], **extra: Any) -> dict:
+    conflict = {
         "type": conflict_type,
         "description": description,
         "related_ids": related_ids,
     }
+    conflict.update(extra)
+    return conflict
 
 
 def deduplicate_conflicts(conflicts: Sequence[dict]) -> List[dict]:
@@ -992,7 +1095,9 @@ def parse_room_available_slots(
     start = datetime.strptime(rules["start_date"], DATE_FMT)
     end = datetime.strptime(rules["end_date"], DATE_FMT) + timedelta(days=1)
 
-    if room.available_time:
+    if room.raw.get('availability_invalid'):
+        return []
+    if room.available_time or room.raw.get('availability_restricted'):
         # 教室可用时段必须落在排期日期范围内（真实借用记录常含往年/范围外日期）
         return [
             time_range
@@ -1012,10 +1117,19 @@ def parse_time_range(raw: str) -> TimeRange:
     - 2025-05-10 09:00-2025-05-10 12:00
     """
     raw = raw.strip()
+    explicit = re.fullmatch(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\s*-\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2})', raw)
+    if explicit:
+        try:
+            start, end = (datetime.strptime(value, TIME_FMT) for value in explicit.groups())
+        except ValueError as exc:
+            raise SchedulingError(f'时间格式无法识别: {raw}') from exc
+        if end <= start:
+            raise SchedulingError(f'时间区间无效: {raw}')
+        return TimeRange(start=start, end=end)
     try:
         date_part, time_part = raw.split(" ", 1)
     except ValueError as exc:
-        raise SchedulingError(f"invalid time range: {raw}") from exc
+        raise SchedulingError(f"时间格式无法识别: {raw}（应如 2025-05-10 09:00-12:00）") from exc
 
     if time_part.count("-") == 1 and ":" in time_part:
         try:
@@ -1023,9 +1137,9 @@ def parse_time_range(raw: str) -> TimeRange:
             start = datetime.strptime(f"{date_part} {start_clock}", TIME_FMT)
             end = datetime.strptime(f"{date_part} {end_clock}", TIME_FMT)
         except ValueError as exc:
-            raise SchedulingError(f"invalid time range: {raw}") from exc
+            raise SchedulingError(f"时间格式无法识别: {raw}（应如 2025-05-10 09:00-12:00）") from exc
         if end <= start:
-            raise SchedulingError(f"invalid time range (end <= start): {raw}")
+            raise SchedulingError(f"时间区间无效（结束时间不晚于开始时间）: {raw}")
         return TimeRange(start=start, end=end)
 
     try:
@@ -1033,10 +1147,10 @@ def parse_time_range(raw: str) -> TimeRange:
         start = datetime.strptime(left.strip(), TIME_FMT)
         end = datetime.strptime(right.strip(), TIME_FMT)
     except ValueError as exc:
-        raise SchedulingError(f"invalid time range: {raw}") from exc
+        raise SchedulingError(f"时间格式无法识别: {raw}（应如 2025-05-10 09:00-12:00）") from exc
 
     if end <= start:
-        raise SchedulingError(f"invalid time range (end <= start): {raw}")
+        raise SchedulingError(f"时间区间无效（结束时间不晚于开始时间）: {raw}")
     return TimeRange(start=start, end=end)
 
 

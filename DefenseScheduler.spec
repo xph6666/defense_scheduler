@@ -10,11 +10,12 @@ block_cipher = None
 project_modules = [
     module
     for module in collect_submodules('api') + collect_submodules('defense_scheduler')
-    if '.tests' not in module and not module.endswith('.tests')
+    if not module.rsplit('.', 1)[-1].startswith('test')
 ]
 
 hiddenimports = project_modules + [
     'algorithm',
+    'waitress',
     'corsheaders',
     'django.contrib.auth.backends',
     'django.contrib.messages.storage.fallback',

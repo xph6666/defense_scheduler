@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path "$PSScriptRoot\.."
 Set-Location $Root
+$Python = if (Test-Path ".venv\Scripts\python.exe") { ".venv\Scripts\python.exe" } else { "python" }
 
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
     throw "Missing required command: npm.cmd"
@@ -54,7 +55,7 @@ if (-not (Test-Path $VueTsc)) {
 Invoke-NativeCommand "npm run build" { npm.cmd run build }
 Remove-BuildArtifact (Join-Path $Root "build\DefenseScheduler")
 Remove-BuildArtifact (Join-Path $Root "release\DefenseScheduler.exe")
-Invoke-NativeCommand "PyInstaller build" { python -m PyInstaller --clean --noconfirm --distpath release --workpath build DefenseScheduler.spec }
+Invoke-NativeCommand "PyInstaller build" { & $Python -m PyInstaller --clean --noconfirm --distpath release --workpath build DefenseScheduler.spec }
 
 $Exe = Join-Path $Root "release\DefenseScheduler.exe"
 if (-not (Test-Path $Exe)) {

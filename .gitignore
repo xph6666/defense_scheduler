@@ -40,9 +40,23 @@ db.sqlite3
 # Test Data and Env
 .env
 *.xlsx
+!WIKI/examples/*.xlsx
+!WIKI/evidence/*.xlsx
+!批量测试_教师_30人.xlsx
+!批量测试_学生_100人.xlsx
+!批量测试_教室_10间.xlsx
 generate_large_test_data.py
+
+# WorkBuddy session data
+.workbuddy/
 
 # Local defense scheduling source/output documents
 排答辩文档/
 newrelease/
 .tmp/
+app-data/
+backups/
+staticfiles/
+.env.production
+.venv/
+.runtime-deps/

@@ -6,12 +6,21 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
+from django.core.cache import cache
+from django.conf import settings
+from datetime import timedelta
+from .authentication import login_attempt_key, check_login_attempts, record_login_failure
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Max
+from .schedule_integrity import schedule_write, audit, capture_export_groups, export_groups
 from django.http import HttpResponse
-from django.utils import timezone
+from django.utils import timezone, translation
 import json
 from datetime import datetime
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
+from .audit import AuditedDataMixin
 from .permissions import IsAdminOrReadOnly, IsAdminUser, is_admin_user
 from .timetable import CLASS_PERIOD_TIME_RANGES, TimetableParseError, extract_timetable_unavailable_times
 from .serializers import (
@@ -223,12 +232,16 @@ def normalize_time_text(value):
     )
 
 
-def parse_time_entries(raw_text):
+def parse_time_entries(raw_text, date_range=None):
     """拆分并归一化时间文本，返回 (可解析条目, 无法解析的原始条目)。
 
+    支持绝对区间（2025-05-10 09:00-12:00）；提供 date_range=(开始日, 结束日) 时，
+    还支持"周一至周五全天"这类周期性写法，展开为范围内的绝对区间。
     无法解析的条目由调用方生成提示并跳过，避免一条格式错误让整次排期失败。
     """
     from algorithm import SchedulingError, parse_time_range
+
+    from .recurring_time import expand_recurring_entry
 
     valid, invalid = [], []
     for entry in split_time_text(raw_text):
@@ -236,7 +249,11 @@ def parse_time_entries(raw_text):
         try:
             parse_time_range(normalized)
         except SchedulingError:
-            invalid.append(entry)
+            expanded = expand_recurring_entry(entry, *date_range) if date_range else None
+            if expanded is None:
+                invalid.append(entry)
+            else:
+                valid.extend(expanded)
         else:
             valid.append(normalized)
     return valid, invalid
@@ -253,6 +270,33 @@ def validate_schedule_time_text(raw_text):
     return normalized
 
 
+TIME_FORMAT_HINT = '支持如 2025-05-10 09:00-12:00、周一至周五全天、每周三下午'
+
+
+def find_unrecognized_time_entries(raw_text):
+    """找出既非绝对区间、也非周期性写法的时间条目，供导入时即时提醒。
+
+    判定周期写法时不需要真实排期日期范围，用任意完整一周探测是否可识别。
+    """
+    from datetime import date as date_cls
+
+    from algorithm import SchedulingError, parse_time_range
+
+    from .recurring_time import expand_recurring_entry
+
+    probe_range = (date_cls(2000, 1, 3), date_cls(2000, 1, 9))
+    unrecognized = []
+    for entry in split_time_text(raw_text):
+        try:
+            parse_time_range(normalize_time_text(entry))
+            continue
+        except SchedulingError:
+            pass
+        if expand_recurring_entry(entry, *probe_range) is None:
+            unrecognized.append(entry)
+    return unrecognized
+
+
 class AuthLoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -260,15 +304,62 @@ class AuthLoginView(APIView):
     def post(self, request):
         username = request.data.get('username', '')
         password = request.data.get('password', '')
+        key = login_attempt_key(request, username)
+        check_login_attempts(key)
         user = authenticate(request, username=username, password=password)
         if not user:
+            record_login_failure(key)
             return Response({'error': '账号或密码错误'}, status=status.HTTP_400_BAD_REQUEST)
+        cache.delete(key)
+        Token.objects.filter(user=user, created__lte=timezone.now() - timedelta(hours=settings.AUTH_TOKEN_TTL_HOURS)).delete()
         token, _ = Token.objects.get_or_create(user=user)
         return Response({
             'token': token.key,
             'username': user.get_username(),
             'isAdmin': is_admin_user(user),
         })
+
+
+class AuthLogoutView(APIView):
+    def post(self, request):
+        Token.objects.filter(user=request.user).delete()
+        return Response({'message': '已退出登录'})
+
+
+class AuthChangePasswordView(APIView):
+    """修改当前登录用户的密码。
+
+    校验原密码与新密码强度；成功后作废旧 Token 并签发新 Token，
+    其他已登录端会随旧 Token 一起失效。
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request):
+        old_password = str(request.data.get('oldPassword') or '')
+        new_password = str(request.data.get('newPassword') or '')
+        if not old_password or not new_password:
+            return Response({'error': '原密码和新密码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        if not user.check_password(old_password):
+            return Response({'error': '原密码不正确'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_password == old_password:
+            return Response({'error': '新密码不能与原密码相同'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 站点语言是 en-us，这里临时切换到中文让密码强度提示以中文返回
+            with translation.override('zh-hans'):
+                validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            return Response({'error': '；'.join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
+        return Response({'token': token.key})
 
 
 class ImportMixin:
@@ -294,6 +385,10 @@ class ImportMixin:
 
     def get_import_instance(self, processed_row):
         return None
+
+    def collect_import_warnings(self, processed_row, row_number):
+        """行级导入提醒钩子：数据可入库但可能影响排期时返回中文提示列表。"""
+        return []
 
     @action(detail=False, methods=['post'])
     def import_data(self, request):
@@ -323,7 +418,8 @@ class ImportMixin:
             
             valid_serializers = []
             errors = []
-            
+            warnings = []
+
             batch_unique_values = {}
             prepared_rows = []
 
@@ -386,10 +482,10 @@ class ImportMixin:
                         if key in batch_unique_values:
                             row_errors[fields[-1]] = [message]
                         else:
-                            batch_unique_values[key] = index + 2
+                            batch_unique_values[key] = row_number
                     if row_errors:
                         errors.append({
-                            'row': index + 2,
+                            'row': row_number,
                             'errors': row_errors,
                         })
                         continue
@@ -402,6 +498,7 @@ class ImportMixin:
                     )
                     if serializer.is_valid():
                         valid_serializers.append(serializer)
+                        warnings.extend(self.collect_import_warnings(processed_row, row_number))
                     else:
                         errors.append({
                             'row': row_number,
@@ -412,7 +509,7 @@ class ImportMixin:
                         'row': row_number,
                         'errors': {'non_field_errors': [str(e)]},
                     })
-            
+
             if errors:
                 return Response({
                     'message': '导入失败，请修正错误后重新导入。',
@@ -426,7 +523,9 @@ class ImportMixin:
 
             return Response({
                 'message': f'成功导入 {len(valid_serializers)} 条数据',
-                'errors': []
+                'errors': [],
+                'warnings': warnings[:5],
+                'warningCount': len(warnings),
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -447,7 +546,7 @@ class ImportMixin:
             return Response({'error': f'删除失败: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class TeacherViewSet(ImportMixin, ModelViewSet):
+class TeacherViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
     queryset = Teacher.objects.all()
     serializer_class = TeacherSerializer
     permission_classes = [IsAdminOrReadOnly]
@@ -455,6 +554,16 @@ class TeacherViewSet(ImportMixin, ModelViewSet):
         '可参加答辩类型': 'availableTypes',
         '参加答辩类型': 'availableTypes',
     }
+
+    def collect_import_warnings(self, processed_row, row_number):
+        unrecognized = find_unrecognized_time_entries(processed_row.get('unavailableTimes'))
+        if not unrecognized:
+            return []
+        name = processed_row.get('name') or '未知教师'
+        return [
+            f'第 {row_number} 行 {name}：不可用时间"{"、".join(unrecognized)}"无法识别，'
+            f'排期时将被忽略（{TIME_FORMAT_HINT}）'
+        ]
 
     def prepare_import_row(self, processed_row, filename):
         role_value = processed_row.get('roles')
@@ -561,7 +670,7 @@ class TeacherViewSet(ImportMixin, ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class StudentViewSet(ImportMixin, ModelViewSet):
+class StudentViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     permission_classes = [IsAdminOrReadOnly]
@@ -634,10 +743,20 @@ class StudentViewSet(ImportMixin, ModelViewSet):
         return self._find_existing_student(processed_row)
 
 
-class RoomViewSet(ImportMixin, ModelViewSet):
+class RoomViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
     queryset = Room.objects.all()
     serializer_class = RoomSerializer
     permission_classes = [IsAdminOrReadOnly]
+
+    def collect_import_warnings(self, processed_row, row_number):
+        unrecognized = find_unrecognized_time_entries(processed_row.get('availableTimes'))
+        if not unrecognized:
+            return []
+        name = processed_row.get('name') or '未知教室'
+        return [
+            f'第 {row_number} 行 教室 {name}：可用时间"{"、".join(unrecognized)}"无法识别，'
+            f'排期时将按全时段可用处理（{TIME_FORMAT_HINT}）'
+        ]
 
     def prepare_import_row(self, processed_row, filename):
         if not processed_row.get('name'):
@@ -691,7 +810,7 @@ class RoomViewSet(ImportMixin, ModelViewSet):
         return ordered
 
 
-class RuleConfigViewSet(ModelViewSet):
+class RuleConfigViewSet(AuditedDataMixin, ModelViewSet):
     queryset = RuleConfig.objects.all()
     serializer_class = RuleConfigSerializer
     permission_classes = [IsAdminOrReadOnly]
@@ -715,15 +834,24 @@ class OperationLogViewSet(ModelViewSet):
     serializer_class = OperationLogSerializer
     permission_classes = [IsAdminOrReadOnly]
 
+    def perform_create(self, serializer):
+        serializer.save(operator=self.request.user.get_username(), authoritative=False)
+
+    def update(self, request, *args, **kwargs):
+        return Response({'error': '操作日志不允许修改'}, status=405)
+
+    def destroy(self, request, *args, **kwargs):
+        return Response({'error': '操作日志不允许删除，请使用归档备份'}, status=405)
+
     def clear(self, request):
-        OperationLog.objects.all().delete()
-        return Response({'message': '日志已清空'}, status=status.HTTP_200_OK)
+        OperationLog.objects.filter(authoritative=False).delete()
+        return Response({'message': '客户端记录已清空，服务端审计记录已保留'}, status=status.HTTP_200_OK)
 
 
 class ScheduleViewSet(GenericViewSet):
     queryset = ScheduleVersion.objects.all()
     serializer_class = ScheduleVersionSerializer
-    read_actions = {'current', 'export', 'export_excel', 'check_conflicts'}
+    read_actions = {'current', 'export', 'export_excel', 'export_word', 'check_conflicts', 'versions'}
 
     def get_permissions(self):
         if self.action in self.read_actions:
@@ -732,6 +860,11 @@ class ScheduleViewSet(GenericViewSet):
 
     # 算法/检测产生的英文冲突类型 → 前端 ScheduleConflict 的中文类型与级别
     CONFLICT_TYPE_LABELS = {
+        **{key: (label, 'error') for key, label in {
+            'duplicate_student': '学生重复分组', 'missing_student': '学生未分组',
+            'teacher_unavailable': '人员不可用', 'role_conflict': '人员角色冲突',
+            'room_capacity': '教室容量不足',
+        }.items()},
         'time_conflict': ('时间冲突', 'error'),
         'teacher_time_conflict': ('时间冲突', 'error'),
         'room_conflict': ('教室冲突', 'error'),
@@ -746,8 +879,12 @@ class ScheduleViewSet(GenericViewSet):
         'secretary_continuity_broken': ('秘书连续性提示', 'warning'),
         'campus_mismatch': ('校区切换提示', 'warning'),
         'student_defense_type_missing': ('数据完整性提示', 'warning'),
-        'group_size_out_of_range': ('人数规则提示', 'warning'),
-        'invalid_time_format': ('数据完整性提示', 'warning'),
+        'group_size_out_of_range': ('人数规则冲突', 'error'),
+        'invalid_time_format': ('数据完整性提示', 'error'),
+        'mentor_not_found': ('数据完整性提示', 'warning'),
+        'mentor_unavailable_for_defense': ('数据完整性提示', 'warning'),
+        'secretary_not_found': ('数据完整性提示', 'warning'),
+        'secretary_unavailable_for_defense': ('数据完整性提示', 'warning'),
     }
 
     # 历史/前端旧版规则键 → 算法使用的规则键
@@ -805,7 +942,7 @@ class ScheduleViewSet(GenericViewSet):
             })
         return formatted
 
-    def _build_algorithm_input(self, defense_type):
+    def _build_algorithm_input(self, defense_type, date_range=None):
         """按答辩类型过滤参与者并转换为算法输入结构。
 
         过滤语义：
@@ -814,14 +951,18 @@ class ScheduleViewSet(GenericViewSet):
         - 姓名→ID 映射基于过滤后的教师集合：被过滤的导师本就不会被排入，
           supervisor_id 置空即可，避免算法校验到不存在的教师 ID。
 
+        date_range=(开始日, 结束日) 用于把"周一至周五全天"等周期性时间描述
+        展开为具体日期区间。
+
         返回 (算法输入 dict, 数据提示列表)。
         """
         defense_label = DEFENSE_TYPE_LABELS.get(defense_type, defense_type)
         students = list(Student.objects.all())
         rooms = list(Room.objects.all())
 
+        all_teachers = list(Teacher.objects.all())
         teachers = [
-            teacher for teacher in Teacher.objects.all()
+            teacher for teacher in all_teachers
             if not (teacher.available_types or []) or defense_label in teacher.available_types
         ]
         teacher_name_counts = {}
@@ -831,8 +972,14 @@ class ScheduleViewSet(GenericViewSet):
         if duplicate_teacher_names:
             raise ValueError(f'教师姓名重复，无法可靠匹配导师/秘书：{"、".join(duplicate_teacher_names)}')
         teacher_by_name = {teacher.name: teacher for teacher in teachers}
+        # 含未参加本场答辩类型的教师，用于区分“姓名写错”与“被类型过滤”
+        all_teacher_by_name = {teacher.name: teacher for teacher in all_teachers}
 
         data_notices = []
+        unmatched_mentors = []
+        filtered_mentors = []
+        unmatched_secretaries = []
+        filtered_secretaries = []
 
         teacher_payload = []
         for teacher in teachers:
@@ -841,13 +988,14 @@ class ScheduleViewSet(GenericViewSet):
                 for name in [item.strip() for item in teacher.avoid_teacher_names.replace('，', ',').split(',') if item.strip()]
                 if name in teacher_by_name
             ]
-            unavailable_times, invalid_times = parse_time_entries(teacher.unavailable_times)
+            unavailable_times, invalid_times = parse_time_entries(teacher.unavailable_times, date_range)
             if invalid_times:
                 data_notices.append({
                     'type': 'invalid_time_format',
                     'description': (
-                        f'教师 {teacher.name} 的不可用时间格式无法识别，已忽略：'
-                        f'{"、".join(invalid_times)}（正确格式如 2025-05-10 09:00-12:00）'
+                        f'教师 {teacher.name} 的不可用时间格式无法识别，该教师暂停自动分配：'
+                        f'{"、".join(invalid_times)}'
+                        f'（支持如 2025-05-10 09:00-12:00 或 周一至周五全天、每周三下午）'
                     ),
                     'related_ids': [teacher.id],
                 })
@@ -858,6 +1006,7 @@ class ScheduleViewSet(GenericViewSet):
                 'is_external': teacher.is_external,
                 'title': teacher.title,
                 'available_time': unavailable_times,
+                'availability_invalid': bool(invalid_times),
                 'campus_preference': teacher.campus_preference,
                 'forbidden_with': forbidden_with,
             })
@@ -882,8 +1031,23 @@ class ScheduleViewSet(GenericViewSet):
                 continue
             if defense_label not in defense_types:
                 continue
-            mentor = teacher_by_name.get(student.mentor_name)
-            secretary = teacher_by_name.get(student.secretary_name)
+
+            mentor_name = (student.mentor_name or '').strip()
+            secretary_name = (student.secretary_name or '').strip()
+            mentor = teacher_by_name.get(mentor_name) if mentor_name else None
+            secretary = teacher_by_name.get(secretary_name) if secretary_name else None
+
+            if mentor_name and mentor is None:
+                if mentor_name in all_teacher_by_name:
+                    filtered_mentors.append((student, mentor_name))
+                else:
+                    unmatched_mentors.append((student, mentor_name))
+            if secretary_name and secretary is None:
+                if secretary_name in all_teacher_by_name:
+                    filtered_secretaries.append((student, secretary_name))
+                else:
+                    unmatched_secretaries.append((student, secretary_name))
+
             student_payload.append({
                 'id': student.id,
                 'name': student.name,
@@ -902,23 +1066,96 @@ class ScheduleViewSet(GenericViewSet):
                 'related_ids': [student.id for student in missing_type_students],
             })
 
+        def _append_match_notices(items, notice_type, description_builder):
+            if not items:
+                return
+            # 按教师姓名聚合，避免同一错误导师被多名学生重复刷屏
+            by_name = {}
+            for student, person_name in items:
+                by_name.setdefault(person_name, []).append(student)
+            for person_name, related_students in sorted(by_name.items()):
+                student_names = '、'.join(s.name for s in related_students[:5])
+                extra = f'等{len(related_students)}人' if len(related_students) > 5 else ''
+                data_notices.append({
+                    'type': notice_type,
+                    'description': description_builder(person_name, student_names, extra, len(related_students)),
+                    'related_ids': [s.id for s in related_students],
+                    'teacher_name': person_name,
+                })
+
+        _append_match_notices(
+            unmatched_mentors,
+            'mentor_not_found',
+            lambda person_name, student_names, extra, _count: (
+                f'以下学生填写的导师“{person_name}”在教师名单中不存在，'
+                f'本次排期已忽略该导师关系：{student_names}{extra}。请核对导师姓名是否与教师表完全一致'
+            ),
+        )
+        _append_match_notices(
+            filtered_mentors,
+            'mentor_unavailable_for_defense',
+            lambda person_name, student_names, extra, _count: (
+                f'导师“{person_name}”未设置为可参加【{defense_label}】，'
+                f'其学生（{student_names}{extra}）本次无法应用导师同组/回避约束。'
+                f'请在教师数据中补充可参加答辩类型'
+            ),
+        )
+        _append_match_notices(
+            unmatched_secretaries,
+            'secretary_not_found',
+            lambda person_name, student_names, extra, _count: (
+                f'以下学生绑定的秘书“{person_name}”在教师名单中不存在，'
+                f'本次无法沿用该秘书：{student_names}{extra}。请核对秘书姓名'
+            ),
+        )
+        _append_match_notices(
+            filtered_secretaries,
+            'secretary_unavailable_for_defense',
+            lambda person_name, student_names, extra, _count: (
+                f'秘书“{person_name}”未设置为可参加【{defense_label}】，'
+                f'其绑定学生（{student_names}{extra}）本次无法沿用该秘书。'
+                f'请在教师数据中补充可参加答辩类型'
+            ),
+        )
+
         room_payload = []
         for room in rooms:
-            available_times, invalid_times = parse_time_entries(room.available_times)
+            available_times, invalid_times = parse_time_entries(room.available_times, date_range)
             if invalid_times:
                 data_notices.append({
                     'type': 'invalid_time_format',
                     'description': (
-                        f'教室 {room.name} 的可用时间格式无法识别，已忽略：'
-                        f'{"、".join(invalid_times)}（正确格式如 2025-05-10 09:00-12:00）'
+                        f'教室 {room.name} 的可用时间格式无法识别，该教室暂停自动分配：'
+                        f'{"、".join(invalid_times)}'
+                        f'（支持如 2025-05-10 09:00-12:00 或 周一至周五全天、每周三下午）'
                     ),
                     'related_ids': [room.id],
                 })
+            elif not available_times:
+                from .recurring_time import is_no_limit_entry
+
+                room_entries = split_time_text(room.available_times)
+                if room_entries and not all(is_no_limit_entry(item) for item in room_entries):
+                    # 例如可用时间只写了"周末全天"而排期范围全在工作日：
+                    # 展开为空会让算法误判为"未填=全时段可用"，这里提示用户核实
+                    data_notices.append({
+                        'type': 'invalid_time_format',
+                        'description': (
+                            f'教室 {room.name} 的可用时间（{room.available_times}）'
+                            f'在本次排期日期范围内没有匹配的日期，本次不使用该教室'
+                        ),
+                        'related_ids': [room.id],
+                    })
+            from .recurring_time import is_no_limit_entry
+            restricted = any(not is_no_limit_entry(item) for item in split_time_text(room.available_times))
             room_payload.append({
                 'id': room.id,
                 'campus': room.campus,
                 'name': room.name,
                 'available_time': available_times,
+                'capacity': room.capacity,
+                'availability_restricted': restricted,
+                'availability_invalid': bool(invalid_times),
             })
 
         return {
@@ -927,9 +1164,24 @@ class ScheduleViewSet(GenericViewSet):
             'rooms': room_payload,
         }, data_notices
 
+    @staticmethod
+    def _extract_rule_date_range(rules):
+        """从规则中提取排期日期范围（date 元组），供周期性时间描述展开；无效时返回 None"""
+        try:
+            start = datetime.strptime(str(rules.get('start_date') or ''), '%Y-%m-%d').date()
+            end = datetime.strptime(str(rules.get('end_date') or ''), '%Y-%m-%d').date()
+        except ValueError:
+            return None
+        if end < start:
+            return None
+        return (start, end)
+
     @action(detail=False, methods=['post'])
+    @schedule_write
     def generate(self, request):
         """一键生成排期"""
+        if not isinstance(request.data.get('rules', {}), dict):
+            return Response({'error': '排期规则必须是对象'}, status=400)
         rules = self._normalize_rules(request.data.get('rules', {
             'defense_type': 'pre',
             'start_date': '2025-05-10',
@@ -937,10 +1189,24 @@ class ScheduleViewSet(GenericViewSet):
             'avoid_holiday': True,
         }))
 
+        if rules['defense_type'] not in DEFENSE_TYPE_LABELS:
+            return Response({'error': '未知答辩类型'}, status=400)
+        request_key = request.data.get('request_key')
+        if request_key and (not isinstance(request_key, str) or len(request_key) > 64):
+            return Response({'error': '请求标识格式不正确'}, status=400)
+        if request_key:
+            previous = ScheduleVersion.objects.filter(request_key=request_key).first()
+            if previous:
+                if previous.rules_snapshot != rules:
+                    return Response({'error': '该请求标识已用于其他规则，请重新生成'}, status=409)
+                return Response(self._version_result(previous))
         defense_label = DEFENSE_TYPE_LABELS.get(rules['defense_type'], rules['defense_type'])
 
         try:
-            input_payload, data_notices = self._build_algorithm_input(rules['defense_type'])
+            input_payload, data_notices = self._build_algorithm_input(
+                rules['defense_type'],
+                date_range=self._extract_rule_date_range(rules),
+            )
         except ValueError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -968,13 +1234,17 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': f'排期参数错误: {exc}'}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
+            for previous in ScheduleVersion.objects.filter(defense_type=rules['defense_type'], is_current=True):
+                self._freeze_version(previous)
             ScheduleVersion.objects.filter(defense_type=rules['defense_type']).update(is_current=False)
 
-            version_num = ScheduleVersion.objects.filter(defense_type=rules['defense_type']).count() + 1
+            version_num = (ScheduleVersion.objects.filter(defense_type=rules['defense_type']).aggregate(n=Max('version'))['n'] or 0) + 1
             schedule_version = ScheduleVersion.objects.create(
                 version=version_num,
                 defense_type=rules['defense_type'],
                 rules_snapshot=rules,
+                input_snapshot=input_payload,
+                request_key=request_key or None,
                 is_current=True
             )
 
@@ -1012,14 +1282,14 @@ class ScheduleViewSet(GenericViewSet):
             if rules['defense_type'] == 'pre':
                 self._sync_student_secretaries(schedule_version)
 
-        request.query_params._mutable = True
-        request.query_params['defense_type'] = rules['defense_type']
-        return self.current(request)
+        return Response(self._version_result(schedule_version))
 
     def _sync_student_secretaries(self, schedule_version):
         """把预答辩各组的秘书写回组内学生的"对应秘书姓名"字段"""
         for group in schedule_version.groups.select_related('secretary').prefetch_related('students'):
-            secretary_name = group.secretary.name if group.secretary else ''
+            if not group.secretary:
+                continue
+            secretary_name = group.secretary.name
             for student in group.students.all():
                 if student.secretary_name != secretary_name:
                     student.secretary_name = secretary_name
@@ -1046,10 +1316,7 @@ class ScheduleViewSet(GenericViewSet):
     def current(self, request):
         """获取当前生效的排期"""
         defense_type = request.query_params.get('defense_type', 'pre')
-        schedule_version = ScheduleVersion.objects.filter(
-            defense_type=defense_type,
-            is_current=True
-        ).first()
+        schedule_version = self._selected_version(request, defense_type)
 
         if not schedule_version:
             return Response({
@@ -1060,7 +1327,25 @@ class ScheduleViewSet(GenericViewSet):
                 'message': '暂无排期结果'
             })
 
-        groups = schedule_version.groups.all()
+        return Response(self._version_result(schedule_version))
+
+    def _selected_version(self, request, defense_type):
+        from rest_framework.exceptions import ValidationError
+        queryset = ScheduleVersion.objects.filter(defense_type=defense_type)
+        if not is_admin_user(request.user):
+            queryset = queryset.filter(status='published')
+        version_id = request.query_params.get('version_id') or request.data.get('version_id')
+        if version_id:
+            try:
+                return queryset.filter(pk=int(version_id)).first()
+            except (ValueError, TypeError):
+                raise ValidationError('版本 ID 格式不正确')
+        return queryset.filter(is_current=True).first() if is_admin_user(request.user) else queryset.first()
+
+    def _version_result(self, schedule_version):
+        if schedule_version.result_snapshot:
+            return {**schedule_version.result_snapshot, 'status': schedule_version.status, 'revision': schedule_version.revision, 'isCurrent': schedule_version.is_current}
+        groups = export_groups(schedule_version)
         formatted_groups = []
         for group in groups:
             time_parts = group.time.split(' ')
@@ -1077,8 +1362,11 @@ class ScheduleViewSet(GenericViewSet):
                 'timeRange': time_range,
                 'chairman': group.chair.name if group.chair else None,
                 'secretary': group.secretary.name if group.secretary else '未分配',
+                'chairTitle': group.chair.title if group.chair else '',
+                'chairId': group.chair_id,
+                'secretaryId': group.secretary_id,
                 'teachers': [
-                    {'id': t.id, 'name': t.name, 'title': t.title, 'roles': getattr(t, 'roles', [])}
+                    {'id': t.id, 'name': t.name, 'title': t.title, 'roles': getattr(t, 'roles', []), 'isExternal': t.is_external}
                     for t in group.experts.all()
                 ],
                 'students': [
@@ -1092,18 +1380,32 @@ class ScheduleViewSet(GenericViewSet):
                 ]
             })
 
-        return Response({
+        return {
+            'isCurrent': schedule_version.is_current,
+            'versionId': schedule_version.id,
+            'version': schedule_version.version,
+            'revision': schedule_version.revision,
+            'status': schedule_version.status,
+            'rules': schedule_version.rules_snapshot,
             'defenseType': schedule_version.get_defense_type_display(),
             'generatedAt': timezone.localtime(schedule_version.created_at).strftime('%Y-%m-%d %H:%M'),
             'groups': formatted_groups,
-            'conflicts': self._format_conflicts(schedule_version, schedule_version.conflicts_snapshot)
-        })
+            'conflicts': self._format_conflicts(schedule_version, self._check_conflicts(schedule_version))
+        }
 
     @action(detail=False, methods=['post'], url_path='adjust-group')
+    @schedule_write
     def adjust_group(self, request):
         """保存前端完整分组编辑表单。"""
         group_id = request.data.get('group_id')
         group_data = request.data.get('group_data') or {}
+        if not isinstance(group_data, dict):
+            return Response({'error': '分组数据格式不正确'}, status=400)
+        for key in ('teachers', 'students'):
+            if key in group_data and (not isinstance(group_data[key], list) or any(
+                    not isinstance(item, dict) or type(item.get('id')) is not int or item['id'] <= 0
+                    for item in group_data[key])):
+                return Response({'error': f'{key} 必须提供有效的人员 ID 列表'}, status=400)
         if not group_id or not group_data:
             return Response({'error': '缺少必要参数'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1113,6 +1415,8 @@ class ScheduleViewSet(GenericViewSet):
             return Response({'error': '组不存在'}, status=status.HTTP_404_NOT_FOUND)
 
         next_group_id = group_data.get('groupName') or group.group_id
+        if not isinstance(next_group_id, str) or len(next_group_id) > 20:
+            return Response({'error': '组名必须为不超过 20 个字符的文本'}, status=400)
         date = group_data.get('date')
         time_range = group_data.get('timeRange')
         next_time = group.time
@@ -1126,7 +1430,7 @@ class ScheduleViewSet(GenericViewSet):
         room = None
         room_name = group_data.get('classroom')
         if room_name:
-            room = Room.objects.filter(name=room_name, campus=next_campus).first() or Room.objects.filter(name=room_name).first()
+            room = Room.objects.filter(name=room_name, campus=next_campus).first()
             if not room:
                 return Response({'error': f'教室不存在: {room_name}'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1157,6 +1461,14 @@ class ScheduleViewSet(GenericViewSet):
             if missing_student_ids:
                 return Response({'error': f'学生不存在: {missing_student_ids}'}, status=status.HTTP_400_BAD_REQUEST)
 
+        if len(student_ids) != len(set(student_ids)):
+            return Response({'error': '学生列表包含重复人员'}, status=400)
+        if Group.objects.filter(schedule_version=group.schedule_version, students__id__in=student_ids).exclude(pk=group.pk).exists():
+            return Response({'error': '学生已在其他组，请使用移动学生操作'}, status=400)
+        if Group.objects.filter(schedule_version=group.schedule_version, group_id=next_group_id).exclude(pk=group.pk).exists():
+            return Response({'error': '同一版本内组名不能重复'}, status=400)
+        if 'students' in group_data and group.students.exclude(pk__in=student_ids).exists():
+            return Response({'error': '请使用移动学生操作将学生调到目标组，不能直接移除已分组学生'}, status=400)
         with transaction.atomic():
             group.group_id = next_group_id
             group.time = next_time
@@ -1181,6 +1493,7 @@ class ScheduleViewSet(GenericViewSet):
         })
 
     @action(detail=False, methods=['post'])
+    @schedule_write
     def adjust(self, request):
         """人工调整：移动学生、更换专家、修改时间/教室"""
         action_type = request.data.get('action')
@@ -1207,10 +1520,7 @@ class ScheduleViewSet(GenericViewSet):
     def export_word(self, request):
         """导出当前排期为 Word 时间安排表（版式对齐学院归档样例，导师与学生同色）"""
         defense_type = request.query_params.get('defense_type', 'pre')
-        schedule_version = ScheduleVersion.objects.filter(
-            defense_type=defense_type,
-            is_current=True
-        ).first()
+        schedule_version = self._selected_version(request, defense_type)
 
         if not schedule_version:
             return Response({'error': '暂无排期结果可导出'}, status=404)
@@ -1242,10 +1552,7 @@ class ScheduleViewSet(GenericViewSet):
         from .export_colors import build_mentor_color_map
 
         defense_type = request.query_params.get('defense_type', 'pre')
-        schedule_version = ScheduleVersion.objects.filter(
-            defense_type=defense_type,
-            is_current=True
-        ).first()
+        schedule_version = self._selected_version(request, defense_type)
 
         if not schedule_version:
             return Response({'error': '暂无排期结果可导出'}, status=404)
@@ -1254,15 +1561,11 @@ class ScheduleViewSet(GenericViewSet):
         default_sheet = wb.active
         wb.remove(default_sheet)
 
-        groups = list(
-            schedule_version.groups
-            .select_related('room', 'chair', 'secretary')
-            .prefetch_related('experts', 'students')
-            .order_by('id')
-        )
+        groups = list(export_groups(schedule_version))
 
         # 导师与其学生同色（与 Word 导出同一套配色语义）
         mentor_color_map = build_mentor_color_map(groups)
+        mentor_titles = dict(Teacher.objects.values_list('name', 'title'))
 
         for group in groups:
             sheet = wb.create_sheet(title=f"组{group.group_id}")
@@ -1341,7 +1644,7 @@ class ScheduleViewSet(GenericViewSet):
                 cell = sheet.cell(row=row, column=3, value=mentor_name or '未分配')
                 cell.font = row_font
 
-                supervisor_title = Teacher.objects.filter(name=student.mentor_name).values_list('title', flat=True).first() or ''
+                supervisor_title = getattr(student, 'mentor_title', mentor_titles.get(student.mentor_name, ''))
                 cell = sheet.cell(row=row, column=4, value=supervisor_title)
                 cell.font = row_font
 
@@ -1383,10 +1686,7 @@ class ScheduleViewSet(GenericViewSet):
     def check_conflicts(self, request):
         """检测当前排期冲突"""
         defense_type = request.data.get('defense_type', 'pre')
-        schedule_version = ScheduleVersion.objects.filter(
-            defense_type=defense_type,
-            is_current=True
-        ).first()
+        schedule_version = self._selected_version(request, defense_type)
 
         if not schedule_version:
             return Response([], status=status.HTTP_200_OK)
@@ -1587,81 +1887,62 @@ class ScheduleViewSet(GenericViewSet):
         })
 
     def _check_conflicts(self, schedule_version):
-        conflicts = []
-        groups = schedule_version.groups.all()
+        from algorithm import (GroupDraft, SchedulingError, detect_global_conflicts,
+                               parse_teacher, parse_student, parse_room, parse_time_range, deduplicate_conflicts)
+        if schedule_version.result_snapshot or schedule_version.export_snapshot:
+            return schedule_version.conflicts_snapshot
+        rules = schedule_version.rules_snapshot or {}
+        payload, notices = self._build_algorithm_input(schedule_version.defense_type, self._extract_rule_date_range(rules))
+        drafts, group_map = [], {}
+        for group in schedule_version.groups.select_related('room', 'chair', 'secretary').prefetch_related('experts', 'students'):
+            group_map[group.group_id] = group.id
+            try:
+                slot = parse_time_range(group.time) if group.time else None
+            except SchedulingError:
+                slot = None
+            drafts.append(GroupDraft(group.group_id, group.campus, [s.id for s in group.students.all()],
+                slot, group.room_id, group.chair_id, [t.id for t in group.experts.all()], group.secretary_id))
+        conflicts = detect_global_conflicts(drafts, [parse_student(s) for s in payload['students']],
+            [parse_teacher(t) for t in payload['teachers']], [parse_room(r) for r in payload['rooms']], rules)
+        for conflict in conflicts:
+            conflict['group_db_ids'] = [group_map[g] for g in conflict.get('related_ids', []) if isinstance(g, str) and g in group_map]
+        return deduplicate_conflicts(notices + conflicts)
 
-        teacher_time_map = {}
+    def _freeze_version(self, version):
+        if version.result_snapshot:
+            return
+        version.conflicts_snapshot = self._check_conflicts(version)
+        version.result_snapshot = self._version_result(version)
+        version.export_snapshot = capture_export_groups(version)
+        version.save(update_fields=['conflicts_snapshot', 'result_snapshot', 'export_snapshot'])
 
-        for group in groups:
-            if group.chair:
-                key = (group.chair.id, group.time)
-                if key in teacher_time_map:
-                    conflicts.append({
-                        'type': 'teacher_time_conflict',
-                        'description': f"{group.chair.name} 在同一时间 {group.time} 被分配到多个组",
-                        'teacher_id': group.chair.id,
-                        'teacher_name': group.chair.name,
-                        'time': group.time,
-                        'group_ids': [teacher_time_map[key], group.id]
-                    })
-                else:
-                    teacher_time_map[key] = group.id
+    @action(detail=False, methods=['get'])
+    def versions(self, request):
+        queryset = ScheduleVersion.objects.filter(defense_type=request.query_params.get('defense_type', 'pre'))
+        if not is_admin_user(request.user):
+            queryset = queryset.filter(status='published')
+        return Response(list(queryset.values('id', 'version', 'status', 'is_current', 'created_at', 'published_at', 'revision')[:100]))
 
-            for expert in group.experts.all():
-                key = (expert.id, group.time)
-                if key in teacher_time_map:
-                    conflicts.append({
-                        'type': 'teacher_time_conflict',
-                        'description': f"{expert.name} 在同一时间 {group.time} 被分配到多个组",
-                        'teacher_id': expert.id,
-                        'teacher_name': expert.name,
-                        'time': group.time,
-                        'group_ids': [teacher_time_map[key], group.id]
-                    })
-                else:
-                    teacher_time_map[key] = group.id
-
-            if group.secretary:
-                key = (group.secretary.id, group.time)
-                if key in teacher_time_map:
-                    conflicts.append({
-                        'type': 'teacher_time_conflict',
-                        'description': f"{group.secretary.name} 在同一时间 {group.time} 被分配到多个组",
-                        'teacher_id': group.secretary.id,
-                        'teacher_name': group.secretary.name,
-                        'time': group.time,
-                        'group_ids': [teacher_time_map[key], group.id]
-                    })
-                else:
-                    teacher_time_map[key] = group.id
-
-        room_time_map = {}
-        for group in groups:
-            if group.room:
-                key = (group.room.id, group.time)
-                if key in room_time_map:
-                    conflicts.append({
-                        'type': 'room_conflict',
-                        'description': f"{group.room.name} 在同一时间 {group.time} 被多个组使用",
-                        'room_id': group.room.id,
-                        'room_name': group.room.name,
-                        'time': group.time,
-                        'group_ids': [room_time_map[key], group.id]
-                    })
-                else:
-                    room_time_map[key] = group.id
-
-        for group in groups:
-            if group.secretary:
-                secretary_name = group.secretary.name
-                for student in group.students.all():
-                    if student.secretary_name and student.secretary_name == secretary_name:
-                        conflicts.append({
-                            'type': 'secretary_student_conflict',
-                            'description': f"秘书 {group.secretary.name} 和自己的学生 {student.name} 在同一组",
-                            'group_id': group.id,
-                            'secretary_id': group.secretary.id,
-                            'student_id': student.id
-                        })
-
-        return conflicts
+    @action(detail=False, methods=['post'])
+    @schedule_write
+    def publish(self, request):
+        try:
+            version = ScheduleVersion.objects.get(pk=request.data.get('version_id'), is_current=True)
+        except (ScheduleVersion.DoesNotExist, ValueError, TypeError):
+            return Response({'error': '当前草稿不存在，请刷新'}, status=404)
+        if str(request.data.get('expected_revision')) != str(version.revision):
+            return Response({'error': '排期已发生变化，请刷新后重新发布'}, status=409)
+        if version.status == 'published':
+            return Response(self._version_result(version))
+        conflicts = self._format_conflicts(version, self._check_conflicts(version))
+        if any(c['level'] == 'error' for c in conflicts):
+            return Response({'error': '仍存在必须处理的冲突，不能发布', 'conflicts': conflicts}, status=400)
+        if not version.groups.exists():
+            return Response({'error': '空排期不能发布'}, status=400)
+        version.status = 'published'
+        version.published_at = timezone.now()
+        version.revision += 1
+        version.save(update_fields=['status', 'published_at', 'revision'])
+        self._freeze_version(version)
+        audit(request, '发布', f'发布 {version.defense_type} v{version.version}', version_id=version.id)
+        return Response(self._version_result(version))

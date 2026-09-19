@@ -58,9 +58,20 @@ class ScheduleVersion(models.Model):
     is_current = models.BooleanField(default=True, verbose_name="是否当前生效")
     rules_snapshot = models.JSONField(default=dict, verbose_name="规则快照")
     conflicts_snapshot = models.JSONField(default=list, blank=True, verbose_name="生成时冲突快照")
+    revision = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=12, default='draft', choices=[('draft', '草稿'), ('published', '已发布')])
+    published_at = models.DateTimeField(null=True, blank=True)
+    result_snapshot = models.JSONField(default=dict, blank=True)
+    export_snapshot = models.JSONField(default=list, blank=True)
+    input_snapshot = models.JSONField(default=dict, blank=True)
+    request_key = models.CharField(max_length=64, null=True, blank=True, unique=True)
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['defense_type', 'version'], name='unique_schedule_version'),
+            models.UniqueConstraint(fields=['defense_type'], condition=models.Q(is_current=True), name='unique_current_schedule'),
+        ]
 
     def __str__(self):
         return f"{self.defense_type} v{self.version} - {self.created_at}"
@@ -99,9 +110,16 @@ class OperationLog(models.Model):
     operator = models.CharField(max_length=50, default='系统', verbose_name="操作人")
     result = models.CharField(max_length=10, default='成功', verbose_name="结果")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
+    details = models.JSONField(default=dict, blank=True)
+    authoritative = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-created_at']
 
     def __str__(self):
         return f"{self.type} - {self.description[:20]}"
+
+
+class ScheduleWriteLock(models.Model):
+    """A database-backed mutex; acquired before reading schedule mutation state."""
+    revision = models.PositiveBigIntegerField(default=0)

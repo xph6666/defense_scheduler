@@ -17,10 +17,10 @@ export const toBackendDefenseType = (defenseType: DefenseType) => {
   return typeMap[defenseType]
 }
 
-export const getScheduleResults = async (defenseType: DefenseType) => {
+export const getScheduleResults = async (defenseType: DefenseType, versionId?: number) => {
   if (!USE_MOCK) {
     return request.get('/schedule/current/', {
-      params: { defense_type: toBackendDefenseType(defenseType) }
+      params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId }
     }) as Promise<ScheduleResult>
   }
 
@@ -83,9 +83,20 @@ const buildScheduleRules = (defenseType: DefenseType, config?: RuleConfig) => {
 
 export const generateSchedule = async (defenseType: DefenseType, config?: RuleConfig) => {
   if (!USE_MOCK) {
-    return request.post('/schedule/generate/', {
-      rules: buildScheduleRules(defenseType, config)
-    }) as Promise<ScheduleResult>
+    const rules = buildScheduleRules(defenseType, config)
+    const storageKey = `pending-generation-${defenseType}`
+    let pending: { rules: string; key: string } | null = null
+    try { pending = JSON.parse(sessionStorage.getItem(storageKey) || 'null') } catch { /* discard malformed local state */ }
+    const fingerprint = JSON.stringify(rules)
+    if (!pending || pending.rules !== fingerprint) {
+      pending = { rules: fingerprint, key: crypto.randomUUID() }
+      sessionStorage.setItem(storageKey, JSON.stringify(pending))
+    }
+    const result = await request.post('/schedule/generate/', {
+      rules, request_key: pending.key
+    }, { timeout: 120000 }) as ScheduleResult
+    sessionStorage.removeItem(storageKey)
+    return result
   }
 
   const delay = 800 + Math.floor(Math.random() * 400)
@@ -99,3 +110,26 @@ export const generateSchedule = async (defenseType: DefenseType, config?: RuleCo
   saveScheduleResult(result)
   return result
 }
+
+export interface ScheduleVersionOption {
+  id: number
+  version: number
+  status: 'draft' | 'published'
+  is_current: boolean
+  created_at: string
+  revision: number
+}
+
+export const listScheduleVersions = async (defenseType: DefenseType): Promise<ScheduleVersionOption[]> => {
+  if (USE_MOCK) return []
+  return request.get('/schedule/versions/', { params: { defense_type: toBackendDefenseType(defenseType) } }) as Promise<ScheduleVersionOption[]>
+}
+
+export const publishSchedule = (versionId: number, revision: number) => request.post('/schedule/publish/', {
+  version_id: versionId, expected_revision: revision
+}) as Promise<ScheduleResult>
+
+export const moveScheduleStudent = (studentId: number, fromGroupId: number, toGroupId: number, revision?: number) => request.post('/schedule/adjust/', {
+  action: 'move_student', student_id: studentId, from_group_id: fromGroupId,
+  to_group_id: toGroupId, expected_revision: revision
+})

@@ -5,6 +5,7 @@ import { enableDemoTools } from '../config/features'
 const MainLayout = () => import('../layout/MainLayout.vue')
 const Login = () => import('../views/Login.vue')
 const Dashboard = () => import('../views/Dashboard.vue')
+const ScheduleWizard = () => import('../views/ScheduleWizard.vue')
 const TeacherList = () => import('../views/teacher/TeacherList.vue')
 const StudentList = () => import('../views/student/StudentList.vue')
 const ClassroomList = () => import('../views/classroom/ClassroomList.vue')
@@ -45,10 +46,16 @@ const router = createRouter({
       redirect: '/dashboard',
       children: [
         {
+          path: 'schedule-wizard',
+          name: 'ScheduleWizard',
+          component: ScheduleWizard,
+          meta: { title: '分步安排向导' }
+        },
+        {
           path: 'dashboard',
           name: 'Dashboard',
           component: Dashboard,
-          meta: { title: '首页' }
+          meta: { title: '工作台' }
         },
         {
           path: 'teachers',
@@ -72,13 +79,13 @@ const router = createRouter({
           path: 'schedule-results',
           name: 'ScheduleResult',
           component: ScheduleResult,
-          meta: { title: '排期结果' }
+          meta: { title: '答辩安排与导出' }
         },
         {
           path: 'rule-config',
           name: 'RuleConfig',
           component: RuleConfig,
-          meta: { title: '规则配置中心' }
+          meta: { title: '安排要求' }
         },
         {
           path: 'operation-log',

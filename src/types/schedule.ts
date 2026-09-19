@@ -2,6 +2,13 @@ import type { ScheduleConflict } from './conflict'
 
 export type DefenseType = '预答辩' | '正式答辩' | '中期答辩'
 
+export interface ScheduleWorkflowState {
+  hasResult: boolean
+  status: 'draft' | 'published'
+  errorCount: number
+  busy: boolean
+}
+
 export interface ScheduleStudent {
   id: number
   name: string
@@ -29,6 +36,9 @@ export interface ScheduleGroup {
   classroom: string
   date: string
   timeRange: string
+  chairTitle?: string
+  chairId?: number
+  secretaryId?: number
   leader?: string
   chairman?: string
   secretary: string
@@ -39,6 +49,11 @@ export interface ScheduleGroup {
 }
 
 export interface ScheduleResult {
+  versionId?: number
+  version?: number
+  revision?: number
+  status?: 'draft' | 'published'
+  isCurrent?: boolean
   defenseType: DefenseType
   generatedAt: string
   groups: ScheduleGroup[]

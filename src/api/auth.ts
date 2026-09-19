@@ -18,3 +18,22 @@ export async function login(username: string, password: string) {
 
   return request.post('/auth/login/', { username, password }) as Promise<LoginResult>
 }
+
+export interface ChangePasswordResult {
+  token: string
+}
+
+export async function changePassword(oldPassword: string, newPassword: string) {
+  if (USE_MOCK) {
+    return { token: 'mock-token' } satisfies ChangePasswordResult
+  }
+
+  return request.post('/auth/change-password/', {
+    oldPassword,
+    newPassword
+  }) as Promise<ChangePasswordResult>
+}
+
+export async function logout() {
+  if (!USE_MOCK) await request.post('/auth/logout/')
+}

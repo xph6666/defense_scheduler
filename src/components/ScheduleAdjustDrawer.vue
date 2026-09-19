@@ -52,7 +52,7 @@
       </el-form-item>
 
       <el-form-item label="学生列表" prop="students">
-        <el-select v-model="studentIds" multiple filterable style="width: 100%">
+        <el-select v-model="studentIds" multiple filterable disabled style="width: 100%">
           <el-option
             v-for="s in students"
             :key="s.id"
@@ -60,6 +60,7 @@
             :value="s.id"
           />
         </el-select>
+        <div class="text-xs text-gray-500 mt-1">调整学生归属请使用排期页的“移动学生”，确保学生始终属于一个组。</div>
       </el-form-item>
 
       <el-form-item label="备注" prop="remark">

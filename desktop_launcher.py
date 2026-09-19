@@ -45,6 +45,16 @@ def main() -> None:
     from django.core.management import call_command
 
     django.setup()
+    from django.conf import settings
+    from pathlib import Path
+    from defense_scheduler.backup import backup_sqlite
+    database_path = Path(settings.DATABASES['default']['NAME'])
+    if settings.DATABASES['default']['ENGINE'] == 'django.db.backends.sqlite3' and database_path.exists():
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+        executor = MigrationExecutor(connection)
+        if executor.migration_plan(executor.loader.graph.leaf_nodes()):
+            backup_sqlite(database_path, runtime_config.app_data_dir / 'backups')
     call_command('migrate', interactive=False, verbosity=1)
     credentials = ensure_initial_admin(runtime_config.app_data_dir)
 
@@ -59,7 +69,8 @@ def main() -> None:
 
     if should_open_browser():
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    call_command('runserver', f'{host}:{port}', use_reloader=False)
+    from defense_scheduler.server import serve_application
+    serve_application(host, port)
 
 
 if __name__ == '__main__':

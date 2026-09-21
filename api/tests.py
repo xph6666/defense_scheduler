@@ -2454,14 +2454,14 @@ class ScheduleExportColorTests(TestCase):
                             if text and run.font.color and run.font.color.rgb:
                                 run_colors[text] = str(run.font.color.rgb)
 
-        # 结构标签为红色
-        self.assertEqual(run_colors.get('时间'), 'FF0000')
-        # 学生与其导师（组内专家）同色且非红
+        # 结构标签与时间一律黑色：着色 run 里不再出现红色，时间也不再着色
+        self.assertNotIn('FF0000', set(run_colors.values()))
+        self.assertNotIn('时间', run_colors)
+        # 学生与其导师（组内专家）同色
         self.assertIsNotNone(run_colors.get('学生1'))
         self.assertEqual(run_colors.get('学生1'), run_colors.get('导师王'))
         self.assertEqual(run_colors.get('学生4'), run_colors.get('导师李'))
         self.assertNotEqual(run_colors.get('学生1'), run_colors.get('学生4'))
-        self.assertNotEqual(run_colors.get('学生1'), 'FF0000')
 
     def test_excel_export_uses_mentor_font_colors(self):
         self.assertEqual(self._generate().status_code, 200)
@@ -2487,3 +2487,61 @@ class ScheduleExportColorTests(TestCase):
         other_color = color_by_text.get('学生4')
         self.assertIsNotNone(other_color)
         self.assertNotEqual(student_color, other_color)
+
+        # 只有姓名两列着色：学生类型列与导师职称列必须是黑色（未显式设色）
+        header_row = next(
+            row_index
+            for row_index in range(1, sheet.max_row + 1)
+            if sheet.cell(row=row_index, column=1).value == '学生姓名'
+        )
+        first_student_row = header_row + 1
+        name_cell = sheet.cell(row=first_student_row, column=1)
+        type_cell = sheet.cell(row=first_student_row, column=2)
+        mentor_cell = sheet.cell(row=first_student_row, column=3)
+        title_cell = sheet.cell(row=first_student_row, column=4)
+
+        self.assertTrue(str(name_cell.value).startswith('学生'))
+        self.assertEqual(str(name_cell.font.color.rgb), student_color)
+        self.assertEqual(str(mentor_cell.font.color.rgb), student_color)
+        self.assertIsNone(type_cell.font.color)
+        self.assertIsNone(title_cell.font.color)
+
+
+class MentorColorSourceTests(TestCase):
+    """前后端共用同一份色板与哈希算法（shared/mentor-colors.json）"""
+
+    def test_python_hash_matches_shared_vectors(self):
+        from .mentor_colors import color_index, load_color_source
+
+        source = load_color_source()
+        self.assertTrue(source['palette'])
+        self.assertTrue(source['hashVectors'])
+
+        for name, expected in source['hashVectors'].items():
+            self.assertEqual(
+                color_index(name),
+                expected,
+                f'{name} 的色板槽位与前端黄金向量不一致，网页与导出会取到不同颜色',
+            )
+
+    def test_python_hash_replicates_javascript_semantics(self):
+        """含 32 位溢出时也要与前端 hash |= 0 的结果一致"""
+        from .mentor_colors import js_hash
+
+        self.assertEqual(js_hash('unknown'), 284840886)
+        self.assertEqual(js_hash('导师王'), 23405439)
+        self.assertEqual(js_hash('导师李'), 23402306)
+
+    def test_palette_entries_are_valid_hex_pairs(self):
+        from .mentor_colors import load_color_source
+
+        for entry in load_color_source()['palette']:
+            for variant in ('light', 'dark'):
+                self.assertRegex(entry[variant], r'^[0-9A-F]{6}$')
+
+    def test_blank_name_falls_back_to_unknown_slot(self):
+        from .mentor_colors import color_index, mentor_color
+
+        self.assertEqual(color_index(''), color_index('unknown'))
+        self.assertEqual(color_index('   '), color_index('unknown'))
+        self.assertEqual(mentor_color(''), mentor_color('unknown'))

@@ -62,7 +62,8 @@ const form = reactive({
 const loading = ref(false)
 
 const handleLogin = async () => {
-  if (!form.username || !form.password) {
+  // 用 trim 后的值判断，避免"只输入了空格"被提交到后端而返回含糊的"账号或密码错误"
+  if (!form.username.trim() || !form.password.trim()) {
     ElMessage.error('请输入账号和密码')
     return
   }

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "description": [
+    "导师配色的唯一数据源。前端（网页标签底色）与后端（Word/Excel 导出字体色）都只读这一份，",
+    "槽位一律由 index = jsHash(导师姓名) % palette.length 决定，因此同一导师在网页与导出中恒定同色。",
+    "light 供网页标签底色（浅底深字），dark 供导出字体着色（白底深字）。",
+    "色值不带 # 前缀，由各消费方自行格式化：CSS 侧补 #，openpyxl / python-docx 直接使用。",
+    "dark 取自学院历年真实安排表的 16 色，顺序保持不变。"
+  ],
+  "hashVectors": {
+    "unknown": 6,
+    "导师王": 15,
+    "导师李": 2,
+    "主席张": 14,
+    "秘书赵": 7,
+    "专家钱": 14,
+    "张三": 9,
+    "李四": 13
+  },
+  "palette": [
+    { "light": "D6F0DD", "dark": "00B050" },
+    { "light": "DCE9F9", "dark": "558ED5" },
+    { "light": "EAF2D4", "dark": "76923C" },
+    { "light": "CCDEF4", "dark": "0C4AA4" },
+    { "light": "EDDDF7", "dark": "7030A0" },
+    { "light": "FCE3CE", "dark": "E46C0A" },
+    { "light": "D3ECEF", "dark": "31859C" },
+    { "light": "F1E0C9", "dark": "984806" },
+    { "light": "F8E1DD", "dark": "D99594" },
+    { "light": "CDEEFD", "dark": "00B0F0" },
+    { "light": "F8D5D5", "dark": "C00000" },
+    { "light": "E5F4CE", "dark": "92D050" },
+    { "light": "FFEFC2", "dark": "FFC000" },
+    { "light": "DFD5EA", "dark": "604A7B" },
+    { "light": "D7F1EB", "dark": "4BACC6" },
+    { "light": "E9E0F3", "dark": "8064A2" }
+  ]
+}

@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import update_last_login
 from django.core.cache import cache
 from django.conf import settings
 from datetime import timedelta
@@ -302,8 +303,10 @@ class AuthLoginView(APIView):
     authentication_classes = []
 
     def post(self, request):
-        username = request.data.get('username', '')
-        password = request.data.get('password', '')
+        # 账号与密码两端空白一律忽略：从记事本复制 24 位初始随机密码时常带入空格，
+        # 会造成认证失败，而界面只提示"账号或密码错误"，极易误判为服务异常。
+        username = str(request.data.get('username') or '').strip()
+        password = str(request.data.get('password') or '').strip()
         key = login_attempt_key(request, username)
         check_login_attempts(key)
         user = authenticate(request, username=username, password=password)
@@ -311,6 +314,8 @@ class AuthLoginView(APIView):
             record_login_failure(key)
             return Response({'error': '账号或密码错误'}, status=status.HTTP_400_BAD_REQUEST)
         cache.delete(key)
+        # 本视图只调用 authenticate()，不经过 auth.login()，需手动记录登录时间
+        update_last_login(None, user)
         Token.objects.filter(user=user, created__lte=timezone.now() - timedelta(hours=settings.AUTH_TOKEN_TTL_HOURS)).delete()
         token, _ = Token.objects.get_or_create(user=user)
         return Response({
@@ -337,8 +342,10 @@ class AuthChangePasswordView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        old_password = str(request.data.get('oldPassword') or '')
-        new_password = str(request.data.get('newPassword') or '')
+        # 与登录口径保持一致：密码两端空白一律忽略，
+        # 否则可能设置出带尾空格的密码，之后登录时又被忽略掉而无法通过。
+        old_password = str(request.data.get('oldPassword') or '').strip()
+        new_password = str(request.data.get('newPassword') or '').strip()
         if not old_password or not new_password:
             return Response({'error': '原密码和新密码不能为空'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1549,7 +1556,7 @@ class ScheduleViewSet(GenericViewSet):
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
-        from .export_colors import build_mentor_color_map
+        from .mentor_colors import build_mentor_color_map
 
         defense_type = request.query_params.get('defense_type', 'pre')
         schedule_version = self._selected_version(request, defense_type)
@@ -1563,7 +1570,7 @@ class ScheduleViewSet(GenericViewSet):
 
         groups = list(export_groups(schedule_version))
 
-        # 导师与其学生同色（与 Word 导出同一套配色语义）
+        # 导师与其学生同色（与 Word 导出同一套配色语义，色值来自 shared/mentor-colors.json）
         mentor_color_map = build_mentor_color_map(groups)
         mentor_titles = dict(Teacher.objects.values_list('name', 'title'))
 
@@ -1632,21 +1639,23 @@ class ScheduleViewSet(GenericViewSet):
             for student in group.students.all():
                 mentor_name = (student.mentor_name or '').strip()
                 mentor_color = mentor_color_map.get(mentor_name)
-                # 学生与其导师同色（字体着色），未匹配到导师时保持默认黑色
-                row_font = Font(color=mentor_color, bold=True) if mentor_color else Font()
+                # 只有学生姓名与导师姓名着色（师生配对是唯一靠颜色承载的信息），
+                # 学生类型、导师职称等无信息量的列一律黑色，避免整行花花绿绿。
+                name_font = Font(color=mentor_color, bold=True) if mentor_color else Font(bold=True)
+                plain_font = Font(bold=True)
 
                 cell = sheet.cell(row=row, column=1, value=student.name)
-                cell.font = row_font
+                cell.font = name_font
 
                 cell = sheet.cell(row=row, column=2, value=student.student_type)
-                cell.font = row_font
+                cell.font = plain_font
 
                 cell = sheet.cell(row=row, column=3, value=mentor_name or '未分配')
-                cell.font = row_font
+                cell.font = name_font
 
                 supervisor_title = getattr(student, 'mentor_title', mentor_titles.get(student.mentor_name, ''))
                 cell = sheet.cell(row=row, column=4, value=supervisor_title)
-                cell.font = row_font
+                cell.font = plain_font
 
                 row += 1
 

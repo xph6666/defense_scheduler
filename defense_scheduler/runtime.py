@@ -68,8 +68,10 @@ def ensure_initial_admin(app_data_dir: Path) -> InitialAdminCredentials | None:
     if User.objects.exists():
         return None
 
-    username = os.environ.get('INITIAL_ADMIN_USERNAME', 'admin')
-    password = os.environ.get('INITIAL_ADMIN_PASSWORD') or secrets.token_urlsafe(18)
+    # 账号与密码都用 strip 后的值：环境变量常从记事本/表格复制而来，
+    # 两端空白会写进 INITIAL_ADMIN.txt，随后在登录页被复制回来造成认证失败。
+    username = os.environ.get('INITIAL_ADMIN_USERNAME', 'admin').strip() or 'admin'
+    password = (os.environ.get('INITIAL_ADMIN_PASSWORD') or '').strip() or secrets.token_urlsafe(18)
     User.objects.create_superuser(username=username, password=password)
 
     credentials_file = app_data_dir / 'INITIAL_ADMIN.txt'

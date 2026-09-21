@@ -2,8 +2,10 @@
 
 版式对齐学院归档样例（排答辩文档/生成文档/ 下的真实安排表）：
 - 标题、副标题居中，正文为两列表格，每组一块（组号/时间/地点/组长|主席/专家/秘书/学生）；
-- 结构标签与时间用红色；导师与其学生用同一颜色标注——预答辩/中期时导师在组内
-  可直观看出师生配对，正式答辩（导师回避）时学生保留颜色便于人工核对回避是否正确。
+- 结构标签、时间、地点等一律黑色，只有导师与学生姓名着色——导师与其学生同色，
+  预答辩/中期时导师在组内可直观看出师生配对，正式答辩（导师回避）时学生保留颜色
+  便于人工核对回避是否正确。
+- 色值来自 shared/mentor-colors.json（与网页同一份数据源）。
 """
 from datetime import datetime
 
@@ -13,7 +15,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from .schedule_integrity import export_groups
-from .export_colors import LABEL_RED, build_mentor_color_map
+from .mentor_colors import build_mentor_color_map
 
 WEEKDAY_LABELS = '一二三四五六日'
 
@@ -43,8 +45,9 @@ def _format_time_label(raw):
 
 
 def _label_cell(cell, text):
+    """结构标签：加粗黑色，不再使用红色。"""
     paragraph = cell.paragraphs[0]
-    _styled_run(paragraph, text, color=LABEL_RED, bold=True)
+    _styled_run(paragraph, text, bold=True)
 
 
 def _names_with_colors(cell, names_with_color, separator='、'):
@@ -91,7 +94,7 @@ def export_schedule_word(schedule_version, defense_label):
 
         time_row = table.add_row()
         _label_cell(time_row.cells[0], '时间')
-        _styled_run(time_row.cells[1].paragraphs[0], _format_time_label(group.time), color=LABEL_RED)
+        _styled_run(time_row.cells[1].paragraphs[0], _format_time_label(group.time))
 
         room_row = table.add_row()
         _label_cell(room_row.cells[0], '地点')

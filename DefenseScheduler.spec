@@ -64,6 +64,8 @@ datas += collect_data_files('django', include_py_files=False)
 datas += collect_data_files('rest_framework', include_py_files=False)
 # python-docx 依赖包内默认模板（default.docx 等部件），需随包收集
 datas += collect_data_files('docx', include_py_files=False)
+# 导师配色的唯一数据源，前后端共用；运行时由 api/mentor_colors.py 从 _MEIPASS 下读取
+datas += [(str(Path('shared') / 'mentor-colors.json'), 'shared')]
 
 a = Analysis(
     ['defense_scheduler/desktop_entry.py'],

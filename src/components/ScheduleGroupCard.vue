@@ -30,9 +30,9 @@
       </div>
 
       <div>
-        <div class="text-gray-500 mb-2">专家</div>
+        <div class="text-gray-500 mb-2">专家（含主席/组长，共 {{ getScheduleExperts(group).length }} 人）</div>
         <div class="flex flex-wrap gap-2">
-          <el-tag v-for="t in group.teachers" :key="t.id" size="small">
+          <el-tag v-for="t in getScheduleExperts(group)" :key="t.id" size="small">
             {{ t.name }}（{{ t.title }}）
           </el-tag>
         </div>
@@ -61,6 +61,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getScheduleExperts } from '../domain/scheduleExperts'
 import type { ScheduleGroup } from '../types/schedule'
 import { getMentorColor } from '../utils/color'
 import ConflictTag from './ConflictTag.vue'

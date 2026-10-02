@@ -1,0 +1,101 @@
+{
+  "policyVersion": 2,
+  "scenarios": {
+    "pre": {
+      "defenseType": "预答辩",
+      "label": "预答辩",
+      "color": "#DEEBF7",
+      "enabled": true,
+      "avoidWeekend": true,
+      "avoidHoliday": true,
+      "mentorAvoidance": false,
+      "formalMentorSameSession": false,
+      "studentCount": { "target": 6, "min": 4, "max": 8 },
+      "expertCount": { "target": 4, "min": 4, "max": null, "includesChair": true },
+      "expertCountIncludesChair": true,
+      "secretaryCount": 1,
+      "roleQualification": {
+        "leaderMinTitle": "副教授",
+        "chairmanMinTitle": "教授",
+        "secretaryMinTitle": "讲师",
+        "preferSeniorTitle": true
+      },
+      "courseHalfDayBlocking": true,
+      "formalSoftwareMin": 3,
+      "softwareTeacherMin": 0,
+      "includeRemarks": true,
+      "preservePreDefenseGroups": true,
+      "softWeights": {
+        "balanceStudentCount": 50,
+        "preferSeniorTeacher": 80,
+        "avoidCrossCampus": 30,
+        "externalMentorConcentration": 20,
+        "preferAcademicMasterFirst": 0
+      }
+    },
+    "formal": {
+      "defenseType": "正式答辩",
+      "label": "正式答辩",
+      "color": "#9DC3E6",
+      "enabled": true,
+      "avoidWeekend": true,
+      "avoidHoliday": true,
+      "mentorAvoidance": true,
+      "formalMentorSameSession": true,
+      "studentCount": { "target": 6, "min": 4, "max": 8 },
+      "expertCount": { "target": 5, "min": 5, "max": 5, "includesChair": true },
+      "expertCountIncludesChair": true,
+      "secretaryCount": 1,
+      "roleQualification": {
+        "leaderMinTitle": "副教授",
+        "chairmanMinTitle": "教授",
+        "secretaryMinTitle": "讲师",
+        "preferSeniorTitle": true
+      },
+      "courseHalfDayBlocking": true,
+      "formalSoftwareMin": 3,
+      "softwareTeacherMin": 3,
+      "includeRemarks": true,
+      "preservePreDefenseGroups": true,
+      "softWeights": {
+        "balanceStudentCount": 50,
+        "preferSeniorTeacher": 90,
+        "avoidCrossCampus": 50,
+        "externalMentorConcentration": 40,
+        "preferAcademicMasterFirst": 70
+      }
+    },
+    "mid": {
+      "defenseType": "中期答辩",
+      "label": "中期答辩",
+      "color": "#2E75B6",
+      "enabled": true,
+      "avoidWeekend": true,
+      "avoidHoliday": true,
+      "mentorAvoidance": false,
+      "formalMentorSameSession": false,
+      "studentCount": { "target": 12, "min": 10, "max": 13 },
+      "expertCount": { "target": 5, "min": 5, "max": null, "includesChair": true },
+      "expertCountIncludesChair": true,
+      "secretaryCount": 1,
+      "roleQualification": {
+        "leaderMinTitle": "副教授",
+        "chairmanMinTitle": "教授",
+        "secretaryMinTitle": "讲师",
+        "preferSeniorTitle": true
+      },
+      "courseHalfDayBlocking": true,
+      "formalSoftwareMin": 3,
+      "softwareTeacherMin": 0,
+      "includeRemarks": true,
+      "preservePreDefenseGroups": true,
+      "softWeights": {
+        "balanceStudentCount": 80,
+        "preferSeniorTeacher": 50,
+        "avoidCrossCampus": 70,
+        "externalMentorConcentration": 30,
+        "preferAcademicMasterFirst": 0
+      }
+    }
+  }
+}

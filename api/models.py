@@ -4,6 +4,9 @@ class Teacher(models.Model):
     name = models.CharField(max_length=50, unique=True, verbose_name="姓名")
     college = models.CharField(max_length=100, blank=True, verbose_name="所属学院")
     is_external = models.BooleanField(default=False, verbose_name="是否外院")
+    is_active = models.BooleanField(default=True, verbose_name="是否启用")
+    member_eligible = models.BooleanField(default=True, verbose_name="是否可担任普通专家")
+    is_software_teacher = models.BooleanField(default=False, verbose_name="是否软件学院导师")
     title = models.CharField(max_length=20, verbose_name="职称")  # 教授/副教授/讲师
     roles = models.JSONField(default=list, verbose_name="可担任角色")
     available_types = models.JSONField(default=list, verbose_name="可参加答辩类型")
@@ -21,9 +24,17 @@ class Student(models.Model):
     gender = models.CharField(max_length=10, blank=True, verbose_name="性别")
     student_type = models.CharField(max_length=20, default="学硕", verbose_name="学生类型")
     mentor_name = models.CharField(max_length=50, blank=True, verbose_name="导师姓名")
+    mentor = models.ForeignKey(
+        Teacher, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='mentored_students', verbose_name="导师",
+    )
     campus = models.CharField(max_length=20, default="创新港", verbose_name="所属校区")
     defense_types = models.JSONField(default=list, verbose_name="参加答辩类型")
     secretary_name = models.CharField(max_length=50, blank=True, verbose_name="对应秘书姓名")
+    bound_secretary = models.ForeignKey(
+        Teacher, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='bound_students', verbose_name="对应秘书",
+    )
     remark = models.TextField(blank=True, verbose_name="备注")
 
     def __str__(self):
@@ -65,6 +76,10 @@ class ScheduleVersion(models.Model):
     export_snapshot = models.JSONField(default=list, blank=True)
     input_snapshot = models.JSONField(default=dict, blank=True)
     request_key = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    source_pre_version = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='linked_formal_versions', verbose_name="沿用的预答辩版本",
+    )
 
     class Meta:
         ordering = ['-created_at']

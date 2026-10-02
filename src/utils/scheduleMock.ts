@@ -1,33 +1,48 @@
+import { createMockRepository } from './mockRepository'
+import { STORAGE_KEYS } from './storageKeys'
 import { mockTeachers, mockStudents, mockClassrooms } from './mockData'
 import type { DefenseType, ScheduleResult, ScheduleGroup, ScheduleTeacher, ScheduleStudent } from '../types/schedule'
 
+const teacherRepository = createMockRepository(STORAGE_KEYS.teachers, mockTeachers)
+const studentRepository = createMockRepository(STORAGE_KEYS.students, mockStudents)
+const classroomRepository = createMockRepository(STORAGE_KEYS.classrooms, mockClassrooms)
+
 const mapTeacher = (id: number): ScheduleTeacher => {
-  const t = mockTeachers.find(x => x.id === id)!
+  const t = teacherRepository.read().find(x => x.id === id)
+  if (!t || t.isActive === false) throw new Error('演示安排需要的教师已删除或停用，请重置演示数据或使用实际排期服务')
   return {
     id: t.id,
     name: t.name,
     title: t.title,
     roles: t.roles,
     college: t.college,
-    isExternal: t.isExternal
+    isExternal: t.isExternal,
+    isActive: t.isActive ?? true, memberEligible: t.memberEligible ?? true, isSoftwareTeacher: t.isSoftwareTeacher
   }
 }
 
 const mapStudent = (id: number): ScheduleStudent => {
-  const s = mockStudents.find(x => x.id === id)!
+  const s = studentRepository.read().find(x => x.id === id)
+  if (!s) throw new Error('该学生不在当前名单中，请重新生成安排')
   return {
     id: s.id,
     name: s.name,
-    studentType: s.studentType,
+    studentType: s.studentType, studentNo: s.studentNo, remark: s.remark,
     mentorName: s.mentorName,
+    mentorId: s.mentorId ?? teacherRepository.read().find(t => t.name === s.mentorName)?.id,
+    secretaryId: s.secretaryId ?? teacherRepository.read().find(t => t.name === s.secretaryName)?.id,
     secretaryName: s.secretaryName
   }
 }
 
-const pickClassroom = (idx: number) => mockClassrooms[idx % mockClassrooms.length]
+const pickClassroom = (idx: number) => {
+  const rooms = classroomRepository.read()
+  if (!rooms.length) throw new Error('请先准备教室资料')
+  return rooms[idx % rooms.length]
+}
 
 const pickStudentsByDefenseType = (defenseType: DefenseType) => {
-  return mockStudents.filter(s => s.defenseTypes.includes(defenseType))
+  return studentRepository.read().filter(s => s.defenseTypes.includes(defenseType))
 }
 
 const buildGroups = (defenseType: DefenseType): ScheduleGroup[] => {
@@ -46,7 +61,7 @@ const buildGroups = (defenseType: DefenseType): ScheduleGroup[] => {
         timeRange: '09:00-10:30',
         leader: mapTeacher(2).name,
         secretary: mapTeacher(3).name,
-        teachers: [mapTeacher(2), mapTeacher(8), mapTeacher(1)],
+        teachers: [mapTeacher(2), mapTeacher(8), mapTeacher(1), mapTeacher(4)],
         students: groupStudents(0),
         status: 'normal',
         remark: '本周版本仅展示结果，后续支持人工调整。'
@@ -61,7 +76,7 @@ const buildGroups = (defenseType: DefenseType): ScheduleGroup[] => {
         timeRange: '10:45-12:15',
         leader: mapTeacher(5).name,
         secretary: mapTeacher(10).name,
-        teachers: [mapTeacher(5), mapTeacher(8), mapTeacher(1)],
+        teachers: [mapTeacher(5), mapTeacher(8), mapTeacher(1), mapTeacher(4)],
         students: groupStudents(6),
         status: 'normal'
       },
@@ -75,7 +90,7 @@ const buildGroups = (defenseType: DefenseType): ScheduleGroup[] => {
         timeRange: '14:00-15:30',
         leader: mapTeacher(9).name,
         secretary: mapTeacher(3).name,
-        teachers: [mapTeacher(9), mapTeacher(8), mapTeacher(2)],
+        teachers: [mapTeacher(9), mapTeacher(8), mapTeacher(2), mapTeacher(4)],
         students: groupStudents(12),
         status: 'warning',
         remark: '预留：后续将提示时间冲突或专家冲突。'
@@ -173,6 +188,9 @@ export const generateMockScheduleResult = (defenseType: DefenseType): ScheduleRe
   return {
     defenseType,
     generatedAt: new Date().toISOString(),
-    groups: buildGroups(defenseType)
+    groups: buildGroups(defenseType).map(group => ({ ...group,
+      chairId: teacherRepository.read().find(teacher => teacher.name === (group.chairman || group.leader))?.id,
+      secretaryId: teacherRepository.read().find(teacher => teacher.name === group.secretary)?.id
+    }))
   }
 }

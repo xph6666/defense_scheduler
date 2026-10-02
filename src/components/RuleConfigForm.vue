@@ -62,10 +62,11 @@
         <el-form-item label="每组学生人数">
           <el-input-number v-model="form.studentCount.target" :min="1" controls-position="right" class="w-full" />
         </el-form-item>
-        <el-form-item label="每组专家人数">
-          <el-input-number v-model="form.expertCount.target" :min="1" controls-position="right" class="w-full" />
+        <el-form-item label="专家总人数">
+          <el-input-number v-model="form.expertCount.target" :min="expertMinimum" :max="form.defenseType === '正式答辩' ? 5 : undefined" :disabled="form.defenseType === '正式答辩'" controls-position="right" class="w-full" />
         </el-form-item>
       </div>
+      <p class="text-sm text-gray-600 mb-3">{{ expertGuidance }}；主席/组长计入专家总数，秘书单独 1 人。</p>
       <el-popover placement="top" trigger="click" width="280"><template #reference><el-button link type="primary" size="small">查看人数范围</el-button></template><p>学生 {{ form.studentCount.min }}–{{ form.studentCount.max }} 人；专家至少 {{ form.expertCount.min }} 人；秘书 1 人。</p></el-popover>
     </el-card>
     <details class="secondary-details advanced-rules">
@@ -99,6 +100,28 @@
           </el-row>
         </el-card>
 
+        <el-card shadow="never" class="mb-4">
+          <template #header><strong>课程与两阶段衔接</strong></template>
+          <template v-if="form.defenseType === '中期答辩'">
+            <el-form-item v-for="campus in ['创新港', '兴庆']" :key="campus" :label="`${campus}开始日期`">
+              <el-date-picker v-model="form.campusStartDates![campus]" type="date" value-format="YYYY-MM-DD" placeholder="未选择时沿用全局开始日期" :disabled-date="disableCampusStartDate" style="width: 100%" />
+            </el-form-item>
+          </template>
+          <el-form-item label="有课半天不排">
+            <el-switch v-model="form.courseHalfDayBlocking" />
+            <span class="text-xs text-gray-500 ml-2">上午或下午有课时，该半天不安排答辩。</span>
+          </el-form-item>
+          <el-form-item v-if="form.defenseType === '正式答辩'" label="软件学院专家至少">
+            <el-input-number v-model="form.formalSoftwareMin" :min="3" :max="5" />
+            <span class="text-xs text-gray-500 ml-2">5 位专家中至少 3 位来自软件学院。</span>
+          </el-form-item>
+          <el-form-item v-if="form.defenseType === '正式答辩'" label="沿用预答辩分组">
+            <el-switch v-model="form.preservePreDefenseGroups" />
+            <span class="text-xs text-gray-500 ml-2">沿用学生组号与秘书关系，人工调整后重新校验。</span>
+          </el-form-item>
+          <el-form-item label="导出包含备注"><el-switch v-model="form.includeRemarks" /></el-form-item>
+        </el-card>
+
         <!-- 人数规则 -->
         <el-card shadow="never" class="mb-4">
           <template #header>
@@ -115,7 +138,7 @@
             </el-form-item>
 
             <el-form-item label="专家最少人数">
-              <el-input-number v-model="form.expertCount.min" :min="1" controls-position="right" class="w-full" />
+              <el-input-number v-model="form.expertCount.min" :min="expertMinimum" :max="form.defenseType === '正式答辩' ? 5 : undefined" :disabled="form.defenseType === '正式答辩'" controls-position="right" class="w-full" />
             </el-form-item>
             <el-form-item label="秘书人数">
               <el-input-number v-model="form.secretaryCount" :min="1" :max="1" disabled controls-position="right" class="w-full" />
@@ -137,28 +160,23 @@
                 <el-select v-model="form.roleQualification.leaderMinTitle" style="width: 100%">
                   <el-option label="教授" value="教授" />
                   <el-option label="副教授" value="副教授" />
-                  <el-option label="讲师" value="讲师" />
-                  <el-option label="其他" value="其他" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" v-if="form.defenseType === '正式答辩'">
               <el-form-item label="主席最低职称">
-                <el-select v-model="form.roleQualification.chairmanMinTitle" style="width: 100%">
+                <el-select v-model="form.roleQualification.chairmanMinTitle" disabled style="width: 100%">
                   <el-option label="教授" value="教授" />
                   <el-option label="副教授" value="副教授" />
-                  <el-option label="讲师" value="讲师" />
-                  <el-option label="其他" value="其他" />
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12">
               <el-form-item label="秘书最低职称">
                 <el-select v-model="form.roleQualification.secretaryMinTitle" style="width: 100%">
+                  <el-option label="讲师" value="讲师" />
                   <el-option label="教授" value="教授" />
                   <el-option label="副教授" value="副教授" />
-                  <el-option label="讲师" value="讲师" />
-                  <el-option label="其他" value="其他" />
                 </el-select>
               </el-form-item>
             </el-col>
@@ -218,9 +236,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Setting, User, Avatar, Calendar, Operation } from '@element-plus/icons-vue'
 import type { RuleConfig } from '../types/ruleConfig'
+import { normalizeRuleConfig } from '../domain/scheduleRules'
 import WeightSlider from './WeightSlider.vue'
 
 const props = defineProps<{
@@ -237,12 +256,18 @@ const emit = defineEmits<{
   (e: 'reset', type: string): void
 }>()
 
-const form = ref<RuleConfig>(JSON.parse(JSON.stringify(props.modelValue)))
+const form = ref<RuleConfig>(normalizeRuleConfig(JSON.parse(JSON.stringify(props.modelValue))))
+const expertMinimum = computed(() => form.value.defenseType === '预答辩' ? 4 : 5)
+const expertGuidance = computed(() => form.value.defenseType === '正式答辩' ? '正式答辩固定 5 位专家（主席 1 位、组员 4 位）' : `${form.value.defenseType}至少 ${expertMinimum.value} 位专家`)
 
 const disableEndDate = (date: Date) => {
   if (!form.value.startDate) return false
   const start = new Date(form.value.startDate)
   return date < start
+}
+const disableCampusStartDate = (date: Date) => {
+  const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return !!((form.value.startDate && value < form.value.startDate) || (form.value.endDate && value > form.value.endDate))
 }
 
 // 同步外部 props 到内部 form
@@ -251,7 +276,7 @@ watch(() => props.modelValue, (newVal) => {
   const newStr = JSON.stringify(newVal)
   const oldStr = JSON.stringify(form.value)
   if (newStr !== oldStr) {
-    form.value = JSON.parse(newStr)
+    form.value = normalizeRuleConfig(JSON.parse(newStr))
   }
 }, { deep: true })
 

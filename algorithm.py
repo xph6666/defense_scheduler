@@ -6,6 +6,10 @@ from math import ceil
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from scheduling.continuity import formal_mentor_session_violations, inherited_group_labels
+from scheduling.policies import committee_member_target, committee_violations, is_software_teacher, teacher_can_role
+from scheduling.preferences import external_visit_cost, preference_notices, software_reviewer_load
+
 
 TIME_FMT = "%Y-%m-%d %H:%M"
 DATE_FMT = "%Y-%m-%d"
@@ -94,6 +98,11 @@ def generate_schedule(
     parsed_students = [parse_student(s) for s in students]
     parsed_rooms = [parse_room(r) for r in rooms]
 
+    if rules.get('defense_type') == 'pre' and rules.get('refresh_secretary_bindings'):
+        # A new linked plan explicitly establishes fresh pre-defense bindings.
+        # Existing historical plan snapshots remain the caller's responsibility.
+        for student in parsed_students:
+            student.secretary_id = None
     validate_inputs(parsed_teachers, parsed_students, parsed_rooms, rules)
 
     candidate_slots = build_candidate_slots(rules, parsed_rooms)
@@ -105,11 +114,15 @@ def generate_schedule(
     teacher_busy: Dict[int, List[TimeRange]] = {}
     room_busy: Dict[int, List[TimeRange]] = {}
     teacher_day_campus: Dict[Tuple[int, date], set] = {}
+    reviewer_load: Dict[int, int] = {}
+    secretary_load: Dict[int, int] = {}
+    all_supervisor_ids = {s.supervisor_id for s in parsed_students if s.supervisor_id is not None}
 
-    for idx, student_batch in enumerate(grouped_students, start=1):
+    labels = inherited_group_labels(grouped_students, rules)
+    for group_label, student_batch in zip(labels, grouped_students):
         campus = infer_group_campus(student_batch)
         group = GroupDraft(
-            group_id=f"G{idx}",
+            group_id=group_label,
             campus=campus,
             student_ids=[s.id for s in student_batch],
         )
@@ -123,16 +136,35 @@ def generate_schedule(
             trial = GroupDraft(group.group_id, group.campus, group.student_ids,
                                time_slot=slot, room_id=room.id)
             chair, experts, secretary, notices = assign_teachers(
-                trial, student_batch, parsed_teachers, teacher_busy, rules, teacher_day_campus)
+                trial, student_batch, parsed_teachers, teacher_busy, rules, teacher_day_campus,
+                reviewer_load, all_supervisor_ids, secretary_load)
             trial.chair_id, trial.expert_ids, trial.secretary_id = chair, experts, secretary
-            hard = sum(1 for c in notices if c['type'] != 'secretary_continuity_broken'
+            notices.extend(committee_violations(trial, parsed_teachers, rules))
+            # Required mentors may exceed the configured committee minimum.
+            # Score the actual occupancy before accepting this room so that a
+            # feasible larger room is still considered.
+            people = {trial.chair_id, trial.secretary_id, *trial.expert_ids} - {None}
+            capacity = room.raw.get('capacity')
+            if capacity is not None and int(capacity) < len(trial.student_ids) + len(people):
+                notices.append(make_conflict('room_capacity', f'{trial.group_id} 教室容量不足', [trial.group_id]))
+            hard = sum(1 for c in notices if (c['type'] != 'secretary_continuity_broken'
+                       or rules.get('policy_version', 1) >= 2 or rules.get('expert_count_includes_chair'))
                        and not (c['type'] == 'insufficient_experts'
                                 and c.get('min_required', 0) > 0
                                 and c.get('assigned', 0) >= c['min_required']))
-            score = (hard, len(notices), int(bool(campus and room.campus != campus)))
+            # Already scheduled mentors guide the next student group into their
+            # session. Future mentor assignments are verified globally below.
+            mentor_session_penalty = 0
+            if rules.get('defense_type') == 'formal' and rules.get('formal_mentor_same_session'):
+                for student in student_batch:
+                    occupied = teacher_busy.get(student.supervisor_id, [])
+                    if occupied and not any(t.start == slot.start and t.end == slot.end for t in occupied):
+                        mentor_session_penalty += 1
+            visit_cost = external_visit_cost(trial, student_batch, parsed_teachers, teacher_busy, rules)
+            score = (hard, mentor_session_penalty, len(notices), int(bool(campus and room.campus != campus)), visit_cost)
             if best_score is None or score < best_score:
                 best, best_score = (trial, notices), score
-            if score == (0, 0, 0):
+            if score == (0, 0, 0, 0, 0):
                 break
         if best is not None:
             group, notices = best
@@ -145,6 +177,10 @@ def generate_schedule(
 
         if group.time_slot is not None:
             reserve_teacher_time(teacher_busy, group, teacher_day_campus)
+            for tid in {group.chair_id, *group.expert_ids} - {None}:
+                reviewer_load[tid] = reviewer_load.get(tid, 0) + 1
+            if group.secretary_id is not None:
+                secretary_load[group.secretary_id] = secretary_load.get(group.secretary_id, 0) + 1
 
         drafts.append(group)
 
@@ -228,6 +264,21 @@ def validate_inputs(
         raise SchedulingError("排期结束日期不能早于开始日期")
     if (end_date - start_date).days > 366:
         raise SchedulingError("一次排期的日期范围不能超过 366 天")
+
+    campus_starts = rules.get('campus_start_dates', {})
+    if not isinstance(campus_starts, dict):
+        raise SchedulingError('校区开始日期必须是校区与日期的对象')
+    for campus, raw_date in campus_starts.items():
+        if campus not in ('创新港', '兴庆'):
+            raise SchedulingError(f'校区开始日期包含未知校区：{campus}')
+        try:
+            if not isinstance(raw_date, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw_date):
+                raise ValueError
+            campus_start = datetime.strptime(raw_date, DATE_FMT).date()
+        except (TypeError, ValueError) as exc:
+            raise SchedulingError(f'{campus}开始日期格式应为 YYYY-MM-DD') from exc
+        if not start_date <= campus_start <= end_date:
+            raise SchedulingError(f'{campus}开始日期必须在本次排期日期范围内')
 
     if int(rules["group_size"]) <= 0:
         raise SchedulingError("每组学生人数必须大于 0")
@@ -494,13 +545,17 @@ def infer_group_campus(students: Sequence[Student]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def iter_slot_room_candidates(group, rooms, candidate_slots, room_busy, rules):
-    required_capacity = (len(group.student_ids) + int(rules.get('expert_count', 0))
+    required_capacity = (len(group.student_ids) + committee_member_target(rules)
                          + int(bool(rules.get('need_chair'))) + 1)
     preferred = sorted(rooms, key=lambda r: int(bool(group.campus and r.campus != group.campus)))
+    campus_start = (rules.get('campus_start_dates') or {}).get(group.campus, rules['start_date'])
+    first_allowed_day = datetime.strptime(campus_start, DATE_FMT).date()
     for room in preferred:
         if room.raw.get('capacity') is not None and int(room.raw['capacity']) < required_capacity:
             continue
         for slot in parse_room_available_slots(room, rules, candidate_slots):
+            if slot.start.date() < first_allowed_day:
+                continue
             if is_resource_available(room_busy.get(room.id, []), slot):
                 yield slot, room
 
@@ -537,15 +592,23 @@ def assign_teachers(
     teacher_busy: Dict[int, List[TimeRange]],
     rules: Dict[str, Any],
     teacher_day_campus: Optional[Dict[Tuple[int, date], set]] = None,
+    reviewer_load: Optional[Dict[int, int]] = None,
+    all_supervisor_ids: Optional[set] = None,
+    secretary_load: Optional[Dict[int, int]] = None,
 ) -> Tuple[Optional[int], List[int], Optional[int], List[dict]]:
     conflicts: List[dict] = []
     slot = group.time_slot
-    needed_experts = int(rules.get("expert_count", 0))
+    needed_experts = committee_member_target(rules)
     need_chair = bool(rules.get("need_chair", False))
     policy = get_supervisor_policy(rules)
     soft = rules.get("soft_weights") or {}
 
     supervisor_ids = {s.supervisor_id for s in students_in_group if s.supervisor_id is not None}
+    all_supervisor_ids = all_supervisor_ids if all_supervisor_ids is not None else supervisor_ids
+    secretary_load = secretary_load or {}
+    reserve_formal = rules.get('defense_type') == 'pre' and rules.get('reserve_formal_resources')
+    peer_mentor_ids = all_supervisor_ids - supervisor_ids
+    mentor_session_required = rules.get('defense_type') == 'formal' and rules.get('formal_mentor_same_session')
     # 学生既定秘书（预答辩确定，正式答辩沿用）：统计组内绑定情况
     desired_secretary_counts: Dict[int, int] = {}
     for student in students_in_group:
@@ -584,15 +647,49 @@ def assign_teachers(
 
         available_teachers.sort(key=cross_campus_penalty)
 
+    if rules.get('defense_type') == 'formal' and rules.get('expert_count_includes_chair'):
+        # Stable workload ordering rotates internal reviewers across sessions.
+        # Software-college reviewers take priority to satisfy the majority rule.
+        loads = reviewer_load if reviewer_load is not None else {tid: len(slots) for tid, slots in teacher_busy.items()}
+        available_teachers.sort(key=lambda t: (
+            not is_software_teacher(t.raw),
+            mentor_session_required and t.id not in peer_mentor_ids,
+            software_reviewer_load(t, loads, rules),
+        ))
+
+    secretary_min_rank = title_rank(rules.get("secretary_title")) if rules.get("secretary_title") else -1
+    secretary_candidates = [t for t in available_teachers
+                            if teacher_can_role(t.raw, 'secretary')
+                            and t.id not in supervisor_ids
+                            and (not reserve_formal or t.id not in all_supervisor_ids)
+                            and (secretary_min_rank < 0 or title_rank(t.title) >= secretary_min_rank)]
+    preferred_secretary_id = (
+        max(sorted(desired_secretary_counts), key=lambda k: desired_secretary_counts[k])
+        if desired_secretary_counts else None
+    )
+    reserved_secretary = next((t for t in secretary_candidates if t.id == preferred_secretary_id), None)
+    if (reserved_secretary is None and secretary_candidates
+            and rules.get('expert_count_includes_chair')):
+        # Reserve scarce secretary-only staff, then the least senior candidate.
+        # Keep the chair and expert seats available to senior eligible reviewers.
+        reserved_secretary = min(secretary_candidates, key=lambda t: (
+            t.id in all_supervisor_ids,
+            secretary_load.get(t.id, 0),
+            teacher_can_role(t.raw, 'expert') or teacher_can_role(t.raw, 'chair'),
+            title_rank(t.title), is_software_teacher(t.raw), -t.id,
+        ))
+    reserved_secretary_id = reserved_secretary.id if reserved_secretary else None
+
     expert_ids: List[int] = []
     # 导师同组模式：组内学生的导师优先进入专家席（预答辩/中期的硬约束）
     if policy == "same_group":
-        available_ids = {t.id for t in available_teachers}
+        available_ids = {t.id for t in available_teachers if teacher_can_role(t.raw, 'expert')}
         for supervisor_id in sorted(supervisor_ids):
             if supervisor_id in available_ids:
                 if supervisor_id not in expert_ids:
                     expert_ids.append(supervisor_id)
-            else:
+            elif not any(t.id == supervisor_id and teacher_can_role(t.raw, 'chair')
+                         and meets_chair_requirement(t, rules) for t in available_teachers):
                 supervisor_name = teacher_name_map.get(supervisor_id, str(supervisor_id))
                 conflicts.append(
                     make_conflict(
@@ -612,14 +709,20 @@ def assign_teachers(
         if policy == "same_group":
             # 优先让组内导师专家中符合职称要求者担任组长/主席（真实安排的常见做法）
             chair = next(
-                (t for t in available_teachers if t.id in expert_ids and meets_chair_requirement(t, rules)),
+                (t for t in available_teachers if t.id in supervisor_ids
+                 and t.id != reserved_secretary_id and teacher_can_role(t.raw, 'chair')
+                 and meets_chair_requirement(t, rules)),
                 None,
             )
             if chair is not None:
-                expert_ids.remove(chair.id)
+                if chair.id in expert_ids:
+                    expert_ids.remove(chair.id)
         if chair is None:
             chair = next(
-                (t for t in available_teachers if t.id not in expert_ids and meets_chair_requirement(t, rules)),
+                (t for t in available_teachers if t.id not in expert_ids
+                 and t.id != reserved_secretary_id and teacher_can_role(t.raw, 'chair')
+                 and meets_chair_requirement(t, rules)
+                 and not conflicts_with_selected_teachers(t.id, expert_ids, teachers)),
                 None,
             )
         if chair is not None:
@@ -637,10 +740,34 @@ def assign_teachers(
                 )
             )
 
+    if mentor_session_required:
+        # Reserve review seats for other groups' mentors before optional senior
+        # reviewers consume them. Outside mentors can use the minority seats;
+        # the documented software-college majority still limits this choice.
+        software_min = max(3, int(rules.get('formal_software_min', rules.get('software_teacher_min', 3))))
+        outside_limit = max(0, int(rules.get('expert_count', 5)) - software_min)
+        chair = next((t for t in teachers if t.id == chair_id), None)
+        outside_used = int(chair is not None and not is_software_teacher(chair.raw))
+        for teacher in available_teachers:
+            if len(expert_ids) >= needed_experts:
+                break
+            if (teacher.id not in peer_mentor_ids or teacher.id == reserved_secretary_id
+                    or teacher.id in expert_ids or not teacher_can_role(teacher.raw, 'expert')):
+                continue
+            outside = not is_software_teacher(teacher.raw)
+            if outside and outside_used >= outside_limit:
+                continue
+            if conflicts_with_selected_teachers(teacher.id, expert_ids + ([chair_id] if chair_id else []), teachers):
+                continue
+            expert_ids.append(teacher.id)
+            outside_used += int(outside)
+
     for teacher in available_teachers:
         if len(expert_ids) >= needed_experts:
             break
         if teacher.id in expert_ids:
+            continue
+        if teacher.id == reserved_secretary_id or not teacher_can_role(teacher.raw, 'expert'):
             continue
         if policy == "avoid" and teacher.id in supervisor_ids:
             continue
@@ -658,23 +785,26 @@ def assign_teachers(
             related_ids=[group.group_id] + expert_ids,
         )
         # 附带数量信息，便于调用方区分"低于理想值"与"低于可接受下限"
-        shortage["required"] = needed_experts
-        shortage["assigned"] = len(expert_ids)
+        shortage["required"] = int(rules.get('expert_count', 0))
+        shortage["assigned"] = len(expert_ids) + (int(chair_id is not None) if rules.get('expert_count_includes_chair') else 0)
         shortage["min_required"] = int(rules.get("expert_min", 0) or 0)
         conflicts.append(shortage)
 
-    secretary_min_rank = title_rank(rules.get("secretary_title")) if rules.get("secretary_title") else -1
     secretary_id: Optional[int] = None
 
-    # 跨场次连续性：优先沿用学生既定的秘书（不再受职称门槛限制，历史事实优先）
+    # 跨场次连续性：保留既定秘书，同时校验角色与职称资格。
     if desired_secretary_counts:
         preferred_id = max(sorted(desired_secretary_counts), key=lambda k: desired_secretary_counts[k])
         preferred = next((t for t in available_teachers if t.id == preferred_id), None)
         if (
             preferred is not None
+            and teacher_can_role(preferred.raw, 'secretary')
             and preferred.id not in expert_ids
             and preferred.id != chair_id
             and preferred.id not in supervisor_ids
+            and (not reserve_formal or preferred.id not in all_supervisor_ids)
+            and (secretary_min_rank < 0 or title_rank(preferred.title) >= secretary_min_rank)
+            and not conflicts_with_selected_teachers(preferred.id, expert_ids + ([chair_id] if chair_id else []), teachers)
         ):
             secretary_id = preferred.id
         else:
@@ -692,6 +822,11 @@ def assign_teachers(
             )
 
     if secretary_id is None:
+        if (reserved_secretary is not None and reserved_secretary.id not in expert_ids
+                and reserved_secretary.id != chair_id
+                and not conflicts_with_selected_teachers(reserved_secretary.id, expert_ids + ([chair_id] if chair_id else []), teachers)):
+            secretary_id = reserved_secretary.id
+    if secretary_id is None:
         # 秘书不能是组内任何学生的导师（“秘书的学生不能在秘书所在组”）
         secretary_id = next(
             (
@@ -700,7 +835,10 @@ def assign_teachers(
                 if t.id not in expert_ids
                 and t.id != chair_id
                 and t.id not in supervisor_ids
+                and (not reserve_formal or t.id not in all_supervisor_ids)
+                and teacher_can_role(t.raw, 'secretary')
                 and (secretary_min_rank < 0 or title_rank(t.title) >= secretary_min_rank)
+                and not conflicts_with_selected_teachers(t.id, expert_ids + ([chair_id] if chair_id else []), teachers)
             ),
             None,
         )
@@ -727,6 +865,8 @@ def teacher_is_eligible(
     supervisor_ids: Iterable[Optional[int]],
     rules: Dict[str, Any],
 ) -> bool:
+    if teacher.raw.get('is_active', teacher.raw.get('isActive', True)) is False:
+        return False
     if teacher.raw.get('availability_invalid'):
         return False
     if slot is None:
@@ -832,6 +972,7 @@ def detect_global_conflicts(
             conflicts.append(make_conflict(kind, f'{draft.group_id} {message}', [draft.group_id], **extra))
 
         conflicts.extend(check_group_size(draft.group_id, len(draft.student_ids), rules))
+        conflicts.extend(committee_violations(draft, teachers, rules))
         for sid in draft.student_ids:
             if sid not in student_map:
                 report('missing_student', f'学生 {sid} 未设置为参加本类答辩，请核对学生名单')
@@ -851,10 +992,11 @@ def detect_global_conflicts(
         elif (rules.get('secretary_title') and draft.secretary_id in teacher_map
               and title_rank(teacher_map[draft.secretary_id].title) < title_rank(rules['secretary_title'])):
             report('secretary_unavailable', '秘书职称不满足要求')
-        target = int(rules.get('expert_count', 0))
+        target = committee_member_target(rules)
         if len(draft.expert_ids) < target:
-            report('insufficient_experts', '专家人数不足', assigned=len(draft.expert_ids),
-                   required=target, min_required=int(rules.get('expert_min', 0) or 0))
+            report('insufficient_experts', '专家人数不足',
+                   assigned=len(draft.expert_ids) + (int(draft.chair_id is not None) if rules.get('expert_count_includes_chair') else 0),
+                   required=int(rules.get('expert_count', 0)), min_required=int(rules.get('expert_min', 0) or 0))
         for tid in set(people):
             teacher = teacher_map.get(tid)
             if teacher is None:
@@ -886,6 +1028,9 @@ def detect_global_conflicts(
                         <= datetime.strptime(rules['end_date'], DATE_FMT).date()
                         or not slot_date_is_allowed(day, rules, parse_excluded_dates(rules))):
                     report('room_or_time_unavailable', '时间不在允许的排期日期内')
+                campus_start = (rules.get('campus_start_dates') or {}).get(draft.campus)
+                if campus_start and day < datetime.strptime(campus_start, DATE_FMT).date():
+                    report('room_or_time_unavailable', '时间早于该校区允许的开始日期')
 
     for sid in student_map.keys() - seen_students.keys():
         conflicts.append(make_conflict('missing_student', f'学生 {student_map[sid].name} 尚未分组', [sid]))
@@ -1004,20 +1149,26 @@ def detect_global_conflicts(
             student = student_map.get(sid)
             if student is not None and student.secretary_id is not None:
                 desired_counts[student.secretary_id] = desired_counts.get(student.secretary_id, 0) + 1
-        if desired_counts and draft.secretary_id is not None:
-            preferred_id = max(sorted(desired_counts), key=lambda k: desired_counts[k])
-            if preferred_id != draft.secretary_id:
+        if desired_counts:
+            # Every student's binding matters. Checking only the most common
+            # secretary hides a minority's lost cross-stage relationship.
+            for preferred_id in sorted(desired_counts):
+                if preferred_id == draft.secretary_id:
+                    continue
                 preferred_name = (
                     teacher_map[preferred_id].name if preferred_id in teacher_map else str(preferred_id)
                 )
+                bound_students = [student_map[sid] for sid in draft.student_ids
+                                  if sid in student_map and student_map[sid].secretary_id == preferred_id]
                 conflicts.append(
                     make_conflict(
                         conflict_type="secretary_continuity_broken",
                         description=(
-                            f"{draft.group_id} 组的学生此前一直由秘书 {preferred_name} 负责，"
-                            f"本次未能沿用（可能时间冲突或已承担其他角色），请人工核实秘书安排"
+                            f"{draft.group_id} 组学生 {'、'.join(s.name for s in bound_students)} "
+                            f"绑定的秘书为 {preferred_name}，本组未沿用该秘书，"
+                            f"请明确调整这些学生的秘书绑定或组秘书"
                         ),
-                        related_ids=[draft.group_id, preferred_id],
+                        related_ids=[draft.group_id, preferred_id, *[s.id for s in bound_students]],
                         teacher_name=preferred_name,
                     )
                 )
@@ -1040,6 +1191,8 @@ def detect_global_conflicts(
                 )
             )
 
+    conflicts.extend(formal_mentor_session_violations(drafts, students, teachers, rules))
+    conflicts.extend(preference_notices(drafts, teachers, rules))
     return conflicts
 
 

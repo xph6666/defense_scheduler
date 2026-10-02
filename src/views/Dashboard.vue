@@ -43,7 +43,7 @@
     <details class="secondary-details">
       <summary>查看全部类型的统计与管理工具</summary><div class="overview-detail">
         <span>全部教师 {{ teachers?.length ?? '—' }} 人</span><span>全部学生 {{ students?.length ?? '—' }} 人</span><span>已有 {{ scheduleOverview.typeCount }} 类安排，共 {{ scheduleOverview.totalGroups }} 组</span><span>最近生成：{{ scheduleOverview.latestGeneratedAt }}</span>
-        <span>最近检测：{{ conflictOverview.errorCount }} 项错误、{{ conflictOverview.warningCount }} 项提醒（{{ conflictOverview.checkedAt }}）</span>
+        <span>全部类型：{{ conflictOverview.errorCount }} 项错误、{{ conflictOverview.warningCount }} 项提醒（最近检测 {{ conflictOverview.checkedAt }}）</span>
         <el-button v-if="enableDemoTools && canManage" type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
       </div>
     </details>
@@ -85,7 +85,7 @@ const scheduleOverview = computed(() => summarizeScheduleOverview(Object.values(
 const conflictOverview = computed(() => summarizeConflictOverview(Object.values(results.value)))
 const materials = computed(() => [
   { title: '学生名单', path: '/students', count: students.value?.filter(s => s.defenseTypes.includes(defenseType.value)).length ?? null, unit: '人', hint: `参加${defenseType.value}的学生。请核对学号、导师与参与环节。` },
-  { title: '教师与专家', path: '/teachers', count: teachers.value?.filter(t => !t.availableTypes?.length || t.availableTypes.includes(defenseType.value)).length ?? null, unit: '人', hint: '可参加本次答辩的教师。请补充职称和不可用时间。' },
+  { title: '教师与专家', path: '/teachers', count: teachers.value?.filter(t => t.isActive !== false && (!t.availableTypes?.length || t.availableTypes.includes(defenseType.value))).length ?? null, unit: '人', hint: '可参加本次答辩的教师。请补充职称和不可用时间。' },
   { title: '教室与时间', path: '/classrooms', count: classrooms.value?.length ?? null, unit: '间', hint: '核对教室校区、容量，以及实际可以使用的日期和时间。' }
 ])
 const nextAction = computed(() => {
@@ -102,7 +102,7 @@ async function load() {
   try {
     const [t, s, c, ...schedules] = await Promise.all([listTeachers(), listStudents(), listClassrooms(), ...defenseTypes.map(getScheduleResultsForType)])
     teachers.value = t as Teacher[]; students.value = s as Student[]; classrooms.value = c as Classroom[]
-    results.value = Object.fromEntries(defenseTypes.map((type, index) => [type, schedules[index]]))
+    results.value = Object.fromEntries(defenseTypes.flatMap((type, index) => schedules[index] ? [[type, schedules[index]]] : []))
   } catch (e) { error.value = e instanceof Error ? e.message : '资料读取失败，请重试' }
   finally { loading.value = false }
 }

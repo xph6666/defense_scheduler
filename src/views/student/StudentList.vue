@@ -142,7 +142,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="导师" prop="mentorName">
-          <el-input v-model="form.mentorName" placeholder="请输入导师姓名" />
+          <el-select v-model="form.mentorId" filterable clearable placeholder="选择导师，按教师编号关联" style="width: 100%" @change="syncMentorName">
+            <el-option v-for="teacher in relationTeachers" :key="teacher.id" :value="teacher.id" :label="`${teacher.name} · ${teacher.college} · #${teacher.id}`" :disabled="teacher.isActive === false && teacher.id !== form.mentorId" />
+          </el-select>
+          <el-input v-if="!form.mentorId" v-model="form.mentorName" class="mt-2" placeholder="未建档导师可先保留姓名，生成前请补充教师资料" />
         </el-form-item>
         <el-form-item label="所属校区" prop="campus">
           <el-select v-model="form.campus" placeholder="请选择校区" style="width: 100%">
@@ -158,7 +161,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="对应秘书" prop="secretaryName">
-          <el-input v-model="form.secretaryName" placeholder="请输入对应秘书姓名" />
+          <el-select v-model="form.secretaryId" filterable clearable placeholder="选择对应秘书" style="width: 100%" @change="syncSecretaryName">
+            <el-option v-for="teacher in secretaryTeachers" :key="teacher.id" :value="teacher.id" :label="`${teacher.name} · #${teacher.id}`" :disabled="teacher.isActive === false && teacher.id !== form.secretaryId" />
+          </el-select>
+          <el-input v-if="!form.secretaryId" v-model="form.secretaryName" class="mt-2" placeholder="未建档秘书可先保留姓名" />
         </el-form-item>
         <el-form-item label="备注" prop="remark">
           <el-input v-model="form.remark" type="textarea" />
@@ -184,6 +190,8 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { Search, Plus, Upload, Delete } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
 import { listStudents, createStudent, updateStudent, deleteStudent, batchDeleteStudents } from '../../api/student'
+import { listTeachers } from '../../api/teacher'
+import type { Teacher } from '../../types/teacher'
 import type { Student } from '../../types/student'
 import { useAdminGuard } from '../../utils/adminGuard'
 
@@ -194,6 +202,10 @@ const dialogVisible = ref(false)
 const importVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()
+const relationTeachers = ref<Teacher[]>([])
+const secretaryTeachers = computed(() => relationTeachers.value.filter(teacher => teacher.roles.includes('秘书') || teacher.id === form.secretaryId))
+const syncMentorName = (id?: number) => { form.mentorId = id || null; if (id) form.mentorName = relationTeachers.value.find(teacher => teacher.id === id)?.name || '' }
+const syncSecretaryName = (id?: number) => { form.secretaryId = id || null; form.secretaryName = id ? relationTeachers.value.find(teacher => teacher.id === id)?.name || '' : '' }
 const allData = ref<Student[]>([])
 const filteredData = ref<Student[]>([])
 const selectedIds = ref<number[]>([])
@@ -250,9 +262,11 @@ const defaultForm: Omit<Student, 'id'> = {
   gender: '',
   studentType: '学硕',
   mentorName: '',
+  mentorId: null,
   campus: '创新港',
   defenseTypes: [],
   secretaryName: '',
+  secretaryId: null,
   currentGroup: undefined,
   remark: ''
 }
@@ -320,7 +334,7 @@ const handleAdd = () => {
 const handleEdit = (row: Student) => {
   if (!requireAdmin()) return
   isEdit.value = true
-  Object.assign(form, JSON.parse(JSON.stringify(row)))
+  Object.assign(form, defaultForm, JSON.parse(JSON.stringify(row)))
   dialogVisible.value = true
   if (formRef.value) formRef.value.clearValidate()
 }
@@ -375,5 +389,6 @@ const openImport = () => {
 
 onMounted(() => {
   fetchData()
+  listTeachers().then(teachers => { relationTeachers.value = teachers }).catch(() => ElMessage.error('导师与秘书选项读取失败，请刷新重试'))
 })
 </script>

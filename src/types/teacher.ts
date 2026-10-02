@@ -3,6 +3,9 @@ export interface Teacher {
   name: string
   college: string
   isExternal: boolean
+  isActive?: boolean
+  memberEligible?: boolean
+  isSoftwareTeacher?: boolean
   title: '教授' | '副教授' | '讲师' | '其他'
   roles: string[]
   availableTypes: string[]

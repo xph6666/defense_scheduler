@@ -7,7 +7,7 @@
         <div class="agenda-body">
           <div class="material-top"><h3>{{ group.groupName }}</h3><el-tag v-if="problemCount(group.id)" type="warning">{{ problemCount(group.id) }} 项待核对</el-tag><el-tag v-else type="success">无分组冲突</el-tag></div>
           <p>学生 {{ group.students.length }} 人 · {{ group.defenseType === '正式答辩' ? '主席' : '组长' }}：{{ group.chairman || group.leader || '待安排' }} · 秘书：{{ group.secretary || '待安排' }}</p>
-          <details class="agenda-members"><summary>查看教师与学生名单</summary><p>专家：{{ group.teachers.map(teacher => teacher.name).join('、') || '待安排' }}</p><p>学生：{{ group.students.map(student => `${student.name}（导师：${student.mentorName || '未填写'}）`).join('、') || '暂无学生' }}</p></details>
+          <details class="agenda-members"><summary>查看教师与学生名单</summary><p>专家：{{ getScheduleExperts(group).map(teacher => teacher.name).join('、') || '待安排' }}</p><p>学生：{{ group.students.map(student => `${student.name}（导师：${student.mentorName || '未填写'}）`).join('、') || '暂无学生' }}</p></details>
           <div class="agenda-actions"><el-button v-if="canManage" size="small" @click="$emit('adjust', group)">调整本组</el-button><el-button v-if="problemCount(group.id)" size="small" type="warning" plain @click="$emit('problem', group.id)">查看问题</el-button></div>
         </div>
       </article>
@@ -16,6 +16,7 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
+import { getScheduleExperts } from '../domain/scheduleExperts'
 import type { ScheduleGroup } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 const props = defineProps<{ groups: ScheduleGroup[]; conflicts: ScheduleConflict[]; canManage: boolean }>()

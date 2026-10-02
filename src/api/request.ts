@@ -1,3 +1,4 @@
+import { runtimeConfig } from '../config/runtime'
 import axios, { type AxiosResponse } from 'axios'
 
 interface ApiEnvelope<T = unknown> {
@@ -25,7 +26,7 @@ export const isNotFoundError = (error: unknown) => {
 }
 
 const request = axios.create({
-  baseURL: (import.meta as any).env?.VITE_API_BASE_URL || '/api',
+  baseURL: runtimeConfig.apiBaseUrl,
   timeout: 10000
 })
 

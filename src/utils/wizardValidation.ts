@@ -16,5 +16,12 @@ export function validateWizardRules(config: RuleConfig): string[] {
       || config.expertCount.target < config.expertCount.min) {
     errors.push('专家人数不能低于 1 或已设置的最少人数，请核对“更多要求”。')
   }
+  const expertMinimum = config.defenseType === '预答辩' ? 4 : 5
+  if (config.expertCount.min < expertMinimum || config.expertCount.target < expertMinimum) errors.push(`${config.defenseType}至少需要 ${expertMinimum} 位专家（含主席/组长）。`)
+  if (config.defenseType === '正式答辩' && (config.expertCount.target !== 5 || config.expertCount.min !== 5)) errors.push('正式答辩必须固定 5 位专家（含主席）。')
+  if (config.defenseType === '正式答辩' && (!Number.isInteger(config.formalSoftwareMin) || (config.formalSoftwareMin || 0) < 3 || (config.formalSoftwareMin || 0) > 5)) errors.push('正式答辩的软件学院专家至少人数需为 3–5 人。')
+  if (config.defenseType === '中期答辩') for (const [campus, date] of Object.entries(config.campusStartDates || {})) {
+    if (date && (!['创新港', '兴庆'].includes(campus) || date < config.startDate || date > config.endDate)) errors.push(`${campus}的独立开始日期需在全局排期日期范围内。`)
+  }
   return errors
 }

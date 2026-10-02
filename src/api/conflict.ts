@@ -1,11 +1,12 @@
+import { runtimeConfig } from '../config/runtime'
 import request from './request'
 import type { DefenseType, ScheduleResult } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getScheduleResult } from '../utils/scheduleStorage'
 import { checkConflictsMock } from '../utils/conflictMock'
-import { toBackendDefenseType } from './schedule'
+import { toBackendDefenseType } from '../domain/defense'
 
-const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+const USE_MOCK = runtimeConfig.useMock
 
 const getConflictsKey = (defenseType: DefenseType) => `schedule_conflicts_${defenseType}`
 const getCheckedAtKey = (defenseType: DefenseType) => `schedule_conflicts_checked_at_${defenseType}`

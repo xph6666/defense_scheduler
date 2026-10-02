@@ -13,7 +13,7 @@
         <ScheduleToolbar
           v-model:defenseType="defenseType"
           v-model:viewMode="viewMode"
-          :loading="loading"
+          :loading="loading || publishing || moving || adjustSaving"
           :has-result="!!result?.groups.length"
           :can-manage="canManage"
           :guided="guided"
@@ -22,6 +22,7 @@
           @check-conflicts="handleCheckConflicts"
           @export="handleExportClick"
         />
+        <el-button v-if="canManage && defenseType !== '中期答辩' && (!guided || guidedStage === 'review')" class="mt-3" :disabled="loading || publishing || moving" @click="prepareLinkedGeneration">联合生成预答辩与正式答辩</el-button>
       </div>
     </div>
 
@@ -145,17 +146,31 @@
     </template>
   </el-dialog>
 
+  <el-dialog v-model="linkedVisible" title="联合生成两阶段答辩安排" width="min(680px, 94vw)" :close-on-click-modal="false">
+    <p class="mb-4">会创建两份新草稿，并为本轮重新分配秘书；正式答辩沿用本轮预答辩的学生分组和秘书。历史版本保留。</p>
+    <el-descriptions v-if="linkedConfigs" :column="1" border>
+      <el-descriptions-item v-for="config in linkedConfigs" :key="config.defenseType" :label="config.defenseType">{{ config.startDate }} 至 {{ config.endDate }}；学生 {{ config.studentCount.target }} 人/组；专家 {{ config.expertCount.target }} 人（含主席/组长）</el-descriptions-item>
+    </el-descriptions>
+    <el-alert v-if="linkedError" class="mt-4" :title="linkedError" type="warning" :closable="false" show-icon />
+    <template #footer><el-button @click="linkedVisible = false">取消</el-button><el-button @click="linkedVisible = false; router.push(workflowLink('/rule-config'))">修改两阶段要求</el-button><el-button type="primary" :disabled="!linkedConfigs || !!linkedError" @click="handleGenerateLinked">确认联合生成</el-button></template>
+  </el-dialog>
+
   <el-dialog v-model="moveVisible" title="移动学生" width="480px">
     <div class="space-y-4">
-      <p class="text-sm text-gray-500">学生将从原组移动到目标组，并同步预答辩秘书绑定。</p>
+      <p class="text-sm text-gray-500">学生移动后保留导师和秘书关系，预答辩/中期同时调整导师所在组，并重新校验冲突。</p>
       <el-select v-model="moveStudentId" filterable placeholder="选择学生和原组" class="w-full">
         <el-option v-for="s in moveChoices" :key="s.id" :value="s.id" :label="s.label" />
       </el-select>
       <el-select v-model="moveTargetId" placeholder="选择目标组" class="w-full">
-        <el-option v-for="g in result?.groups || []" :key="g.id" :value="g.id" :label="g.groupName" />
+        <el-option v-for="g in result?.groups || []" :key="g.id" :value="g.id" :label="g.groupName" :disabled="g.id === moveChoices.find(choice => choice.id === moveStudentId)?.groupId" />
       </el-select>
+      <el-checkbox v-model="preserveSecretary">保留该学生的秘书关系</el-checkbox>
+      <el-select v-if="!preserveSecretary" v-model="replacementSecretaryId" filterable placeholder="明确选择改绑的秘书" class="w-full">
+        <el-option v-for="teacher in teacherOptions.filter(teacher => teacher.roles.includes('秘书'))" :key="teacher.id" :value="teacher.id" :label="teacher.name" />
+      </el-select>
+      <p v-if="!preserveSecretary" class="text-xs text-orange-600">确认移动时会更新秘书绑定，并再次检测秘书与学生同组等冲突。</p>
     </div>
-    <template #footer><el-button @click="moveVisible = false">取消</el-button><el-button type="primary" :loading="moving" :disabled="!moveStudentId || !moveTargetId" @click="handleMoveStudent">确认移动</el-button></template>
+    <template #footer><el-button @click="moveVisible = false">取消</el-button><el-button type="primary" :loading="moving" :disabled="!moveStudentId || !moveTargetId || (!preserveSecretary && !replacementSecretaryId)" @click="handleMoveStudent">确认移动</el-button></template>
   </el-dialog>
 
   <ScheduleAdjustDrawer
@@ -203,13 +218,13 @@ import ConflictDetailDialog from '../../components/ConflictDetailDialog.vue'
 import ExportDialog from '../../components/ExportDialog.vue'
 import ExportProgress from '../../components/ExportProgress.vue'
 import SoftConstraintPanel from '../../components/SoftConstraintPanel.vue'
-import type { DefenseType, ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher, ScheduleWorkflowState } from '../../types/schedule'
-import { generateSchedule, getScheduleResults, listScheduleVersions, publishSchedule, moveScheduleStudent, type ScheduleVersionOption } from '../../api/schedule'
-import { checkScheduleConflicts, readLocalConflicts } from '../../api/conflict'
+import type { ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher, ScheduleWorkflowState } from '../../types/schedule'
+import { generateSchedule, generateLinkedSchedule, getScheduleResults, listScheduleVersions, publishSchedule, moveScheduleStudent, type ScheduleVersionOption } from '../../api/schedule'
+import { checkScheduleConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
 import { getGroupConflictCount, getGroupStatus } from '../../utils/conflictMock'
-import { exportScheduleExcel, exportScheduleWord } from '../../api/export'
+import { exportScheduleExcel, exportScheduleWord, exportSchedulePdf } from '../../api/export'
 import type { ExportStatus } from '../../types/export'
 import type { OptimizationSummary } from '../../types/optimization'
 import { evaluateSoftConstraints } from '../../utils/optimization'
@@ -218,6 +233,9 @@ import { listTeachers } from '../../api/teacher'
 import { listStudents } from '../../api/student'
 import { listClassrooms } from '../../api/classroom'
 import type { Classroom } from '../../types/classroom'
+import { useScheduleContext, type ScheduleContext } from '../../composables/useScheduleContext'
+import { getScheduleExperts } from '../../domain/scheduleExperts'
+import { validateWizardRules } from '../../utils/wizardValidation'
 import { useAdminGuard } from '../../utils/adminGuard'
 
 const props = defineProps<{ guided?: boolean; guidedStage?: 'review' | 'publish' }>()
@@ -229,6 +247,9 @@ const emit = defineEmits<{
 const defenseType = useDefenseType()
 const router = useRouter()
 const generationVisible = ref(false)
+const linkedVisible = ref(false)
+const linkedConfigs = ref<[RuleConfig, RuleConfig] | null>(null)
+const linkedError = ref('')
 const generationConfig = ref<RuleConfig | null>(null)
 const generationStudentCount = ref(0)
 const viewMode = ref<'agenda' | 'card' | 'table'>(props.guided ? 'agenda' : 'card')
@@ -239,42 +260,54 @@ const { canManage, requireAdmin } = useAdminGuard()
 
 const selectedVersion = ref<number | undefined>()
 const versions = ref<ScheduleVersionOption[]>([])
+const workspace = useScheduleContext(defenseType, selectedVersion, result)
 const editingRevision = ref<number | undefined>()
-const canEdit = computed(() => canManage.value && result.value?.status !== 'published' && result.value?.isCurrent !== false)
+const canEdit = computed(() => canManage.value && result.value?.status !== 'published' && result.value?.isCurrent !== false && !loading.value && !publishing.value && !moving.value)
 const publishing = ref(false)
 const moving = ref(false)
 const moveVisible = ref(false)
 const moveStudentId = ref<number>()
 const moveTargetId = ref<number>()
+const preserveSecretary = ref(true)
+const replacementSecretaryId = ref<number>()
 const moveChoices = computed(() => result.value?.groups.flatMap(g => g.students.map(student => ({
   id: student.id, groupId: g.id, label: `${student.name}（${g.groupName}）`
 }))) || [])
 
 const handlePublish = async () => {
-  if (!requireAdmin() || !result.value?.versionId || result.value.revision === undefined) return
+  if (!requireAdmin() || !canEdit.value || !result.value?.versionId || result.value.revision === undefined) return
+  const context = workspace.capture()
+  const current = result.value
   publishing.value = true
   try {
-    result.value = await publishSchedule(result.value.versionId, result.value.revision)
-    applyConflictsFromResult(result.value)
-    versions.value = await listScheduleVersions(defenseType.value)
+    const published = await publishSchedule(current.versionId!, current.revision!)
+    if (!workspace.isCurrent(context, true)) return
+    result.value = published
+    applyConflictsFromResult(published)
+    const options = await listScheduleVersions(context.defenseType)
+    if (!workspace.isCurrent(context)) return
+    versions.value = options
     ElMessage.success('已发布并锁定该版本，后续修改请生成新草稿')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '发布失败')
-  } finally { publishing.value = false }
+    if (workspace.isCurrent(context)) ElMessage.error(error instanceof Error ? error.message : '发布失败')
+  } finally { if (workspace.isCurrent(context)) publishing.value = false }
 }
 
 const handleMoveStudent = async () => {
-  const choice = moveChoices.value.find(s => s.id === moveStudentId.value)
-  if (!choice || !moveTargetId.value || !result.value || !canEdit.value) return
+  const choice = moveChoices.value.find(student => student.id === moveStudentId.value)
+  if (!requireAdmin() || !choice || !moveTargetId.value || !result.value || !canEdit.value || (!preserveSecretary.value && !replacementSecretaryId.value)) return
+  const context = workspace.capture()
   moving.value = true
   try {
-    await moveScheduleStudent(choice.id, choice.groupId, moveTargetId.value, editingRevision.value)
+    await moveScheduleStudent(choice.id, choice.groupId, moveTargetId.value, editingRevision.value, { preserveSecretary: preserveSecretary.value, moveMentor: true, secretaryId: replacementSecretaryId.value })
+    if (!workspace.isCurrent(context, true)) return
     moveVisible.value = false
+    moving.value = false
     await fetchResult()
-    ElMessage.success('学生已移动，秘书绑定和冲突检测已更新')
+    ElMessage.success('学生已移动，导师/秘书关系与冲突检测已更新')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '移动失败')
-  } finally { moving.value = false }
+    if (workspace.isCurrent(context)) ElMessage.error(error instanceof Error ? error.message : '移动失败')
+  } finally { if (workspace.isCurrent(context)) moving.value = false }
 }
 
 const conflicts = ref<ScheduleConflict[]>([])
@@ -296,16 +329,13 @@ const teacherOptions = ref<ScheduleTeacher[]>([])
 const studentOptions = ref<ScheduleStudent[]>([])
 const classroomOptions = ref<{ campus: '创新港' | '兴庆'; name: string }[]>([])
 
-const updateOptimizationScore = async () => {
-  if (!result.value) {
-    optimizationSummary.value = null
-    return
-  }
+const updateOptimizationScore = async (scheduleResult: ScheduleResult, context: ScheduleContext) => {
   try {
-    const config = await getRuleConfig(defenseType.value)
-    optimizationSummary.value = evaluateSoftConstraints(result.value, config)
+    const config = await getRuleConfig(context.defenseType)
+    if (!workspace.isCurrent(context) || result.value?.versionId !== scheduleResult.versionId || result.value?.revision !== scheduleResult.revision) return
+    optimizationSummary.value = evaluateSoftConstraints(scheduleResult, config)
   } catch {
-    optimizationSummary.value = null
+    if (workspace.isCurrent(context)) optimizationSummary.value = null
   }
 }
 
@@ -327,35 +357,41 @@ const handleExportClick = () => {
   exportDialogVisible.value = true
 }
 
-const handleExportConfirm = async (format: 'excel' | 'word' = 'excel') => {
+const handleExportConfirm = async (format: 'excel' | 'word' | 'pdf' = 'excel') => {
+  const type = defenseType.value
+  const versionId = result.value?.versionId
   exportStatus.value = 'exporting'
   try {
-    if (format === 'word') {
-      await exportScheduleWord(defenseType.value, result.value?.versionId)
+    if (format === 'pdf') {
+      await exportSchedulePdf(type, versionId)
+    } else if (format === 'word') {
+      await exportScheduleWord(type, versionId)
     } else {
-      await exportScheduleExcel(defenseType.value, result.value?.versionId)
+      await exportScheduleExcel(type, versionId)
     }
     exportStatus.value = 'success'
-  } catch {
+  } catch (error) {
     exportStatus.value = 'error'
-    ElMessage.error('导出失败，请稍后重试')
+    ElMessage.error(error instanceof Error ? error.message : '导出失败，请稍后重试')
   }
 }
 
-const loadOptions = async () => {
+const loadOptions = async (context: ScheduleContext) => {
   const [teachers, students, classrooms] = await Promise.all([
     listTeachers(),
     listStudents(),
     listClassrooms()
   ])
 
-  teacherOptions.value = teachers.map(t => ({
+  if (!workspace.isCurrent(context)) return
+  teacherOptions.value = teachers.filter(t => t.isActive !== false).map(t => ({
     id: t.id,
     name: t.name,
     title: t.title,
     roles: t.roles,
     college: t.college,
-    isExternal: t.isExternal
+    isExternal: t.isExternal,
+    isActive: t.isActive, memberEligible: t.memberEligible, isSoftwareTeacher: t.isSoftwareTeacher
   }))
 
   studentOptions.value = students.map(s => ({
@@ -363,6 +399,7 @@ const loadOptions = async () => {
     name: s.name,
     studentType: s.studentType,
     mentorName: s.mentorName,
+    mentorId: s.mentorId, secretaryId: s.secretaryId, studentNo: s.studentNo, remark: s.remark,
     secretaryName: s.secretaryName
   }))
 
@@ -379,138 +416,175 @@ const applyConflictsFromResult = (scheduleResult: ScheduleResult): boolean => {
   return false
 }
 
-let resultRequest = 0
 const fetchResult = async () => {
-  const requestId = ++resultRequest
-  const currentDefenseType = defenseType.value
+  const context = workspace.begin()
   loading.value = true
   errorMsg.value = ''
+  conflictLoading.value = false
+  publishing.value = false
+  moving.value = false
   try {
-    const scheduleResult = await getScheduleResults(currentDefenseType, selectedVersion.value)
-    if (currentDefenseType !== defenseType.value || requestId !== resultRequest) return
+    const [scheduleResult, versionOptions] = await Promise.all([
+      getScheduleResults(context.defenseType, context.versionId), listScheduleVersions(context.defenseType)
+    ])
+    if (!workspace.isCurrent(context)) return
     result.value = scheduleResult
-    versions.value = await listScheduleVersions(currentDefenseType)
+    versions.value = versionOptions
+    conflicts.value = []
+    currentConflict.value = null
+    optimizationSummary.value = null
+    await loadOptions(context)
+    if (!workspace.isCurrent(context) || !scheduleResult) return
     if (!applyConflictsFromResult(scheduleResult)) {
-      await handleCheckConflicts(currentDefenseType)
+      const checked = await checkScheduleConflicts(context.defenseType, scheduleResult)
+      if (!workspace.isCurrent(context)) return
+      conflicts.value = checked
     }
-    await updateOptimizationScore()
-  } catch (e) {
-    if (currentDefenseType !== defenseType.value || requestId !== resultRequest) return
-    errorMsg.value = e instanceof Error ? e.message : '排期结果加载失败'
+    await updateOptimizationScore(scheduleResult, context)
+  } catch (error) {
+    if (!workspace.isCurrent(context)) return
+    errorMsg.value = error instanceof Error ? error.message : '排期结果加载失败'
     result.value = null
     conflicts.value = []
     currentConflict.value = null
     optimizationSummary.value = null
-  } finally {
-    if (currentDefenseType === defenseType.value && requestId === resultRequest) {
-      loading.value = false
-    }
-  }
+  } finally { if (workspace.isCurrent(context)) loading.value = false }
 }
 
 const prepareGeneration = async () => {
-  if (!requireAdmin() || loading.value) return
-  const type = defenseType.value
+  if (!requireAdmin() || loading.value || publishing.value || moving.value) return
+  const context = workspace.capture()
   loading.value = true
   try {
-    const [config, students] = await Promise.all([getRuleConfig(type), listStudents()])
-    if (type !== defenseType.value) return
+    const [config, students] = await Promise.all([getRuleConfig(context.defenseType), listStudents()])
+    if (!workspace.isCurrent(context)) return
     generationConfig.value = config
-    generationStudentCount.value = students.filter(student => student.defenseTypes.includes(type)).length
+    generationStudentCount.value = students.filter(student => student.defenseTypes.includes(context.defenseType)).length
     generationVisible.value = true
-  } catch (e) { ElMessage.error(e instanceof Error ? e.message : '无法读取安排要求，请重试') }
-  finally { if (type === defenseType.value) loading.value = false }
+  } catch (error) { if (workspace.isCurrent(context)) ElMessage.error(error instanceof Error ? error.message : '无法读取安排要求，请重试') }
+  finally { if (workspace.isCurrent(context)) loading.value = false }
+}
+
+const prepareLinkedGeneration = async () => {
+  if (!requireAdmin() || loading.value || publishing.value || moving.value) return
+  const context = workspace.capture()
+  loading.value = true
+  try {
+    const [pre, formal, students] = await Promise.all([getRuleConfig('预答辩'), getRuleConfig('正式答辩'), listStudents()])
+    if (!workspace.isCurrent(context)) return
+    linkedConfigs.value = [pre, { ...formal, preservePreDefenseGroups: true }]
+    const errors = [...validateWizardRules(pre), ...validateWizardRules(formal)]
+    if (!students.some(student => student.defenseTypes.includes('预答辩') && student.defenseTypes.includes('正式答辩'))) errors.push('请先为联合安排的学生勾选预答辩与正式答辩两个参与环节。')
+    linkedError.value = errors.join(' ')
+    linkedVisible.value = true
+  } catch (error) { if (workspace.isCurrent(context)) ElMessage.error(error instanceof Error ? error.message : '两阶段要求读取失败') }
+  finally { if (workspace.isCurrent(context)) loading.value = false }
+}
+
+const handleGenerateLinked = async () => {
+  if (!requireAdmin() || !linkedConfigs.value || linkedError.value || loading.value) return
+  const configs = linkedConfigs.value
+  linkedVisible.value = false
+  selectedVersion.value = undefined
+  const context = workspace.begin()
+  loading.value = true
+  try {
+    await generateLinkedSchedule(configs[0], configs[1])
+    if (!workspace.isCurrent(context)) return
+    ElMessage.success('两阶段草稿已生成，请分别核对冲突后发布')
+    await fetchResult()
+  } catch (error) {
+    if (!workspace.isCurrent(context)) return
+    errorMsg.value = error instanceof Error ? error.message : '联合生成失败'
+    ElMessage.error(`${errorMsg.value}。若请求超时，可重试获取同一联合生成结果。`)
+  } finally { if (workspace.isCurrent(context)) loading.value = false }
 }
 
 const handleGenerate = async () => {
   if (!requireAdmin() || !generationConfig.value || loading.value) return
   const config = generationConfig.value
+  const ruleErrors = validateWizardRules(config)
+  if (ruleErrors.length) { ElMessage.error(ruleErrors.join(' ')); return }
   generationVisible.value = false
-  const currentDefenseType = defenseType.value
+  selectedVersion.value = undefined
+  const context = workspace.begin()
   loading.value = true
   errorMsg.value = ''
   conflicts.value = []
   currentConflict.value = null
   try {
-    const scheduleResult = await generateSchedule(currentDefenseType, config)
-    if (currentDefenseType !== defenseType.value) return
-    selectedVersion.value = undefined
+    const scheduleResult = await generateSchedule(context.defenseType, config)
+    if (!workspace.isCurrent(context)) return
     result.value = scheduleResult
-    versions.value = await listScheduleVersions(currentDefenseType)
+    const options = await listScheduleVersions(context.defenseType)
+    if (!workspace.isCurrent(context)) return
+    versions.value = options
     ElMessage.success('草稿已生成，请核对冲突后发布')
     if (!applyConflictsFromResult(scheduleResult)) {
-      await handleCheckConflicts(currentDefenseType)
+      const checked = await checkScheduleConflicts(context.defenseType, scheduleResult)
+      if (!workspace.isCurrent(context)) return
+      conflicts.value = checked
     }
-    await updateOptimizationScore()
-  } catch (e) {
-    if (currentDefenseType !== defenseType.value) return
-    errorMsg.value = e instanceof Error ? e.message : '生成失败'
+    await loadOptions(context)
+    if (!workspace.isCurrent(context)) return
+    await updateOptimizationScore(scheduleResult, context)
+  } catch (error) {
+    if (!workspace.isCurrent(context)) return
+    errorMsg.value = error instanceof Error ? error.message : '生成失败'
     conflicts.value = []
     currentConflict.value = null
     ElMessage.error(`${errorMsg.value}。若请求超时，可重试获取同一生成结果。`)
-  } finally {
-    if (currentDefenseType === defenseType.value) {
-      loading.value = false
-    }
-  }
+  } finally { if (workspace.isCurrent(context)) loading.value = false }
 }
 
 const handleRefresh = async () => {
   await fetchResult()
 }
 
-const handleCheckConflicts = async (targetDefenseType: DefenseType = defenseType.value) => {
-  if (!result.value) {
-    conflicts.value = []
-    currentConflict.value = null
-    return
-  }
-
+let conflictRequest = 0
+const handleCheckConflicts = async () => {
+  const current = result.value
+  if (!current || loading.value) return
+  const context = workspace.capture()
+  const requestId = ++conflictRequest
   conflictLoading.value = true
   try {
-    const nextConflicts = await checkScheduleConflicts(targetDefenseType, result.value)
-    if (targetDefenseType !== defenseType.value) return
-    conflicts.value = nextConflicts
-  } catch (e) {
-    if (targetDefenseType !== defenseType.value) return
-    const message = e instanceof Error ? e.message : '冲突检测失败'
-    ElMessage.error(message)
-  } finally {
-    if (targetDefenseType === defenseType.value) {
-      conflictLoading.value = false
-    }
-  }
+    const checked = await checkScheduleConflicts(context.defenseType, current)
+    if (!workspace.isCurrent(context, true) || requestId !== conflictRequest) return
+    conflicts.value = checked
+  } catch (error) {
+    if (workspace.isCurrent(context, true) && requestId === conflictRequest) ElMessage.error(error instanceof Error ? error.message : '冲突检测失败')
+  } finally { if (workspace.isCurrent(context) && requestId === conflictRequest) conflictLoading.value = false }
 }
 
 const handleSaveAdjust = async (groupData: ScheduleGroup) => {
-  if (!requireAdmin()) return
-  if (!result.value) return
+  if (!requireAdmin() || !result.value || !canEdit.value) return
+  const context = workspace.capture()
   adjustSaving.value = true
   try {
-    await updateScheduleGroup({
-      defenseType: defenseType.value,
-      groupId: groupData.id,
-      expectedRevision: editingRevision.value,
-      groupData
-    })
+    await updateScheduleGroup({ defenseType: context.defenseType, groupId: groupData.id, expectedRevision: editingRevision.value, groupData })
+    if (!workspace.isCurrent(context, true)) return
     adjustVisible.value = false
+    adjustSaving.value = false
     ElMessage.success('调整保存成功')
     await fetchResult()
-  } catch (e) {
-    const message = e instanceof Error ? e.message : '保存失败，请稍后重试'
-    ElMessage.error(message)
-  } finally {
-    adjustSaving.value = false
-  }
+  } catch (error) {
+    if (workspace.isCurrent(context)) ElMessage.error(error instanceof Error ? error.message : '保存失败，请稍后重试')
+  } finally { if (workspace.isCurrent(context)) adjustSaving.value = false }
 }
 
-watch(selectedVersion, () => { adjustVisible.value = false; moveVisible.value = false })
+watch(selectedVersion, () => { adjustVisible.value = false; moveVisible.value = false; generationVisible.value = false; linkedVisible.value = false; publishing.value = false; moving.value = false; adjustSaving.value = false })
+watch(moveVisible, visible => { if (visible) { preserveSecretary.value = true; replacementSecretaryId.value = undefined; moveStudentId.value = undefined; moveTargetId.value = undefined } })
 
 watch(defenseType, async () => {
   selectedVersion.value = undefined
   adjustVisible.value = false
   moveVisible.value = false
   generationVisible.value = false
+  linkedVisible.value = false
+  publishing.value = false
+  moving.value = false
+  adjustSaving.value = false
   result.value = null
   conflicts.value = []
   currentConflict.value = null
@@ -525,15 +599,7 @@ watch(canManage, isAllowed => {
   }
 })
 
-onMounted(() => {
-  loadOptions().catch(e => {
-    const message = e instanceof Error ? e.message : '调整选项加载失败'
-    ElMessage.error(message)
-  })
-  const local = readLocalConflicts(defenseType.value)
-  conflicts.value = local.conflicts
-  fetchResult()
-})
+onMounted(() => { void fetchResult() })
 
 const groupStatusMap = computed(() => {
   const map: Record<number, 'normal' | 'warning' | 'error'> = {}
@@ -578,7 +644,7 @@ watch(() => ({
   hasResult: !!result.value?.groups.length && !errorMsg.value,
   status: result.value?.status === 'published' ? 'published' as const : 'draft' as const,
   errorCount: conflicts.value.filter(conflict => conflict.level === 'error').length,
-  busy: loading.value || publishing.value || moving.value || adjustSaving.value || conflictLoading.value || generationVisible.value || adjustVisible.value || moveVisible.value || exportDialogVisible.value || exportStatus.value === 'exporting'
+  busy: loading.value || publishing.value || moving.value || adjustSaving.value || conflictLoading.value || generationVisible.value || linkedVisible.value || adjustVisible.value || moveVisible.value || exportDialogVisible.value || exportStatus.value === 'exporting'
 }), state => emit('state', state), { immediate: true })
 
 const emptyResultDescription = computed(() => {
@@ -609,7 +675,7 @@ const meta = computed(() => {
   const teacherSet = new Set<number>()
   let studentCount = 0
   for (const g of result.value.groups) {
-    for (const t of g.teachers) teacherSet.add(t.id)
+    for (const t of getScheduleExperts(g)) teacherSet.add(t.id)
     studentCount += g.students.length
   }
 

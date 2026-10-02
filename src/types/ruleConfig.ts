@@ -1,6 +1,5 @@
-export type DefenseType = '预答辩' | '正式答辩' | '中期答辩'
-
-export type TeacherTitle = '教授' | '副教授' | '讲师' | '其他'
+import type { DefenseType, TeacherTitle } from '../domain/defense'
+export type { DefenseType, TeacherTitle } from '../domain/defense'
 
 export interface RoleQualificationConfig {
   leaderMinTitle?: TeacherTitle
@@ -29,6 +28,13 @@ export interface SoftConstraintWeightConfig {
 }
 
 export interface RuleConfig {
+  policyVersion?: 2
+  expertCountIncludesChair?: boolean
+  courseHalfDayBlocking?: boolean
+  formalSoftwareMin?: number
+  includeRemarks?: boolean
+  preservePreDefenseGroups?: boolean
+  campusStartDates?: Record<string, string>
   defenseType: DefenseType
   enabled: boolean
   startDate: string

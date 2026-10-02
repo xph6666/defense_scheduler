@@ -1,3 +1,5 @@
+import { getDefensePolicy } from '../domain/defense'
+import { normalizeRuleConfig } from '../domain/scheduleRules'
 import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 
 const STORAGE_KEY_PREFIX = 'rule_config_'
@@ -13,74 +15,24 @@ function addDays(dateText: string, days: number): string {
 
 export function getDefaultRuleConfig(defenseType: DefenseType): RuleConfig {
   const startDate = new Date().toISOString().split('T')[0]
-  const base: RuleConfig = {
+  const policy = getDefensePolicy(defenseType)
+  return normalizeRuleConfig({
+    ...policy,
     defenseType,
-    enabled: true,
     startDate,
     endDate: addDays(startDate, 10),
-    avoidWeekend: true,
-    avoidHoliday: true,
-    mentorAvoidance: false,
-    studentCount: { target: 6, min: 4, max: 8 },
-    expertCount: { target: 3, min: 3 },
-    secretaryCount: 1,
-    roleQualification: {
-      leaderMinTitle: '副教授',
-      secretaryMinTitle: '讲师',
-      preferSeniorTitle: true
-    },
-    softWeights: {
-      balanceStudentCount: 5,
-      preferSeniorTeacher: 8,
-      avoidCrossCampus: 3,
-      externalMentorConcentration: 2,
-      preferAcademicMasterFirst: 0
-    }
-  }
-
-  if (defenseType === '正式答辩') {
-    return {
-      ...base,
-      mentorAvoidance: true,
-      expertCount: { target: 5, min: 5 },
-      roleQualification: {
-        chairmanMinTitle: '教授',
-        secretaryMinTitle: '讲师',
-        preferSeniorTitle: true
-      },
-      softWeights: {
-        balanceStudentCount: 5,
-        preferSeniorTeacher: 9,
-        avoidCrossCampus: 5,
-        externalMentorConcentration: 4,
-        preferAcademicMasterFirst: 7
-      }
-    }
-  }
-
-  if (defenseType === '中期答辩') {
-    return {
-      ...base,
-      studentCount: { target: 12, min: 10, max: 13 },
-      expertCount: { target: 5, min: 5 },
-      softWeights: {
-        balanceStudentCount: 8,
-        preferSeniorTeacher: 5,
-        avoidCrossCampus: 7,
-        externalMentorConcentration: 3,
-        preferAcademicMasterFirst: 0
-      }
-    }
-  }
-
-  return base as RuleConfig
+    studentCount: { ...policy.studentCount },
+    expertCount: { target: policy.expertCount.target, min: policy.expertCount.min },
+    roleQualification: { ...policy.roleQualification },
+    softWeights: { ...policy.softWeights }
+  } as RuleConfig)
 }
 
 export function getRuleConfigFromStorage(defenseType: DefenseType): RuleConfig {
   const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}${defenseType}`)
   if (saved) {
     try {
-      return JSON.parse(saved)
+      return normalizeRuleConfig({ ...getDefaultRuleConfig(defenseType), ...JSON.parse(saved), policyVersion: JSON.parse(saved).policyVersion, defenseType })
     } catch (e) {
       console.error('Failed to parse rule config', e)
     }
@@ -90,7 +42,7 @@ export function getRuleConfigFromStorage(defenseType: DefenseType): RuleConfig {
 
 export function saveRuleConfigToStorage(config: RuleConfig): void {
   config.updatedAt = new Date().toLocaleString()
-  localStorage.setItem(`${STORAGE_KEY_PREFIX}${config.defenseType}`, JSON.stringify(config))
+  localStorage.setItem(`${STORAGE_KEY_PREFIX}${config.defenseType}`, JSON.stringify(normalizeRuleConfig(config)))
 }
 
 export function resetRuleConfig(defenseType: DefenseType): RuleConfig {

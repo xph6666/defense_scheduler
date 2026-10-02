@@ -126,11 +126,11 @@ const resultState = ref<ScheduleWorkflowState>({ hasResult: false, status: 'draf
 const participants = computed(() => students.value.filter(student => student.defenseTypes.includes(defenseType.value)))
 const materials = computed(() => [
   { kind: 'student' as const, title: '学生名单', shortTitle: '学生', path: '/students', count: participants.value.length, unit: '人', hint: `参加${defenseType.value}的学生。请核对学号、导师和参与环节。` },
-  { kind: 'teacher' as const, title: '教师与专家', shortTitle: '教师', path: '/teachers', count: teachers.value.filter(t => !t.availableTypes.length || t.availableTypes.includes(defenseType.value)).length, unit: '人', hint: '核对职称、可担任角色、不可用时间。课表可在教师管理中导入。' },
+  { kind: 'teacher' as const, title: '教师与专家', shortTitle: '教师', path: '/teachers', count: teachers.value.filter(t => t.isActive !== false && (!t.availableTypes.length || t.availableTypes.includes(defenseType.value))).length, unit: '人', hint: '核对职称、可担任角色、不可用时间。课表可在教师管理中导入。' },
   { kind: 'classroom' as const, title: '教室资料', shortTitle: '教室', path: '/classrooms', count: rooms.value.length, unit: '间', hint: '核对校区、容量，以及实际可使用的日期和时段。' }
 ])
 const missingMaterials = computed(() => materials.value.filter(item => !item.count))
-const mentorWarnings = computed(() => participants.value.flatMap(student => !student.mentorName ? [`${student.name}尚未填写导师`] : !teachers.value.some(t => t.name === student.mentorName) ? [`${student.name}的导师“${student.mentorName}”未在教师名单中`] : []))
+const mentorWarnings = computed(() => participants.value.flatMap(student => !student.mentorName ? [`${student.name}尚未填写导师`] : !teachers.value.some(t => t.isActive !== false && (student.mentorId ? t.id === student.mentorId : t.name === student.mentorName)) ? [`${student.name}的导师“${student.mentorName}”未在在用教师名单中`] : []))
 const busy = computed(() => loading.value || saving.value || (step.value >= 4 && resultState.value.busy))
 const canContinue = computed(() => !busy.value && (step.value === 1 || (step.value === 2 ? !loadError.value && !missingMaterials.value.length : step.value === 3 ? !!config.value && !loadError.value : resultState.value.hasResult)))
 const preparationLink = (path: string) => ({ path, query: { type: defenseType.value, wizard: '1' } })

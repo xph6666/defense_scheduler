@@ -48,12 +48,13 @@
         <el-radio-group v-model="format">
           <el-radio value="word">Word 时间安排表（推荐，含导师-学生同色标注）</el-radio>
           <el-radio value="excel">Excel 分组明细（每组一个工作表，同色标注）</el-radio>
+          <el-radio value="pdf">PDF · 打印或保存为 PDF（师生同色，冲突标红）</el-radio>
         </el-radio-group>
       </div>
 
       <div class="text-xs text-gray-400 p-2">
         <el-icon class="mr-1"><InfoFilled /></el-icon>
-        提示：导师与其学生使用同一颜色标注；红色为组号、时间等结构信息。
+        提示：导师与其学生使用同一颜色标注；PDF 在打印窗口中保存，存在冲突的分组标红。
       </div>
     </div>
 
@@ -85,10 +86,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm', format: 'excel' | 'word'): void
+  (e: 'confirm', format: 'excel' | 'word' | 'pdf'): void
 }>()
 
-const format = ref<'excel' | 'word'>('word')
+const format = ref<'excel' | 'word' | 'pdf'>('excel')
 
 const visible = computed({
   get: () => props.modelValue,

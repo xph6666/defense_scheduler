@@ -1,6 +1,7 @@
+import { runtimeConfig } from '../config/runtime'
 import request from './request'
 
-const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+const USE_MOCK = runtimeConfig.useMock
 
 export interface LoginResult {
   token: string

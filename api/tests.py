@@ -8,6 +8,7 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 import algorithm
@@ -170,7 +171,10 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['defenseType'], '预答辩')
         self.assertIn('studentCount', response.data)
-        self.assertEqual(response.data['endDate'], '2025-05-20')
+        self.assertEqual(response.data['endDate'], (timezone.localdate() + timedelta(days=10)).isoformat())
+        self.assertEqual(response.data['expertCount']['target'], 4)
+        self.assertEqual(response.data['policyVersion'], 2)
+        self.assertFalse(response.data['mentorAvoidance'])
 
         response = self.client.post(
             '/api/rule-config/',

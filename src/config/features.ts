@@ -1,4 +1,3 @@
-const truthy = (value: unknown) => String(value ?? '').toLowerCase() === 'true'
-
-export const enableDemoTools =
-  import.meta.env.DEV || truthy(import.meta.env.VITE_ENABLE_DEMO_TOOLS)
+export { runtimeConfig } from './runtime'
+import { runtimeConfig } from './runtime'
+export const enableDemoTools = runtimeConfig.enableDemoTools

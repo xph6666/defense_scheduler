@@ -1,8 +1,9 @@
+import { runtimeConfig } from '../config/runtime'
 import request from './request'
 import type { OperationLog, OperationType } from '../types/operationLog'
 import { addOperationLog, clearOperationLogs, getOperationLogs } from '../utils/operationLogStorage'
 
-const USE_MOCK = (import.meta as any).env?.VITE_USE_MOCK === 'true'
+const USE_MOCK = runtimeConfig.useMock
 
 interface CreateOperationLogPayload {
   type: OperationType

@@ -30,25 +30,26 @@
 
       <el-form-item :label="leaderLabel" :prop="leaderProp">
         <el-select v-model="leaderValue" filterable style="width: 100%">
-          <el-option v-for="t in teacherNameOptions" :key="t" :label="t" :value="t" />
+          <el-option v-for="teacher in chairOptions" :key="teacher.id" :label="`${teacher.name}（${teacher.title}）· #${teacher.id}`" :value="teacher.id" />
         </el-select>
       </el-form-item>
 
       <el-form-item label="秘书" prop="secretary">
-        <el-select v-model="form.secretary" filterable style="width: 100%">
-          <el-option v-for="t in teacherNameOptions" :key="t" :label="t" :value="t" />
+        <el-select v-model="secretaryValue" filterable style="width: 100%">
+          <el-option v-for="teacher in secretaryOptions" :key="teacher.id" :label="`${teacher.name} · #${teacher.id}`" :value="teacher.id" />
         </el-select>
       </el-form-item>
 
-      <el-form-item label="专家列表" prop="teachers">
+      <el-form-item label="普通专家/组员" prop="teachers">
         <el-select v-model="teacherIds" multiple filterable style="width: 100%">
           <el-option
-            v-for="t in teachers"
+            v-for="t in memberOptions"
             :key="t.id"
             :label="`${t.name}（${t.title}）`"
             :value="t.id"
           />
         </el-select>
+        <div class="text-xs text-gray-500 mt-1">主席/组长单独选择并计入专家总人数；这里选择其余组员。</div>
       </el-form-item>
 
       <el-form-item label="学生列表" prop="students">
@@ -125,14 +126,20 @@ watch(
   () => props.group,
   g => {
     if (!g) return
-    Object.assign(form, JSON.parse(JSON.stringify(g)))
+    Object.assign(form, emptyGroup, JSON.parse(JSON.stringify(g)))
+    form.chairId = g.chairId ?? props.teachers.find(teacher => teacher.name === (g.chairman || g.leader))?.id
+    form.secretaryId = g.secretaryId ?? props.teachers.find(teacher => teacher.name === g.secretary)?.id
+    form.teachers = form.teachers.filter(teacher => teacher.id !== form.chairId)
   },
   { immediate: true }
 )
 
-const teacherNameOptions = computed(() => {
-  return Array.from(new Set(props.teachers.map(t => t.name))).filter(Boolean)
-})
+const chairOptions = computed(() => props.teachers.filter(teacher => {
+  const qualified = props.defenseType === '正式答辩' ? teacher.title === '教授' : ['教授', '副教授'].includes(teacher.title)
+  return qualified && (teacher.roles.includes(props.defenseType === '正式答辩' ? '主席' : '组长') || teacher.id === form.chairId)
+}))
+const secretaryOptions = computed(() => props.teachers.filter(teacher => teacher.roles.includes('秘书') && teacher.title !== '其他'))
+const memberOptions = computed(() => props.teachers.filter(teacher => teacher.memberEligible !== false && teacher.id !== form.chairId && teacher.id !== form.secretaryId))
 
 const filteredClassrooms = computed(() => {
   return props.classrooms.filter(c => c.campus === form.campus).map(c => c.name)
@@ -148,17 +155,21 @@ const leaderLabel = computed(() => (props.defenseType === '正式答辩' ? '主�
 const leaderProp = computed(() => (props.defenseType === '正式答辩' ? 'chairman' : 'leader'))
 
 const leaderValue = computed({
-  get() {
-    return props.defenseType === '正式答辩' ? form.chairman || '' : form.leader || ''
-  },
-  set(v: string) {
-    if (props.defenseType === '正式答辩') {
-      form.chairman = v
-      form.leader = undefined
-    } else {
-      form.leader = v
-      form.chairman = undefined
-    }
+  get: () => form.chairId,
+  set(id: number | undefined) {
+    const teacher = props.teachers.find(teacher => teacher.id === id)
+    form.chairId = id
+    form.chairTitle = teacher?.title
+    if (props.defenseType === '正式答辩') { form.chairman = teacher?.name; form.leader = undefined }
+    else { form.leader = teacher?.name; form.chairman = undefined }
+    form.teachers = form.teachers.filter(member => member.id !== id)
+  }
+})
+const secretaryValue = computed({
+  get: () => form.secretaryId,
+  set(id: number | undefined) {
+    form.secretaryId = id
+    form.secretary = props.teachers.find(teacher => teacher.id === id)?.name || ''
   }
 })
 
@@ -181,6 +192,8 @@ const studentIds = computed<number[]>({
 })
 
 const rules = reactive<FormRules>({
+  chairman: [{ required: true, message: '请选择主席', trigger: 'change' }],
+  leader: [{ required: true, message: '请选择组长', trigger: 'change' }],
   groupName: [{ required: true, message: '请输入组名', trigger: 'blur' }],
   date: [{ required: true, message: '请选择日期', trigger: 'change' }],
   timeRange: [{ required: true, message: '请选择时间段', trigger: 'change' }],

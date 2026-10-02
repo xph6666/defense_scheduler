@@ -1,12 +1,13 @@
 """Transactional schedule editing, immutable exports and server-side audit."""
+from copy import deepcopy
 from functools import wraps
 from types import SimpleNamespace
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Prefetch
 from rest_framework.response import Response
 
-from .models import Group, OperationLog, ScheduleVersion, ScheduleWriteLock
+from .models import Group, OperationLog, ScheduleVersion, ScheduleWriteLock, Student
 
 
 def audit(request, action, description, **details):
@@ -44,11 +45,26 @@ def schedule_write(fn):
                 transaction.set_rollback(True)
                 return Response({'error': '缺少编辑版本号，请刷新页面后重新提交'}, status=428)
             for version in versions.values():
-                if version.defense_type == 'pre':
-                    self._sync_student_secretaries(version)
+                # Commands may update their own ORM instance's relation baseline.
+                # Reload it before validating and incrementing this transaction.
+                version.refresh_from_db()
+                edited_group = next((g for g in groups if str(g.pk) == str(request.data.get('group_id'))), None)
+                secretary_edit = request.data.get('action') == 'change_secretary'
+                group_data = request.data.get('group_data') or {}
+                if fn.__name__ == 'adjust_group' and edited_group and any(
+                        key in group_data for key in ('secretary', 'secretaryId')):
+                    # Complete edit forms also submit an unchanged secretary.
+                    # Only an actual change authorizes rebinding the students.
+                    saved_secretary_id = Group.objects.filter(pk=edited_group.pk).values_list('secretary_id', flat=True).first()
+                    secretary_edit = secretary_edit or saved_secretary_id != edited_group.secretary_id
+                if version.defense_type == 'pre' and secretary_edit and edited_group:
+                    self._sync_student_secretaries(version, group_id=edited_group.pk)
                 version.revision += 1
                 version.conflicts_snapshot = self._check_conflicts(version)
                 version.save(update_fields=['revision', 'conflicts_snapshot'])
+                if isinstance(response.data, dict) and 'conflicts' in response.data:
+                    response.data['conflicts'] = version.conflicts_snapshot
+                    response.data['revision'] = version.revision
             audit(request, '调整' if group_ids else '生成', f'完成排期操作：{fn.__name__}',
                   group_ids=group_ids, version_ids=list(versions), changes=request.data,
                   before=before, after={str(v.id): self._version_result(v) for v in versions.values()})
@@ -68,24 +84,50 @@ class FrozenList(list):
 
 
 def capture_export_groups(version):
+    if version.export_snapshot:
+        return deepcopy(version.export_snapshot)
     from .models import Teacher
-    titles = dict(Teacher.objects.values_list('name', 'title'))
+    teacher_details = list(Teacher.objects.values_list('id', 'name', 'title'))
+    titles = {name: title for _, name, title in teacher_details}
+    teacher_names = {teacher_id: name for teacher_id, name, _ in teacher_details}
+    # A formal draft's explicit edits belong to this version. A later pre round
+    # may rebind Student globally without changing these saved relationships.
+    secretary_bindings = {row['id']: row['secretary_id']
+        for row in version.input_snapshot.get('students', []) if 'secretary_id' in row
+    } if version.defense_type == 'formal' else {}
     def fields(obj):
         if obj is None:
             return None
-        return {f.name: getattr(obj, f.name) for f in obj._meta.fields}
+        return {f.attname: getattr(obj, f.attname) for f in obj._meta.fields}
+    def student_fields(student):
+        values = fields(student)
+        mentor_name = student.mentor.name if student.mentor_id else student.mentor_name
+        values['mentor_name'] = mentor_name
+        if student.pk in secretary_bindings:
+            secretary_id = secretary_bindings[student.pk]
+            values['bound_secretary_id'] = secretary_id
+            # Preserve a dangling ID so validation can report the data error;
+            # neither an explicit None nor a missing teacher falls back.
+            values['secretary_name'] = teacher_names.get(secretary_id, '')
+        elif student.bound_secretary_id:
+            values['secretary_name'] = student.bound_secretary.name
+        values['mentor_title'] = titles.get(mentor_name, '')
+        return values
     return [dict(id=g.id, group_id=g.group_id, time=g.time, campus=g.campus,
                  room=fields(g.room), chair=fields(g.chair), secretary=fields(g.secretary),
                  experts=[fields(t) for t in g.experts.all()],
-                 students=[{**fields(s), 'mentor_title': titles.get(s.mentor_name, '')} for s in g.students.all()])
-            for g in version.groups.select_related('room', 'chair', 'secretary').prefetch_related('experts', 'students')]
+                 students=[student_fields(s) for s in g.students.all()])
+            for g in version.groups.select_related('room', 'chair', 'secretary').prefetch_related(
+                'experts', Prefetch('students', queryset=Student.objects.select_related('mentor', 'bound_secretary'))).order_by('id')]
 
 
 def export_groups(version):
-    if not version.export_snapshot:
-        return version.groups.select_related('room', 'chair', 'secretary').prefetch_related('experts', 'students').order_by('id')
+    if not version.export_snapshot and version.defense_type != 'formal':
+        return version.groups.select_related('room', 'chair', 'secretary').prefetch_related(
+            'experts', Prefetch('students', queryset=Student.objects.select_related('mentor', 'bound_secretary'))).order_by('id')
     groups = FrozenList()
-    for row in version.export_snapshot:
+    rows = version.export_snapshot or capture_export_groups(version)
+    for row in rows:
         values = dict(row)
         for key in ('room', 'chair', 'secretary'):
             values[key] = SimpleNamespace(**values[key]) if values[key] else None

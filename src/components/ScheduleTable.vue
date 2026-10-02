@@ -19,8 +19,8 @@
       </template>
     </el-table-column>
     <el-table-column prop="secretary" label="秘书" width="120" />
-    <el-table-column label="专家人数" width="90">
-      <template #default="{ row }">{{ row.teachers?.length || 0 }}</template>
+    <el-table-column label="专家总数" width="100">
+      <template #default="{ row }">{{ getScheduleExperts(row).length }}</template>
     </el-table-column>
     <el-table-column label="学生人数" width="90">
       <template #default="{ row }">{{ row.students?.length || 0 }}</template>
@@ -28,7 +28,7 @@
     <el-table-column label="专家名单" min-width="220">
       <template #default="{ row }">
         <div class="flex flex-wrap gap-1">
-          <el-tag v-for="t in row.teachers" :key="t.id" size="small">
+          <el-tag v-for="t in getScheduleExperts(row)" :key="t.id" size="small">
             {{ t.name }}
           </el-tag>
         </div>
@@ -58,6 +58,7 @@
 </template>
 
 <script setup lang="ts">
+import { getScheduleExperts } from '../domain/scheduleExperts'
 import type { ScheduleGroup } from '../types/schedule'
 import { getMentorColor } from '../utils/color'
 import ConflictTag from './ConflictTag.vue'

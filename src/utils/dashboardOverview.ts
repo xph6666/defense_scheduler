@@ -3,6 +3,7 @@ import type { ScheduleResult } from '../types/schedule'
 
 interface LocalConflictRecord {
   checkedAt: string
+  defenseType?: string
   conflicts: ScheduleConflict[]
 }
 
@@ -38,29 +39,25 @@ export const summarizeConflictOverview = (
   localRecords: LocalConflictRecord[] = []
 ) => {
   let latest = 0
-  let latestConflicts: ScheduleConflict[] = []
-
-  for (const record of localRecords) {
-    const timestamp = parseTime(record.checkedAt)
-    if (!timestamp) continue
-    if (timestamp >= latest) {
-      latest = timestamp
-      latestConflicts = record.conflicts
-    }
-  }
-
+  const byType = new Map<string, { timestamp: number; conflicts: ScheduleConflict[] }>()
   for (const result of results.filter(isGeneratedResult)) {
     if (!Array.isArray(result.conflicts)) continue
     const timestamp = parseTime(result.generatedAt)
-    if (timestamp >= latest) {
-      latest = timestamp
-      latestConflicts = result.conflicts
-    }
+    latest = Math.max(latest, timestamp)
+    byType.set(result.defenseType, { timestamp, conflicts: result.conflicts })
   }
-
+  for (const record of localRecords) {
+    const timestamp = parseTime(record.checkedAt)
+    if (!timestamp) continue
+    const type = record.defenseType || record.conflicts[0]?.defenseType
+    if (!type || !byType.has(type)) continue
+    latest = Math.max(latest, timestamp)
+    if (timestamp >= (byType.get(type)?.timestamp || 0)) byType.set(type, { timestamp, conflicts: record.conflicts })
+  }
+  const conflicts = [...byType.values()].flatMap(record => record.conflicts)
   return {
-    errorCount: latestConflicts.filter(conflict => conflict.level === 'error').length,
-    warningCount: latestConflicts.filter(conflict => conflict.level === 'warning').length,
+    errorCount: conflicts.filter(conflict => conflict.level === 'error').length,
+    warningCount: conflicts.filter(conflict => conflict.level === 'warning').length,
     checkedAt: formatTime(latest)
   }
 }

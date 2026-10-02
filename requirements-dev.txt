@@ -1,4 +1,5 @@
 # Optional verification tools, not needed to start the application.
 -r requirements.txt
 playwright==1.58.0
+psutil==7.1.3
 # Install the browser after pip: python -m playwright install chromium

@@ -2,8 +2,8 @@ import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { DefenseType } from '../types/schedule'
 
-export const defenseTypes: DefenseType[] = ['预答辩', '正式答辩', '中期答辩']
-const isDefenseType = (value: unknown): value is DefenseType => defenseTypes.includes(value as DefenseType)
+import { isDefenseType } from '../domain/defense'
+export { defenseTypes } from '../domain/defense'
 let saved: string | null = null
 try { saved = sessionStorage.getItem('workflow-defense-type') } catch { /* optional preference */ }
 export const workflowDefenseType = ref<DefenseType>(isDefenseType(saved) ? saved : '预答辩')

@@ -38,7 +38,7 @@
       </el-dropdown>
       <el-button type="primary" plain :disabled="!hasResult" @click="emit('export')">
         <template #icon><el-icon><Download /></el-icon></template>
-        导出 Word/Excel
+        导出 Excel/Word/PDF
       </el-button>
     </div>
   </div>

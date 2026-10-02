@@ -9,7 +9,7 @@ block_cipher = None
 
 project_modules = [
     module
-    for module in collect_submodules('api') + collect_submodules('defense_scheduler')
+    for module in collect_submodules('api') + collect_submodules('defense_scheduler') + collect_submodules('scheduling')
     if not module.rsplit('.', 1)[-1].startswith('test')
 ]
 
@@ -66,6 +66,7 @@ datas += collect_data_files('rest_framework', include_py_files=False)
 datas += collect_data_files('docx', include_py_files=False)
 # 导师配色的唯一数据源，前后端共用；运行时由 api/mentor_colors.py 从 _MEIPASS 下读取
 datas += [(str(Path('shared') / 'mentor-colors.json'), 'shared')]
+datas += [(str(Path('shared') / 'defense-policy.json'), 'shared')]
 
 a = Analysis(
     ['defense_scheduler/desktop_entry.py'],

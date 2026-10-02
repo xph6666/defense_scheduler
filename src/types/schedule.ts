@@ -1,6 +1,7 @@
 import type { ScheduleConflict } from './conflict'
 
-export type DefenseType = '预答辩' | '正式答辩' | '中期答辩'
+import type { DefenseType } from '../domain/defense'
+export type { DefenseType } from '../domain/defense'
 
 export interface ScheduleWorkflowState {
   hasResult: boolean
@@ -16,7 +17,10 @@ export interface ScheduleStudent {
   // 真实名单中该列为学科（如"计算机科学与技术"），不再限定为 学硕/专硕
   studentType: string
   mentorName: string
+  mentorId?: number | null
+  secretaryId?: number | null
   secretaryName?: string
+  remark?: string
 }
 
 export interface ScheduleTeacher {
@@ -26,6 +30,9 @@ export interface ScheduleTeacher {
   roles: string[]
   college?: string
   isExternal?: boolean
+  isActive?: boolean
+  memberEligible?: boolean
+  isSoftwareTeacher?: boolean
 }
 
 export interface ScheduleGroup {

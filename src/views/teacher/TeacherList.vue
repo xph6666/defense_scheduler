@@ -67,6 +67,13 @@
           <el-tag :type="row.isExternal ? 'warning' : 'info'">{{ row.isExternal ? '是' : '否' }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="状态与资格" min-width="185">
+        <template #default="{ row }">
+          <el-tag :type="row.isActive === false ? 'info' : 'success'" size="small">{{ row.isActive === false ? '已停用' : '在用' }}</el-tag>
+          <el-tag v-if="row.memberEligible === false" size="small" type="warning" class="ml-1">仅主席/组长</el-tag>
+          <el-tag v-if="row.isSoftwareTeacher" size="small" class="ml-1">软件学院</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column prop="title" label="职称" width="100" />
       <el-table-column prop="roles" label="可担任角色" min-width="150">
         <template #default="{ row }">
@@ -119,6 +126,9 @@
         <el-form-item label="是否外院" prop="isExternal">
           <el-switch v-model="form.isExternal" />
         </el-form-item>
+        <el-form-item label="参与排期"><el-switch v-model="form.isActive" active-text="在用" inactive-text="停用" /></el-form-item>
+        <el-form-item label="适合担任组员"><el-switch v-model="form.memberEligible" /><span class="text-xs text-gray-500 ml-2">关闭后仅可担任主席或组长。</span></el-form-item>
+        <el-form-item label="计为软件学院导师"><el-switch v-model="form.isSoftwareTeacher" /><span class="text-xs text-gray-500 ml-2">补充认定；非外院且学院含“软件”时自动计入。</span></el-form-item>
         <el-form-item label="职称" prop="title">
           <el-select v-model="form.title" placeholder="请选择职称" style="width: 100%">
             <el-option label="教授" value="教授" />
@@ -245,6 +255,9 @@ const defaultForm: Omit<Teacher, 'id'> = {
   name: '',
   college: '',
   isExternal: false,
+  isActive: true,
+  memberEligible: true,
+  isSoftwareTeacher: false,
   title: '讲师',
   roles: [],
   availableTypes: [],
@@ -316,7 +329,7 @@ const handleAdd = () => {
 const handleEdit = (row: Teacher) => {
   if (!requireAdmin()) return
   isEdit.value = true
-  Object.assign(form, JSON.parse(JSON.stringify(row)))
+  Object.assign(form, defaultForm, JSON.parse(JSON.stringify(row)))
   dialogVisible.value = true
   if (formRef.value) formRef.value.clearValidate()
 }

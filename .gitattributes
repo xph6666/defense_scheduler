@@ -1,0 +1,6 @@
+# Markdown uses trailing spaces for deliberate hard line breaks.
+*.md whitespace=-blank-at-eol
+
+# Office files must retain their original bytes during checkout and staging.
+*.docx binary
+*.xlsx binary

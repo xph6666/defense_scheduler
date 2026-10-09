@@ -2,17 +2,20 @@
 
 基于 Vue 3、TypeScript、Vite、Element Plus、Django 和 DRF 的答辩分组排期系统，支持基础数据管理、规则配置、自动排期、冲突检测、人工调整、Excel 导出和操作日志。
 
-现已支持草稿校验发布、历史快照、并发编辑保护、生成请求去重和服务端审计。升级、备份恢复及生产部署参见 [稳定性升级与运维说明](开发文档/稳定性升级与运维说明.md)。
+五人协作从 [STATUS.md](STATUS.md) 查看当前目标、分工、任务和阻塞；日常开发遵循 [CONTRIBUTING.md](CONTRIBUTING.md)，完整目录见 [文档索引](docs/README.md)。
 
-V2 架构将排期接口、应用服务、输入适配与纯算法领域分开，前后端共用场景规则；新增教师资格与稳定人员关联、预答辩/正式答辩联合生成、关联移动校验和 PDF 打印保存。实现范围、迁移步骤和兼容说明见 [架构升级说明](开发文档V2/架构升级说明.md)。
+现已支持草稿校验发布、历史快照、并发编辑保护、生成请求去重和服务端审计。升级、备份恢复及生产部署参见 [稳定性升级与运维说明](docs/guides/稳定性升级与运维说明.md)。
+
+V2 架构将排期接口、应用服务、输入适配与纯算法领域分开，前后端共用场景规则；新增教师资格与稳定人员关联、预答辩/正式答辩联合生成、关联移动校验和 PDF 打印保存。实现范围、迁移步骤和兼容说明见 [架构升级说明](docs/architecture/架构升级说明.md)。
 
 完整的功能说明、输入/输出格式与运行截图见 [WIKI.md](WIKI.md)；课程综合开发提交材料见 [WIKI/综合开发应用证明.md](WIKI/综合开发应用证明.md)。
 
 ## 环境要求
 
-- Node.js 18+
-- npm 9+
-- Python 3.12（推荐；当前固定依赖按此版本验证）
+- Node.js 24.13.1（以 `.nvmrc` 为准）及随附 npm；通过 `npm ci` 安装锁定依赖
+- Python 3.12（以 `.python-version` 为准；运行依赖在 `requirements.txt` 固定）
+
+开发模式安装和真实后端联调见 [新人上手](docs/guides/开发环境与新人上手.md)，共享导入样例见 [tests/fixtures](tests/fixtures/README.md)。
 
 ## 一键启动（推荐）
 
@@ -47,7 +50,7 @@ Windows 本机部署可直接使用脚本：
 开发模式前端启动：
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -95,8 +98,10 @@ DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```bash
 npm run check
 npm run lint
+npm run test:domain
 npm run build
 npm run preview
+python scripts/check-project-docs.py
 python manage.py test
 python manage.py check --deploy
 ```
@@ -107,7 +112,7 @@ python manage.py check --deploy
 
 仓库已支持生成单文件 Windows 可执行程序：
 
-V2 Windows 64 位发行版见 [v2026.10.02 Release](https://github.com/xph6666/defense_scheduler/releases/tag/v2026.10.02)，升级旧版前请备份整个 `app-data` 文件夹。具体变更与实现范围见 [本次发布说明](开发文档V2/发布说明-v2026.10.02.md)。
+V2 Windows 64 位发行版见 [v2026.10.02 Release](https://github.com/xph6666/defense_scheduler/releases/tag/v2026.10.02)，升级旧版前请备份整个 `app-data` 文件夹。具体变更与实现范围见 [本次发布说明](docs/releases/发布说明-v2026.10.02.md)。
 
 ```powershell
 .\scripts\build-exe.ps1

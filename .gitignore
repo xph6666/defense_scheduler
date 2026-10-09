@@ -42,9 +42,7 @@ db.sqlite3
 *.xlsx
 !WIKI/examples/*.xlsx
 !WIKI/evidence/*.xlsx
-!批量测试_教师_30人.xlsx
-!批量测试_学生_100人.xlsx
-!批量测试_教室_10间.xlsx
+!tests/fixtures/*.xlsx
 generate_large_test_data.py
 
 # WorkBuddy session data

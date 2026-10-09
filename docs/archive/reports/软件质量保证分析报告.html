@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>软件质量保证分析报告（精简版）— 智能答辩分组编排系统</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --ink-2:#3d4550; --ink-3:#6b7480;
+    --line:#dfe3e8; --line-2:#eef1f4; --bg-soft:#f7f9fb;
+    --brand:#1F4E79; --brand-soft:#eaf1f8;
+    --warn:#9a6100; --warn-soft:#fdf4e3;
+    --risk:#a4262c; --risk-soft:#fceceb;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;background:#fff;color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    font-size:14.5px;line-height:1.7;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:44px 32px 64px;}
+
+  header.doc-head{border-bottom:3px solid var(--brand);padding-bottom:20px;}
+  .eyebrow{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--brand);font-weight:600;margin-bottom:8px;}
+  h1{font-size:24px;line-height:1.35;margin:0 0 8px;font-weight:700;}
+  .subtitle{font-size:14.5px;color:var(--ink-2);margin:0 0 16px;}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 26px;font-size:12.5px;color:var(--ink-3);}
+  .meta b{color:var(--ink-2);font-weight:600;}
+
+  .lead{background:var(--brand-soft);border-left:4px solid var(--brand);padding:15px 20px;margin:24px 0;border-radius:0 4px 4px 0;}
+  .lead p{margin:0 0 9px;}
+  .lead p:last-child{margin-bottom:0;}
+
+  h2.sec{font-size:18.5px;margin:38px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line);font-weight:700;}
+  h2.sec .num{display:inline-block;min-width:30px;color:var(--brand);}
+  h3{font-size:15.5px;margin:24px 0 10px;font-weight:700;}
+  p{margin:0 0 12px;}
+
+  .tbl-wrap{overflow-x:auto;margin:14px 0 18px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;border:1px solid var(--line);}
+  thead th{background:var(--bg-soft);text-align:left;font-weight:700;color:var(--ink-2);padding:9px 11px;border-bottom:2px solid var(--line);white-space:nowrap;}
+  td{padding:8px 11px;border-bottom:1px solid var(--line-2);vertical-align:top;}
+  tbody tr:last-child td{border-bottom:none;}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
+  code{font-family:"Cascadia Mono",Consolas,monospace;font-size:.87em;background:var(--bg-soft);border:1px solid var(--line-2);border-radius:3px;padding:1px 4px;color:#26435c;}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:1px 6px;border-radius:3px;white-space:nowrap;}
+  .tag.p0{background:var(--risk-soft);color:var(--risk);}
+  .tag.p1{background:var(--warn-soft);color:var(--warn);}
+  b.hi{color:var(--brand);}
+
+  .defense{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:16px 0 20px;}
+  .defense .col{border:1px solid var(--line);border-radius:6px;overflow:hidden;}
+  .defense .col>.hd{padding:9px 13px;font-size:13.5px;font-weight:700;border-bottom:1px solid var(--line);}
+  .defense .col:nth-child(1) .hd{background:#eef6f1;color:#166b3f;}
+  .defense .col:nth-child(2) .hd{background:var(--brand-soft);color:var(--brand);}
+  .defense .col:nth-child(3) .hd{background:var(--warn-soft);color:var(--warn);}
+  .defense .col ul{margin:0;padding:10px 13px 12px 26px;font-size:12.5px;}
+  .defense .col li{margin-bottom:5px;}
+  .defense .col li:last-child{margin-bottom:0;}
+
+  .kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin:18px 0 20px;}
+  .kpi .box{border:1px solid var(--line);border-radius:6px;padding:12px 14px;text-align:center;background:var(--bg-soft);}
+  .kpi .v{font-size:23px;font-weight:700;color:var(--brand);line-height:1.15;}
+  .kpi .k{font-size:12px;color:var(--ink-3);margin-top:5px;line-height:1.45;}
+
+  ul.plain{padding-left:20px;margin:0 0 14px;}
+  ul.plain li{margin-bottom:6px;}
+
+  .note{border-left:3px solid var(--brand);background:#fbfdff;padding:11px 16px;margin:16px 0;font-size:13.5px;}
+  .note b{color:var(--brand);}
+
+  footer.doc-foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3);}
+
+  @media (max-width:760px){
+    .wrap{padding:28px 18px 48px;}
+    .defense{grid-template-columns:1fr;}
+    .kpi{grid-template-columns:repeat(2,1fr);}
+    h1{font-size:20px;}
+  }
+  @media print{
+    body{font-size:10.5pt;line-height:1.55;}
+    .wrap{max-width:none;padding:0;}
+    h2.sec,h3{page-break-after:avoid;}
+    .tbl-wrap,.defense,.kpi,.note{page-break-inside:avoid;}
+    @page{size:A4;margin:18mm 16mm;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc-head">
+  <div class="eyebrow">Software Quality Assurance · Case Analysis</div>
+  <h1>智能答辩分组编排系统的质量保证工作分析</h1>
+  <p class="subtitle">以自研应用「答辩安排助手」为例，说明质量维度、方法与实践，以及关键 SQA 活动的作用与实施方式</p>
+  <div class="meta">
+    <span><b>对象</b> Defense Scheduler v2026.10.02</span>
+    <span><b>技术栈</b> Vue 3 + TS / Django 6 + DRF / SQLite / PyInstaller EXE</span>
+    <span><b>日期</b> 2026-10-09</span>
+  </div>
+</header>
+
+<div class="lead">
+  <p><b class="hi">核心结论：</b>本项目的质量保证不是围绕"写得规范"展开，而是围绕<b>四类高后果失效</b>倒推建立——排期结果违反硬约束、并发编辑互相覆盖、数据迁移不可逆、桌面交付物与源码不一致。由此形成<b>单一真相源 + 分层自动化验证 + 交付物级端到端核验</b>三段式结构。</p>
+  <p>当前累计 <b>243 项</b>自动化回归全部通过，前端静态检查与构建、迁移多副本演练、打包 EXE 端到端验证均已通过并留有可复核记录。<b>最大短板是没有持续集成</b>——这套验证依赖人工按清单执行。</p>
+</div>
+
+<!-- 1 -->
+<h2 class="sec"><span class="num">1</span>项目画像与质量风险</h2>
+
+<p>质量保证的第一步不是选方法，而是判断"这个系统的失效长什么样"。本系统的特殊性在于：它输出的是一份<b>将被真实执行的答辩现场安排表</b>——出错不是页面显示异常，而是答辩当天导师到场、学生不在、专家撞场。</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:16%">风险</th><th style="width:54%">具体失效场景</th><th>等级</th></tr></thead>
+  <tbody>
+    <tr><td><b>R1 约束违反</b><br>算法输出错误</td><td>学生重复分组或遗漏；导师与自己学生同组（回避失效）；专家同时出现在两个组；时间/教室冲突；组长职称不达底线；正式答辩软件学院导师不足 3 人</td><td><span class="tag p0">P0</span></td></tr>
+    <tr><td><b>R2 并发覆盖</b><br>多用户协同编辑</td><td>两名管理员同时改同一版本，后保存者静默覆盖前者；普通用户读到未发布草稿；重复提交产生重复版本</td><td><span class="tag p0">P0</span></td></tr>
+    <tr><td><b>R3 迁移不可逆</b><br>schema 与数据演进</td><td>迁移改写基础数据关系时连带改写历史快照；升级失败无法回退；教师姓名匹配歧义导致关系错绑</td><td><span class="tag p0">P0</span></td></tr>
+    <tr><td><b>R4 交付物漂移</b><br>源码 ≠ EXE</td><td>前端未重新构建即打包，EXE 内仍是旧界面；共享 JSON 未纳入打包导致运行缺文件</td><td><span class="tag p1">P1</span></td></tr>
+    <tr><td><b>R5 结果不可解释</b></td><td>算法给出"合规但反常识"的结果，教师不认可、不信任系统</td><td><span class="tag p1">P1</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- 2 -->
+<h2 class="sec"><span class="num">2</span>质量维度与优先级</h2>
+
+<p><b>优先级判据：</b>不按 ISO/IEC 25010 的罗列顺序排，而按<b>失效后果的不可逆程度</b>排。本项目是低频、内网、小规模用户的内部工具，性能效率的战略权重远低于正确性与一致性；而一旦排期发布并被打印分发，纠错成本急剧上升。</p>
+
+<p><b>由此得出：</b>功能正确性 ≈ 数据一致性 &gt; 安全性 &gt; 可用性 ≈ 可维护性 &gt; 可移植性 &gt; 性能效率。</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:14%">维度</th><th style="width:7%" class="num">优先级</th><th style="width:32%">在本项目中的含义</th><th>主要保障手段</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>功能正确性</b></td><td class="num"><span class="tag p0">P0</span></td>
+      <td>算法输出满足全部硬约束：学生覆盖、时间与教室互斥、不可用时间、角色资格、人数底线、导师同组/回避、正式答辩导师同场</td>
+      <td>243 项回归；可行性专项 <code>SchedulingFeasibilityTests</code>；生成与手调复用同一冲突检测入口</td>
+    </tr>
+    <tr>
+      <td><b>数据一致性</b></td><td class="num"><span class="tag p0">P0</span></td>
+      <td>并发写入串行化；过期编辑被拒；已发布版本不可直接改；历史快照不被基础数据变更改写</td>
+      <td>全局写锁 + 事务；乐观锁 <code>expected_revision</code>（缺失 428 / 过期 409）；结果与导出快照冻结</td>
+    </tr>
+    <tr>
+      <td><b>可靠性</b></td><td class="num"><span class="tag p0">P0</span></td>
+      <td>资源不足时不产出"看似成功"的错误结果，而降级为带错误标记的草稿；重复提交不产生重复数据</td>
+      <td>资源不足 → 待修复草稿且发布前重验阻止发布；<code>request_key</code> 幂等重试</td>
+    </tr>
+    <tr>
+      <td><b>安全性</b></td><td class="num"><span class="tag p0">P0</span></td>
+      <td>认证与令牌过期、暴力破解限流、权限隔离、生产配置守卫、路径穿越防护</td>
+      <td>12 小时 TTL 令牌；失败 10 次/300 秒限流（缓存键经 SHA-256，不落明文）；生产模式密钥与 DEBUG 双守卫，不合格拒绝启动</td>
+    </tr>
+    <tr>
+      <td><b>可用性</b></td><td class="num"><span class="tag p1">P1</span></td>
+      <td>非技术背景的教学秘书能独立完成排期；出错时能理解原因并知道如何修</td>
+      <td>五步向导（缺资料阻止继续、返回保留输入、刷新按 URL 恢复）；冲突面板逐条给原因与建议</td>
+    </tr>
+    <tr>
+      <td><b>可维护性</b></td><td class="num"><span class="tag p1">P1</span></td>
+      <td>规则可评审可版本化；分层清晰便于替换算法；共享政策不让两端产生分歧</td>
+      <td>五层分层；<code>scheduling/</code> 为不依赖 Django 的纯领域模块；<code>policyVersion</code> 显式版本化；政策外置为 JSON</td>
+    </tr>
+    <tr>
+      <td><b>可测试性</b></td><td class="num"><span class="tag p1">P1</span></td>
+      <td>核心业务逻辑能脱离框架与数据库被独立、快速验证</td>
+      <td>领域规则纯函数化后用 <code>SimpleTestCase</code>（无数据库、毫秒级）</td>
+    </tr>
+    <tr>
+      <td><b>可移植性</b></td><td class="num"><span class="tag p1">P1</span></td>
+      <td>既能源码运行，也能零依赖单文件交付给无开发环境的老师</td>
+      <td>环境变量驱动配置；SQLite → PostgreSQL 双引擎；打包配置显式声明依赖与数据文件；<code>/health/</code> 探针</td>
+    </tr>
+    <tr>
+      <td><b>性能效率</b></td><td class="num"><span class="tag p1">P1</span></td>
+      <td>生成请求在可接受时间内返回（前端超时 120 秒）</td>
+      <td>同步生成 + 幂等重试；主动取舍：写锁优先保证一致性，写操作串行等待</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p><b>另有三个易被忽略、但本项目必须显式保障的维度：</b></p>
+<ul class="plain">
+  <li><b>可复现性（确定性）</b>——若算法用随机抽取，同一输入两次结果不同，管理员无法解释"为什么把张老师排到周三"，直接击穿 R5。故软件学院专家轮换采用<b>确定性算法</b>，不使用随机抽取。</li>
+  <li><b>可审计性</b>——排期涉及教师工作量与公平性，被质疑时必须能回溯"谁在何时改了哪一版、改前改后是什么"。故设服务端权威审计日志，与业务写在同一事务内。</li>
+  <li><b>可恢复性</b>——备份若本身不可信（如复制了正在写入的库），"有备份"反而更危险。故使用数据库在线备份接口从只读连接建一致副本，备份后强制完整性检查并生成哈希清单。</li>
+</ul>
+
+<!-- 3 -->
+<h2 class="sec"><span class="num">3</span>方法与工程实践</h2>
+
+<h3>3.1 三段式防线</h3>
+
+<div class="defense">
+  <div class="col">
+    <div class="hd">① 预防 · 让缺陷不产生</div>
+    <ul>
+      <li>契约优先：接口契约先行，前端按 Mock 独立迭代</li>
+      <li>单一真相源：政策与配色仅一份 JSON，两端只读</li>
+      <li>业务规则外置为数据，不硬编码在分支里</li>
+      <li>纯领域模块与框架解耦</li>
+      <li>需求边界前置声明（含"未实现范围"）</li>
+    </ul>
+  </div>
+  <div class="col">
+    <div class="hd">② 检测 · 让缺陷当场暴露</div>
+    <ul>
+      <li>243 项后端回归（领域/契约/集成/迁移分层）</li>
+      <li>前端领域测试（Node 直跑 TS 源码）</li>
+      <li>静态门禁：类型检查 / ESLint / 迁移一致性</li>
+      <li>黄金向量自校验：前后端哈希一致</li>
+      <li>真实浏览器 UI 测试 + 打包产物端到端测试</li>
+    </ul>
+  </div>
+  <div class="col">
+    <div class="hd">③ 纠正 · 让缺陷可控可回退</div>
+    <ul>
+      <li>在线备份 + 完整性检查 + SHA-256 清单</li>
+      <li>迁移多副本演练，源库哈希必须不变</li>
+      <li>发布冻结：已发布版本不可直接修改</li>
+      <li>生产配置守卫，不合格拒绝启动</li>
+      <li>发布包哈希校验</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note"><b>需坦承的偏差：</b>三段中投入最大的是<b>检测</b>，而工程上更优的状态应是<b>预防</b>占主导——缺陷发现越晚，修复成本越高。这是本项目一处明确的投入不平衡，第 5 节给出改进方向。</div>
+
+<h3>3.2 分层测试：按"被测对象的性质"选测试类型</h3>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:20%">层次</th><th style="width:10%" class="num">数量</th><th style="width:30%">覆盖对象</th><th>特点</th></tr></thead>
+  <tbody>
+    <tr><td><b>纯领域层</b><br><code>SimpleTestCase</code></td><td class="num">—</td><td><code>scheduling/</code> 领域规则：委员会资格、人数底线、软件学院底线、继承组号、导师同场校验</td><td>不建数据库，毫秒级。规则从算法文件抽出后，验证成本从"跑完整生成"降到"调一个函数"</td></tr>
+    <tr><td><b>契约层</b></td><td class="num">约 130</td><td>API 输入输出契约与权限边界</td><td>认证、权限、集成、排期、冲突各自独立测试类</td></tr>
+    <tr><td><b>算法专项层</b></td><td class="num">58</td><td>算法行为与规则效果</td><td>组人数、职称排序、规则生效、软权重、可行性</td></tr>
+    <tr><td><b>架构与兼容层</b></td><td class="num">21</td><td>分层边界、新版政策与旧接口兼容</td><td>断言领域层不反向依赖框架；验证联排原子性与幂等</td></tr>
+    <tr><td><b>数据与迁移层</b></td><td class="num">22</td><td>稳定关系、规则默认值、迁移正确性</td><td>覆盖教师/学生关系匹配、旧规则升级、历史快照不变</td></tr>
+    <tr><td><b>稳定性与安全层</b></td><td class="num">24</td><td>可行性、排期完整性、会话安全、密码策略、导入告警</td><td>含会话安全与导入未识别条目告警</td></tr>
+    <tr><td><b>真实数据冒烟</b></td><td class="num">—</td><td>真实课表文档的解析容错</td><td>覆盖"借用时间缺失/无法识别"这类只在真实数据中出现的问题</td></tr>
+    <tr><td><b>前端领域层</b></td><td class="num">—</td><td>规则转换、请求序号作用域、打印转义</td><td>TS 即时转译 + <code>node:vm</code> 直跑源码，无需浏览器与打包；断言含 HTML 注入转义</td></tr>
+    <tr><td><b>UI 端到端</b></td><td class="num">—</td><td>真实浏览器交互全链路</td><td>独立临时库与端口，覆盖向导、两阶段沿用、改绑、打印、手机视图，断言<b>浏览器错误数为 0</b></td></tr>
+    <tr><td><b>交付物端到端</b></td><td class="num">—</td><td>打包后的可执行程序本体</td><td>复制到隔离目录直接启动，验证前端资源、首次迁移、政策、联排幂等、发布与导出、数据库完整性</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>3.3 四项关键实践</h3>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:22%">实践</th><th style="width:38%">做法</th><th>解决的问题</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>单一真相源 +<br>黄金向量</b></td>
+      <td>导师配色与哈希算法固化为唯一 JSON，内嵌 8 组"姓名 → 期望槽位"黄金向量；前端加载时自校验，漂移即输出指向两个待核对函数的控制台错误，后端测试覆盖同一组向量</td>
+      <td>把"两端实现一致"从口头约定变成<b>机器可验证的不变式</b>，防止同一导师在网页与导出中颜色不同、导致师生配对核对失效</td>
+    </tr>
+    <tr>
+      <td><b>契约优先 +<br>Mock 驱动</b></td>
+      <td>接口契约先行并以类型定义为最权威参考；前端切到 Mock 模式单机迭代；发布构建强制关闭 Mock 与演示工具；分支分离，联调在专门分支完成后合入主干</td>
+      <td>把"联调才发现的不一致"左移到设计阶段；并避免演示数据静默回退掩盖真实后端故障</td>
+    </tr>
+    <tr>
+      <td><b>防御性设计<br>（质量内建）</b></td>
+      <td>全局写锁串行化写入；乐观锁拒绝过期编辑且不保留部分写入；幂等键使重试不产生重复版本；发布快照冻结历史；生产配置不合格直接拒绝启动；用户输入进入打印页前转义</td>
+      <td>使并发覆盖、重复生成、历史篡改、误配置上线这几类问题<b>在设计层面失去发生条件</b>——测试只能证明"这一组输入正确"，结构才能保证"任意输入都安全"</td>
+    </tr>
+    <tr>
+      <td><b>迁移与发布<br>工程</b></td>
+      <td>三级流程：合成样例 → 运行态副本 → 实际库备份后迁移；核验下沉到记录级（比对版本、组、专家关联、学生分组关联）；发布前重跑全量回归并直接启动打包产物验证；发布包不含数据库与密钥，附哈希清单</td>
+      <td>对冲 R3 与 R4。迁移是唯一"执行错误就无法靠回滚代码挽回"的环节；而源码更新不会自动替换已发放的旧产物</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- 4 -->
+<h2 class="sec"><span class="num">4</span>关键 SQA 活动及其作用与实施方式</h2>
+
+<p>按<b>介入时点</b>排序，从需求到发布运维共 12 项。每项给出作用与实施方式。</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:19%">活动</th><th style="width:33%">作用（为什么做）</th><th>实施方式（怎么做）</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>A1 质量目标与<br>验收标准定义</b></td>
+      <td>在编码前确定"什么叫做好了"以及"用什么命令证明它做好了"。缺此步骤，后续测试没有判定基准，验收会退化为口头确认。</td>
+      <td>需求文档定义功能范围与业务底线；规则默认值外置为共享政策 JSON 并显式版本化；把验收标准固化为可直接执行的命令清单写入运维文档。</td>
+    </tr>
+    <tr>
+      <td><b>A2 需求与<br>设计评审</b></td>
+      <td>在成本最低的阶段消除需求歧义与设计缺陷。"规则原文未说明"的边界若不在设计阶段暴露，必然变成上线后返工。</td>
+      <td>需求文档迭代修订并额外产出精简版对齐理解；架构文档以"已实现行为 + 尚未实现范围"双重口径描述系统；关键设计意图用边界测试守住，而非只写在文档里。</td>
+    </tr>
+    <tr>
+      <td><b>A3 分层测试设计与<br>自动化回归</b></td>
+      <td>投入最大的活动。承担两项职责：证明当前版本行为正确，以及防止后续改动破坏既有行为（升级同时改动数据关系、规则语义与两阶段流程时尤为关键）。</td>
+      <td>按被测对象性质选择测试基类（纯逻辑用无数据库基类）；覆盖策略由风险驱动而非代码行驱动，落在契约、算法行为、规则效果、迁移正确性、稳定性与安全五个方向；回归按模块粒度执行，使"提交前跑一遍"时间可行。</td>
+    </tr>
+    <tr>
+      <td><b>A4 静态分析与<br>类型检查</b></td>
+      <td>在运行前拦截整类缺陷，尤其是"模型与迁移不一致"这种本地正常、部署即崩的高危问题。</td>
+      <td>把类型检查嵌入构建链（构建脚本前置类型检查）而非当作可选步骤，使类型错误无法进入构建产物；代码检查采用 Vue 3 与 TypeScript 推荐规则集；后端以迁移一致性与系统检查作为门禁。</td>
+    </tr>
+    <tr>
+      <td><b>A5 一致性契约校验<br>（黄金向量）</b></td>
+      <td>防止前后端对同一规则产生两种实现。哈希漂移会导致跨端语义失效，而这类问题普通测试很难自然发现。</td>
+      <td>唯一数据源内嵌黄金向量，前端在模块加载时自校验、后端测试覆盖同一组向量；后端哈希显式复刻前端语言的 32 位有符号截断语义并注明字符编码等价性。</td>
+    </tr>
+    <tr>
+      <td><b>A6 契约优先与<br>Mock 驱动的联调保证</b></td>
+      <td>把"联调时才发现的不一致"提前消除；同时保证异常态（加载中、报错、空数据）被真正开发与验证，而非等联调才第一次遇到。</td>
+      <td>契约先定并以类型定义为最权威参考；前端在 Mock 模式下单机迭代；分支分离、联调在专门分支完成后合入主干；联调清单把异常态要求列为可勾选条目。</td>
+    </tr>
+    <tr>
+      <td><b>A7 安全评审与<br>安全机制验证</b></td>
+      <td>排期数据含全体师生姓名与导师关系等个人信息，可能部署为内网多人服务，认证、授权、限流与配置安全须逐项验证。</td>
+      <td>令牌带过期时间并自动失效；普通用户只读已发布版本、不可读未发布草稿；登录失败限流且缓存键做哈希处理以避免明文入库；生产模式密钥强度与调试开关双守卫；打印视图对用户可控字段转义，测试以真实攻击载荷断言。</td>
+    </tr>
+    <tr>
+      <td><b>A8 数据迁移演练与<br>回滚验证</b></td>
+      <td>直接对冲 R3。迁移是唯一无法靠回滚代码挽回的环节，必须在与生产同构的副本上先跑通，并证明演练未污染源数据。</td>
+      <td>用数据库在线备份接口从只读连接建一致副本，绝不直接复制打开状态的库文件；三级推进（合成样例 → 运行态副本 → 实际库）；核验下沉到记录级比对；备份目录同时保存数据库、哈希清单与应用密钥，并给出分步恢复流程。</td>
+    </tr>
+    <tr>
+      <td><b>A9 端到端与<br>验收测试</b></td>
+      <td>验证"集成后是否真的可用"，并覆盖单元测试无法触及的失效：跨模块交互、真实浏览器行为，以及<b>打包产物本身</b>。</td>
+      <td>浏览器级用 Playwright 配独立临时库与随机端口跑全链路，断言浏览器错误数为 0；交付物级把打包产物复制到隔离目录直接启动，验证资源加载、首次迁移、政策、幂等、发布与导出、数据库完整性；另以真实名单与课表文件做导入冒烟。</td>
+    </tr>
+    <tr>
+      <td><b>A10 配置管理与<br>发布工程</b></td>
+      <td>保证"被测对象 = 被发布对象"。源码更新不会自动替换已发放的旧产物，若不显式管理，代码级测试结论会与实际交付物脱节。</td>
+      <td>依赖分层声明（运行/生产扩展/验证工具），使"跑测试"与"跑应用"边界清晰；构建脚本检查外部命令退出码、清理产物前断言路径位于项目内以防误删；发布构建强制关闭演示数据；版本打标签并公示产物哈希。</td>
+    </tr>
+    <tr>
+      <td><b>A11 审计日志与<br>运行时可观测性</b></td>
+      <td>测试只能证明设计时的正确性，无法回答生产环境中"谁改了什么"。审计与可观测性提供事后追溯能力，也是应对教师工作量质疑的客观依据。</td>
+      <td>审计写入与业务操作置于同一事务，失败请求回滚以保证不留下"成功"的审计记录；审计记录标记为权威，与浏览器本地日志区分；健康探针检查数据库连通性，故障返回 503；日志按大小轮转并给出监控建议。</td>
+    </tr>
+    <tr>
+      <td><b>A12 用户文档与<br>可用性验证</b></td>
+      <td>面向非技术用户，可用性直接决定系统能否被真正采纳；"可复现步骤 + 真实截图"是证明系统按预期工作最直接的证据。</td>
+      <td>用界面结构承担防错职责（资料缺失阻止继续、返回保留输入、刷新恢复步骤），校规逻辑由前端领域测试断言；用冲突面板承担解释职责，逐条给出原因与建议而非只报"操作失败"；文档按使用者、升级、运维、维护者四类角色分册；以真实运行截图与分步复现流程佐证。</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- 5 -->
+<h2 class="sec"><span class="num">5</span>度量数据、不足与改进</h2>
+
+<div class="kpi">
+  <div class="box"><div class="v">243</div><div class="k">自动化回归<br>全部通过</div></div>
+  <div class="box"><div class="v">231</div><div class="k">后端测试方法<br>8 个文件</div></div>
+  <div class="box"><div class="v">5</div><div class="k">迁移副本演练<br>源库哈希不变</div></div>
+  <div class="box"><div class="v">8</div><div class="k">真实界面截图<br>可复现验证</div></div>
+</div>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:34%">验证项</th><th>实际结果</th></tr></thead>
+  <tbody>
+    <tr><td>全量后端回归</td><td>243 项通过；首轮 110.583 秒，发布前复跑 96.942 秒</td></tr>
+    <tr><td>前端与迁移一致性</td><td>领域测试 / 静态检查 / 正式构建通过；迁移检查输出"无变更"，模型与迁移一致</td></tr>
+    <tr><td>端到端（浏览器 + 交付物）</td><td>浏览器全链路错误数为 0；打包产物隔离启动验证全部通过</td></tr>
+    <tr><td>迁移演练</td><td>3 副本 + 2 实际库；完整性检查通过、外键无错误、源库 SHA-256 不变；100 个导师与 100 个秘书关系全部匹配，版本/组/专家关联/学生分组关联逐项与备份一致</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>五项不足与改进建议（按投入产出比排序）</h3>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th style="width:22%">不足</th><th style="width:38%">问题</th><th>建议</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>1 · 无持续集成</b><br><span class="tag p0">最高优先</span></td>
+      <td>243 项测试靠人工按清单逐条执行，形成一条脆弱长链，任一次"先跳过、回头再跑"都可能让缺陷进入发布；项目中确实没有 CI 配置。</td>
+      <td>以 CI 固化提交级门禁，至少覆盖后端回归、前端三项检查、迁移一致性检查、前端领域测试；打包与交付物测试作为发布标签触发的独立流水线。使"通过"从"这次记得跑了"变为"结构上无法跳过"。</td>
+    </tr>
+    <tr>
+      <td><b>2 · 无覆盖率与<br>属性测试</b></td>
+      <td>用例数量是"计数"不是"覆盖度"；对启发式算法而言，最易出错的不是某条已知路径，而是"某种资源紧张的组合"，用增加固定用例几乎无法穷尽。</td>
+      <td>先引入覆盖率工具并对算法模块设门槛，让"未测到的分支"可见；再对硬约束引入<b>基于属性的测试</b>——随机生成师生、教室与时间约束，断言输出永不违反硬约束。这比再写几十个固定用例更契合启发式算法的质量特征。</td>
+    </tr>
+    <tr>
+      <td><b>3 · 类型检查偏松</b></td>
+      <td>类型配置关闭了严格模式与显式类型告警，而前后端字段映射、空值处理恰是此类项目的高频缺陷来源。</td>
+      <td>以类型定义目录与领域目录为试点逐目录开启严格模式，避免全量开启导致改动面失控；同时补充组件级单元测试（当前只有领域层脚本与浏览器端到端两端）。</td>
+    </tr>
+    <tr>
+      <td><b>4 · 无并发与<br>容量验证</b></td>
+      <td>写锁串行化保证正确性但代价是写操作排队；文档亦自认未做长期负载与容灾压测，也没有"多人同时编辑"的并发测试。</td>
+      <td>设计最小并发用例：两个会话同时提交同一版本，断言一成功、另一收到 409 且数据未被部分写入；再以 500–1000 名学生规模测一次生成耗时基线，为"同步生成 + 120 秒超时"的取舍提供数据支撑。</td>
+    </tr>
+    <tr>
+      <td><b>5 · 无缺陷跟踪</b></td>
+      <td>项目有很强的"验证记录"（结果、哈希、耗时都留存），但没有缺陷本身的记录，包括已发现未关闭的需求缺口，质量数据无法用于趋势判断。</td>
+      <td>建立最小缺陷台账（编号、发现阶段、严重级、影响维度、状态），并在发布说明中列出"本版修复 / 仍保留"，与现有的"未实现范围"章节互补。</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- 6 -->
+<h2 class="sec"><span class="num">6</span>结论</h2>
+
+<p>本项目的质量保证围绕四类高后果失效反向构建，形成三条实践主线：<b>① 把不变式变成机器可验证的契约</b>（单一真相源 + 黄金向量）；<b>② 把正确性做进结构而非只做进测试</b>（写锁、乐观锁、幂等键、快照冻结、配置守卫）；<b>③ 把验证延伸到交付物本体</b>（从纯领域单元测试一路做到打包产物直接启动验证，配合记录级迁移演练与源库哈希不变的硬证据）。</p>
+
+<p>三大结构性短板同样明确：<b>缺少持续集成这一"锁扣"</b>，验证通过依赖人工纪律；<b>缺少覆盖率与缺陷度量</b>，用例数量无法等同于风险覆盖；<b>对启发式算法最有效的属性测试尚未引入</b>。其中属性测试与本项目"启发式求解 + 硬约束不可违反"的特征高度契合，投入产出比最高。</p>
+
+<p>最后一点经验值得记录：本项目两次真实的质量教训都发生在单元测试之外（前端未重建导致产物内是旧界面、共享配置未纳入打包导致运行缺文件）。<b>测试写得再多，如果被测对象不是交付对象，结论就是无效的。</b>把验证锚定在"用户实际拿到的那份东西"上，是这个项目最值得保留的一条原则。</p>
+
+<footer class="doc-foot">
+  <p>数据均取自项目仓库内的代码、测试、构建脚本与验证记录，未做推测性填充。测试数量经核对为 <code>api/</code> 231 项 + <code>defense_scheduler/</code> 12 项 = 243 项，与项目架构说明记录的 243 项一致。｜ 对象版本 v2026.10.02 ｜ 2026-10-09</p>
+</footer>
+
+</div>
+</body>
+</html>

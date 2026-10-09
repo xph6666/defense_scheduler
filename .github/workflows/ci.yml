@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  documents:
+    name: documents
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version-file: '.python-version'
+      - name: Check project documents and fixtures
+        run: python scripts/check-project-docs.py
+      - name: Check changed whitespace
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+        shell: bash
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git diff --check "$PR_BASE" HEAD
+          elif [ "$EVENT_NAME" = "push" ] && [ "$PUSH_BASE" != "0000000000000000000000000000000000000000" ]; then
+            git diff --check "$PUSH_BASE" HEAD
+          else
+            git show --format= --check HEAD
+          fi
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VITE_USE_MOCK: 'false'
+      VITE_ENABLE_DEMO_TOOLS: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:domain
+      - run: npm run build
+
+  backend:
+    name: backend
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      DJANGO_ENV: local
+      DJANGO_DEBUG: 'false'
+      DJANGO_SECRET_KEY: 'ci-isolated-tests-only-no-business-data'
+      DJANGO_DB_PATH: ':memory:'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version-file: '.python-version'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py test api defense_scheduler --noinput

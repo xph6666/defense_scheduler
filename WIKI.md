@@ -28,7 +28,7 @@
   - 返回上一步保留未保存内容，离开向导/切换类型前提示；刷新后按 URL 恢复步骤；
   - 第四步分组核对、第五步发布；草稿导出、历史版本、移动学生等原有能力保留。
 - **日程视图**：按日期和时段展示分组，可展开名单、调整本组、查看问题；日期/校区/问题筛选同时作用于日程、卡片、表格三种视图；全局冲突仍在冲突面板展示。
-- 右上角"使用帮助"与《教师快速上手》文档（见 [开发文档/教师快速上手.md](开发文档/教师快速上手.md)、[开发文档/分步向导与日程视图说明.md](开发文档/分步向导与日程视图说明.md)）。
+- 右上角"使用帮助"与《教师快速上手》文档（见 [教师快速上手](docs/guides/教师快速上手.md)、[分步向导与日程视图说明](docs/guides/分步向导与日程视图说明.md)）。
 
 ### 1.1 基础数据管理
 
@@ -80,9 +80,9 @@
 
 | 依赖 | 版本 |
 | --- | --- |
-| Python | 3.12+ |
-| Node.js（仅前端开发/构建） | 18+ |
-| npm | 9+ |
+| Python | 3.12，见 `.python-version` |
+| Node.js（仅前端开发/构建） | 24.13.1，见 `.nvmrc` |
+| npm | 随 Node 安装，通过 `npm ci` 安装锁定依赖 |
 
 ### 2.2 安装依赖
 
@@ -112,7 +112,7 @@ pip install -r requirements.txt
 - `requirements-dev.txt`：验证工具（playwright，用于 `WIKI/scripts/` 下的截图与回归脚本），运行应用本身不需要；
 - `requirements-production.txt`：生产部署依赖。
 
-前端依赖由 `package.json` 管理：`npm install`。
+前端依赖由 `package.json` 声明、`package-lock.json` 固定，通过 `npm ci` 安装。新人完整步骤见 [开发环境与新人上手](docs/guides/开发环境与新人上手.md)。
 
 ### 2.3 配置项（环境变量）
 
@@ -192,7 +192,7 @@ python main.py
 
 支持上传教师课表（.xlsx/.xls）或粘贴卡片式课表文本，系统自动解析为教师 `unavailableTimes`，导入前提供预览与告警（`ImportPreviewDialog`，未识别时间条目会逐条警告）。
 
-> 项目根目录提供现成示例：`批量测试_教师_30人.xlsx`、`批量测试_学生_100人.xlsx`、`批量测试_教室_10间.xlsx`，可直接用于导入演练。
+> [tests/fixtures](tests/fixtures/README.md) 提供现成示例：`批量测试_教师_30人.xlsx`、`批量测试_学生_100人.xlsx`、`批量测试_教室_10间.xlsx`，可直接用于导入演练。
 
 ---
 
@@ -264,7 +264,7 @@ python-docx 生成的正式排版文档，按组分节列出时间、地点、�
 
 ## 7. API 接口概览
 
-统一前缀 `/api/`，认证方式为 Django Session（登录后 Cookie）。
+统一前缀 `/api/`，认证方式为服务端 Token，后续请求携带 `Authorization: Token <token>`。当前跨端约定见 [API 契约](docs/api/README.md)；Django 管理后台独立使用后台登录。
 
 | 方法与路径 | 说明 |
 | --- | --- |
@@ -299,5 +299,5 @@ python manage.py check --deploy   # 生产配置体检
 .venv/Scripts/python scripts/test-wizard-ui.py      # 终端 2：向导流程回归
 ```
 
-稳定性专项（详见 [开发文档/稳定性升级与运维说明.md](开发文档/稳定性升级与运维说明.md)）：
+稳定性专项（详见 [稳定性升级与运维说明](docs/guides/稳定性升级与运维说明.md)）：
 草稿校验发布、历史快照回溯、并发编辑保护（写锁 + revision）、生成请求去重、服务端审计、数据库自动备份。

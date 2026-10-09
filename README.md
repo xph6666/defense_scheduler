@@ -2,7 +2,7 @@
 
 基于 Vue 3、TypeScript、Vite、Element Plus、Django 和 DRF 的答辩分组排期系统，支持基础数据管理、规则配置、自动排期、冲突检测、人工调整、Excel 导出和操作日志。
 
-五人协作从 [STATUS.md](STATUS.md) 查看当前目标、分工、任务和阻塞；日常开发遵循 [CONTRIBUTING.md](CONTRIBUTING.md)，完整目录见 [文档索引](docs/README.md)。
+项目总体进度、需求状态、里程碑和阻塞统一维护在 [STATUS.md](STATUS.md)。本期目标为 2026 年 10 月 18 日之前完成本期全部需求，10 月 17 日完成最终验收与交付；评分汇总按用户决定暂缓。日常开发遵循 [CONTRIBUTING.md](CONTRIBUTING.md)，完整目录见 [文档索引](docs/README.md)。
 
 现已支持草稿校验发布、历史快照、并发编辑保护、生成请求去重和服务端审计。升级、备份恢复及生产部署参见 [稳定性升级与运维说明](docs/guides/稳定性升级与运维说明.md)。
 

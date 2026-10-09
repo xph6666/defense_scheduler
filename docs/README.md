@@ -7,6 +7,7 @@
 | 类别 | 入口 | 用途 |
 | --- | --- | --- |
 | 需求 | [需求管理](requirements/README.md) | 当前 PRD、需求缺口与待决策 |
+| 进度 | [全量需求追踪](requirements/全量需求追踪.md)、[10 月交付计划](requirements/交付计划-2026-10.md) | 本期需求逐项状态、验收与截止里程碑 |
 | 规则 | [业务规则与验收](requirements/业务规则与验收.md) | 关键约束、实现位置和验证入口 |
 | 架构 | [架构索引](architecture/README.md) | 分层、模块职责与决策 |
 | 接口 | [API 契约](api/README.md) | 认证、字段、排期版本保护与变更流程 |

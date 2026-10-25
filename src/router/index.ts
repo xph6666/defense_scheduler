@@ -14,6 +14,7 @@ const RuleConfig = () => import('../views/RuleConfig.vue')
 const OperationLog = () => import('../views/OperationLog.vue')
 const DemoGuide = () => import('../views/DemoGuide.vue')
 const AcceptanceTest = () => import('../views/AcceptanceTest.vue')
+const NotFound = () => import('../views/NotFound.vue')
 
 const demoRoutes = enableDemoTools
   ? [
@@ -93,7 +94,13 @@ const router = createRouter({
           component: OperationLog,
           meta: { title: '操作日志' }
         },
-        ...demoRoutes
+        ...demoRoutes,
+        {
+          path: ':pathMatch(.*)*',
+          name: 'NotFound',
+          component: NotFound,
+          meta: { title: '页面不存在' }
+        }
       ]
     }
   ]

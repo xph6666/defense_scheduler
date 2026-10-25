@@ -141,7 +141,10 @@ const mentorWarnings = computed(() => participants.value.flatMap(student => !stu
 const busy = computed(() => loading.value || saving.value || (step.value >= 4 && resultState.value.busy))
 const canContinue = computed(() => !busy.value && (step.value === 1 || (step.value === 2 ? !loadError.value && !missingMaterials.value.length : step.value === 3 ? !!config.value && !loadError.value : resultState.value.hasResult)))
 const preparationLink = (path: string) => ({ path, query: { type: defenseType.value, wizard: '1' } })
-async function go(value: number) { await router.push({ path: '/schedule-wizard', query: { type: defenseType.value, step: value } }) }
+async function go(value: number, replace = false) {
+  const target = { path: '/schedule-wizard', query: { type: defenseType.value, step: value } }
+  await (replace ? router.replace(target) : router.push(target))
+}
 async function confirmDiscard() {
   if (!dirty.value) return true
   try {
@@ -203,7 +206,7 @@ watch(step, async (value, previous) => {
 watch(defenseType, () => {
   config.value = null; savedFingerprint.value = ''; ruleErrors.value = []
   if (step.value === 2) void loadInputs()
-  else if (step.value > 2) void go(1)
+  else if (step.value > 2) void go(1, true)
 })
 onMounted(() => { if (step.value > 1) void loadInputs() })
 </script>

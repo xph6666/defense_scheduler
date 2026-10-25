@@ -45,7 +45,7 @@
       </div>
     </div>
 
-    <div v-if="versions.length" class="version-bar bg-white p-4 rounded-lg shadow-sm flex flex-wrap items-center gap-3">
+    <div v-if="versions.length" ref="publishBar" class="version-bar bg-white p-4 rounded-lg shadow-sm flex flex-wrap items-center gap-3">
       <span class="text-sm text-gray-600">排期版本</span>
       <el-select v-model="selectedVersion" placeholder="当前版本（下拉可查看历史）" clearable class="w-64" @change="fetchResult">
         <el-option
@@ -308,7 +308,7 @@
       </template>
       <p v-if="linkedHasWarnings" class="section-tip">可继续生成草稿；预检通过不代表全部安排可行，最终以生成后的冲突校验为准。</p>
     </div>
-    <template #footer><el-button @click="linkedVisible = false">取消</el-button><el-button @click="linkedVisible = false; router.push(workflowLink('/rule-config'))">修改两阶段要求</el-button><el-button type="primary" :loading="linkedPreflightLoading" :disabled="!linkedConfigs || !!linkedError || linkedPreflightStatus === 'failed'" @click="handleGenerateLinked">{{ linkedPreflightStatus === 'passed' && linkedHasWarnings ? '继续联合生成' : '确认联合生成' }}</el-button></template>
+    <template #footer><el-button @click="linkedVisible = false">取消</el-button><el-button @click="linkedVisible = false; guided ? emit('requirements') : router.push(workflowLink('/rule-config'))">修改两阶段要求</el-button><el-button type="primary" :loading="linkedPreflightLoading" :disabled="!linkedConfigs || !!linkedError || linkedPreflightStatus === 'failed'" @click="handleGenerateLinked">{{ linkedPreflightStatus === 'passed' && linkedHasWarnings ? '继续联合生成' : '确认联合生成' }}</el-button></template>
   </el-dialog>
 
   <el-dialog v-model="moveVisible" title="移动学生" width="520px" :close-on-click-modal="false">
@@ -490,11 +490,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Warning, CircleCloseFilled, InfoFilled, Loading, RefreshRight } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import WorkflowSteps from '../../components/WorkflowSteps.vue'
+import WorkflowStatusBar from '../../components/WorkflowStatusBar.vue'
 import { useDefenseType, workflowLink } from '../../utils/useDefenseType'
 import type { RuleConfig } from '../../types/ruleConfig'
 import ScheduleAgenda from '../../components/ScheduleAgenda.vue'
@@ -539,6 +540,8 @@ const emit = defineEmits<{
 }>()
 const defenseType = useDefenseType()
 const router = useRouter()
+const route = useRoute()
+const publishBar = ref<HTMLElement>()
 const generationVisible = ref(false)
 const linkedVisible = ref(false)
 const linkedConfigs = ref<[RuleConfig, RuleConfig] | null>(null)
@@ -1163,13 +1166,28 @@ const goToFixData = (issueType: string) => {
     if (props.guided) emit('requirements')
     else router.push(workflowLink('/rule-config'))
   } else if (studentTypes.includes(issueType)) {
-    router.push('/students')
+    router.push(preparationLink('/students'))
   } else if (teacherTypes.includes(issueType)) {
-    router.push('/teachers')
+    router.push(preparationLink('/teachers'))
   } else {
-    router.push('/dashboard')
+    router.push(workflowLink('/dashboard'))
   }
 }
+
+// 补齐资料的跳转保留当前答辩类型；向导中添加 wizard 标记，管理页可直接返回向导
+const preparationLink = (path: string) => ({
+  path,
+  query: props.guided ? { type: defenseType.value, wizard: '1' } : { type: defenseType.value }
+})
+
+// 从步骤条进入“发布与导出”时定位到版本与发布区域，避免与“生成与检查”看起来是同一个位置
+const scrollToPublishArea = async () => {
+  await nextTick()
+  publishBar.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+watch(() => [route.query.stage, versions.value.length], () => {
+  if (!props.guided && route.query.stage === 'export') void scrollToPublishArea()
+}, { immediate: true })
 
 const handleRefresh = async () => {
   await fetchResult()

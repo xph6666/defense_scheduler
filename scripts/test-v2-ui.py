@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / '.tmp' / 'v2-ui'
+OUT = Path(os.environ.get('V2_UI_OUTPUT_DIR', ROOT / '.tmp' / 'v2-ui'))
 OUT.mkdir(parents=True, exist_ok=True)
 PORT = int(os.environ.get('V2_UI_PORT', '8791'))
 BASE = f'http://127.0.0.1:{PORT}'
@@ -44,8 +44,11 @@ def serve_fixture():
         roles=['普通专家', '主席', '组长', '秘书'],
         available_types=['预答辩', '正式答辩', '中期答辩'],
     ) for i in range(14)]
+    # Two independent six-mentor committees plus two unbound secretaries.
+    # Formal target=6 below gives a feasible same-session avoidance pairing.
+    mentor_indices = list(range(12))
     for index in range(12):
-        mentor = teachers[index // 6]
+        mentor = teachers[mentor_indices[index]]
         Student.objects.create(
             name=f'V2学生{index + 1}', student_no=f'V2UI{index + 1:03}',
             mentor=mentor, mentor_name=mentor.name, campus='创新港',
@@ -126,22 +129,30 @@ def smoke_test():
 
             page.goto(BASE + '/rule-config?type=正式答辩')
             page.wait_for_load_state('networkidle')
-            expert_input = page.locator('.rule-config-form .el-form-item').filter(has_text='专家总人数').get_by_role('spinbutton')
+            expert_input = page.locator('.rule-config-form .el-form-item').filter(has_text='专家目标人数').get_by_role('spinbutton')
             expect(expert_input).to_have_value('5')
-            expect(expert_input).to_be_disabled()
-            expect(page.get_by_text('正式答辩固定 5 位专家（主席 1 位、组员 4 位）；主席/组长计入专家总数，秘书单独 1 人。', exact=True)).to_be_visible()
+            expect(expert_input).to_be_enabled()
+            expert_input.fill('6')
+            expert_input.press('Tab')
+            page.get_by_role('button', name='仅保存要求', exact=True).click()
+            page.wait_for_load_state('networkidle')
+            page.reload()
+            expect(expert_input).to_have_value('6')
 
             page.goto(BASE + '/schedule-results?type=预答辩')
             page.wait_for_load_state('networkidle')
             page.get_by_role('button', name='生成排期草稿', exact=True).click()
             preview = page.get_by_role('dialog', name='生成前，确认这次安排', exact=True)
-            expect(preview).to_contain_text('专家 5 人')
+            expect(preview).to_contain_text('专家至少 4 人')
             preview.get_by_role('button', name='确认生成草稿', exact=True).click()
             expect(page.get_by_role('button', name='校验并发布', exact=True)).to_be_enabled(timeout=60000)
             generated_pre = current('pre')
             assert len(generated_pre['groups']) == 2, generated_pre
             assert not [conflict for conflict in generated_pre['conflicts'] if conflict['level'] == 'error'], generated_pre['conflicts']
-            assert all(len({group['chairId'], *[teacher['id'] for teacher in group['teachers']]}) == 5 for group in generated_pre['groups'])
+            for group in generated_pre['groups']:
+                reviewers = {group['chairId'], *[teacher['id'] for teacher in group['teachers']]}
+                assert len(reviewers) >= 4
+                assert reviewers == {student['mentorId'] for student in group['students']}
             page.get_by_role('button', name='校验并发布', exact=True).click()
             expect(page.get_by_text('已发布 · 内容已锁定', exact=True)).to_be_visible()
             published_pre = current('pre')
@@ -150,7 +161,8 @@ def smoke_test():
 
             page.get_by_role('button', name='联合生成预答辩与正式答辩', exact=True).click()
             linked_dialog = page.get_by_role('dialog', name='联合生成两阶段答辩安排', exact=True)
-            expect(linked_dialog).to_contain_text('专家 5 人')
+            expect(linked_dialog).to_contain_text('专家至少 4 人')
+            expect(linked_dialog).to_contain_text('专家目标 6 人')
             with page.expect_response(lambda response: '/api/schedule/generate-linked/' in response.url and response.request.method == 'POST') as linked_response:
                 linked_dialog.get_by_role('button', name='确认联合生成', exact=True).click()
             linked_http = linked_response.value
@@ -171,7 +183,7 @@ def smoke_test():
             assert len({(group['date'], group['timeRange']) for group in formal['groups']}) == 1
             for group in formal['groups']:
                 reviewers = {group['chairId'], *[teacher['id'] for teacher in group['teachers']]}
-                assert len(reviewers) == 5
+                assert len(reviewers) == 6
                 own_mentors = {student['mentorId'] for student in group['students']}
                 assert not own_mentors & reviewers
                 other = next(candidate for candidate in formal['groups'] if candidate['id'] != group['id'])
@@ -211,7 +223,9 @@ def smoke_test():
             expect(popup.get_by_role('button', name='打印或保存为 PDF', exact=True)).to_be_visible()
             expect(popup.locator('.meta')).to_contain_text('版本 1 · 已发布')
             expect(popup.locator('.group')).to_have_count(2)
-            expect(popup.locator('body')).to_contain_text('共 5 人')
+            for group in published_pre['groups']:
+                count = len({group['chairId'], *[teacher['id'] for teacher in group['teachers']]})
+                expect(popup.locator('body')).to_contain_text(f'共 {count} 人')
             expect(popup.locator('body')).to_contain_text('PDF 学生备注 <仅文本>')
             assert popup.locator('img,script').count() == 0
             popup.evaluate('window.print = () => { window.__printRequested = true }')
@@ -235,7 +249,7 @@ def smoke_test():
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             page.screenshot(path=str(OUT / 'mobile-wizard.png'), full_page=True)
             assert not errors, errors
-            print('PASS V2 UI: resource flags and stable relations; fixed five-reviewer policy; pre generation/publish; linked groups and formal same-session mentors; default secretary retention and explicit rebind; historical PDF preview/print with student remarks; mobile; zero browser errors.', flush=True)
+            print('PASS V2 UI: resource flags and stable relations; adjustable formal committee and mentor-aligned pre committee; pre generation/publish; linked groups and formal same-session mentors; default secretary retention and explicit rebind; historical PDF preview/print with student remarks; mobile; zero browser errors.', flush=True)
         except Exception:
             page.screenshot(path=str(OUT / 'failure.png'), full_page=True)
             print('BROWSER ERRORS:', errors, flush=True)

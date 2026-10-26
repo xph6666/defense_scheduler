@@ -172,7 +172,10 @@ def repair_formal_sessions(groups, students, teachers, rooms, rules, slots, seed
         # Try larger sessions first. Shuffles change the candidate subset while
         # the seed keeps reruns reproducible. Staff matching is exact for each
         # proposed subset; this outer search is intentionally bounded.
-        for size in range(capacity, 1, -1):
+        # With avoidance disabled, a one-group session can review its own
+        # mentors. It still needs mandatory-mentor matching, not random filling.
+        smallest_session = 2 if rules.get('avoid_supervisor', True) else 1
+        for size in range(capacity, smallest_session - 1, -1):
             attempted = set()
             for attempt in range(96):
                 ordered = list(candidates)

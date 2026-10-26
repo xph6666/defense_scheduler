@@ -32,7 +32,12 @@
       <div>
         <div class="text-gray-500 mb-2">专家（含主席/组长，共 {{ getScheduleExperts(group).length }} 人）</div>
         <div class="flex flex-wrap gap-2">
-          <el-tag v-for="t in getScheduleExperts(group)" :key="t.id" size="small">
+          <el-tag
+            v-for="t in getScheduleExperts(group)"
+            :key="t.id"
+            size="small"
+            :style="assignedMentorColors[t.name.trim()] ? getStudentTagStyle(t.name) : undefined"
+          >
             {{ t.name }}（{{ t.title }}）
           </el-tag>
         </div>
@@ -63,7 +68,7 @@
 import { computed } from 'vue'
 import { getScheduleExperts } from '../domain/scheduleExperts'
 import type { ScheduleGroup } from '../types/schedule'
-import { getMentorColor } from '../utils/color'
+import { buildMentorColorMap, getMentorColor } from '../utils/color'
 import ConflictTag from './ConflictTag.vue'
 
 const props = defineProps<{
@@ -72,6 +77,7 @@ const props = defineProps<{
   conflictCount: number
   canManage?: boolean
   highlighted?: boolean
+  mentorColors?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -86,8 +92,10 @@ const cardClass = computed(() => {
   return classes
 })
 
+const assignedMentorColors = computed(() => props.mentorColors
+  || buildMentorColorMap(props.group.students.map(student => student.mentorName)))
 const getStudentTagStyle = (mentorName: string) => {
-  const color = getMentorColor(mentorName)
+  const color = getMentorColor(mentorName, assignedMentorColors.value)
   return {
     backgroundColor: color,
     borderColor: color,

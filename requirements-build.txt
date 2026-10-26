@@ -1,0 +1,4 @@
+# Windows executable build tools, separate from application runtime.
+-r requirements.txt
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.8

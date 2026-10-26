@@ -19,6 +19,7 @@ from .schedule_integrity import schedule_write, audit, capture_export_groups, ex
 from django.http import HttpResponse
 from django.utils import timezone, translation
 import json
+import re
 from datetime import datetime, time
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
 from .audit import AuditedDataMixin
@@ -140,6 +141,11 @@ def normalize_import_header(value, header_aliases, index):
     if text.startswith('Unnamed:'):
         return f'__column_{index}'
     normalized = header_aliases.get(text, text)
+    # Real rosters put the campus choices in the column heading. Normalize
+    # punctuation/spacing without treating arbitrary location columns as campus.
+    location_heading = re.sub(r'\s+', '', text).replace('（', '(').replace('）', ')')
+    if re.fullmatch(r'(?:预答辩|正式答辩|中期答辩)?(?:地点|校区)\((?:创新港[/、,，]兴庆|兴庆[/、,，]创新港)\)', location_heading):
+        normalized = 'campus'
     for field in IMPORT_KNOWN_FIELDS:
         snake = ''.join('_' + char.lower() if char.isupper() else char for char in field).lstrip('_')
         if snake == normalized and any(char.isupper() for char in field):
@@ -185,6 +191,8 @@ def read_import_dataframe(file, filename, header_aliases, sheet_name=None):
     columns = [normalize_import_header(value, header_aliases, index)
                for index, value in enumerate(raw.iloc[header_index].tolist())] if has_header else [
                    f'__column_{index}' for index in range(len(raw.columns))]
+    if columns.count('campus') > 1:
+        raise ValueError('识别到多个校区或答辩地点列，请保留本次使用的一列后重新导入')
     # Duplicate unknown headings must not discard cells when converting to records.
     columns = [name if name not in columns[:index] else f'__column_{index}'
                for index, name in enumerate(columns)]
@@ -852,8 +860,19 @@ class StudentViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
 
         defense_types = processed_row.get('defenseTypes') or processed_row.get('defense_types')
         if isinstance(defense_types, str):
-            defense_types = split_import_list_text(defense_types)
+            raw_types = defense_types.strip()
+            if raw_types.startswith(('[', '{')):
+                try:
+                    defense_types = json.loads(raw_types)
+                except (ValueError, TypeError):
+                    raise ValueError('参与答辩类型的 JSON 格式不正确，请使用环节数组或顿号分隔')
+            else:
+                defense_types = split_import_list_text(raw_types)
             processed_row['defenseTypes'] = defense_types
+
+        if defense_types and (not isinstance(defense_types, list)
+                or any(value not in DEFENSE_TYPE_LABELS.values() for value in defense_types)):
+            raise ValueError('参与答辩类型须为预答辩、正式答辩、中期答辩的数组或分隔列表')
 
         if not defense_types:
             inferred = infer_defense_types_from_filename(filename)

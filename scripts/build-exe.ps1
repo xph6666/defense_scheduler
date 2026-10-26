@@ -1,14 +1,26 @@
+param(
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
+    [string]$ReleaseName = ("v" + (Get-Date -Format "yyyy.MM.dd-HHmmss")),
+    [string]$PythonPath = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path "$PSScriptRoot\.."
 Set-Location $Root
-$Python = if (Test-Path ".venv\Scripts\python.exe") { ".venv\Scripts\python.exe" } else { "python" }
+$Python = if ($PythonPath) { $PythonPath } elseif (Test-Path ".venv\Scripts\python.exe") { ".venv\Scripts\python.exe" } else { "python" }
 
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
     throw "Missing required command: npm.cmd"
 }
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    throw "Missing required command: python"
+if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
+    throw "Missing required Python interpreter: $Python"
+}
+
+$ReleaseDir = Join-Path $Root "release\$ReleaseName"
+$WorkDir = Join-Path $Root "build\$ReleaseName"
+if ((Test-Path -LiteralPath $ReleaseDir) -or (Test-Path -LiteralPath $WorkDir)) {
+    throw "Release/build directory already exists. Use a new ReleaseName: $ReleaseName"
 }
 
 function Invoke-NativeCommand {
@@ -27,20 +39,12 @@ function Invoke-NativeCommand {
     }
 }
 
-function Remove-BuildArtifact {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    $rootPath = [System.IO.Path]::GetFullPath($Root.Path)
-    $targetPath = [System.IO.Path]::GetFullPath($Path)
-    if (-not $targetPath.StartsWith($rootPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to remove path outside project root: $targetPath"
-    }
-    if (Test-Path -LiteralPath $targetPath) {
-        Remove-Item -LiteralPath $targetPath -Recurse -Force
-    }
+Invoke-NativeCommand "Install runtime and build dependencies" {
+    & $Python -m pip install -r requirements-build.txt
+}
+Invoke-NativeCommand "Python dependency consistency" { & $Python -m pip check }
+Invoke-NativeCommand "SciPy native solver preflight" {
+    & $Python -c "from scipy.optimize import milp, Bounds; r = milp([1.], integrality=[1], bounds=Bounds([1.], [2.])); assert r.success and abs(r.x[0] - 1.) < 1e-8, r; print('SciPy MILP ready')"
 }
 
 $env:VITE_USE_MOCK = "false"
@@ -53,11 +57,9 @@ if (-not (Test-Path $VueTsc)) {
 }
 
 Invoke-NativeCommand "npm run build" { npm.cmd run build }
-Remove-BuildArtifact (Join-Path $Root "build\DefenseScheduler")
-Remove-BuildArtifact (Join-Path $Root "release\DefenseScheduler.exe")
-Invoke-NativeCommand "PyInstaller build" { & $Python -m PyInstaller --clean --noconfirm --distpath release --workpath build DefenseScheduler.spec }
+Invoke-NativeCommand "PyInstaller build" { & $Python -m PyInstaller --noconfirm --distpath $ReleaseDir --workpath $WorkDir DefenseScheduler.spec }
 
-$Exe = Join-Path $Root "release\DefenseScheduler.exe"
+$Exe = Join-Path $ReleaseDir "DefenseScheduler.exe"
 if (-not (Test-Path $Exe)) {
     throw "Executable was not created: $Exe"
 }

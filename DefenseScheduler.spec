@@ -26,6 +26,10 @@ hiddenimports = project_modules + [
     'openpyxl.cell.rich_text',
     'rest_framework.authtoken',
     'xlrd',
+    # The exact-cover scheduler imports these lazily; PyInstaller's SciPy hooks
+    # collect the HiGHS solver and its native-library dependencies.
+    'scipy.optimize',
+    'scipy.sparse',
 ]
 
 excludes = [
@@ -37,7 +41,6 @@ excludes = [
     'numba',
     'pytest',
     '_pytest',
-    'scipy',
     'selenium',
     'sqlalchemy',
     'sympy',

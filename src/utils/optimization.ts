@@ -62,23 +62,24 @@ export function evaluateSoftConstraints(result: ScheduleResult, config: RuleConf
   for (const { group, student } of externalStudents) {
     const mentorKey = student.mentorId !== undefined && student.mentorId !== null
       ? `id:${student.mentorId}` : student.mentorName ? `name:${student.mentorName}` : ''
-    if (!mentorKey) {
+    if (!mentorKey || !group.campus) {
       externalIdentityComplete = false
       continue
     }
-    const mentor = externalMentorGroups.get(mentorKey) || { studentCount: 0, groups: new Set<number>() }
+    const cohortKey = JSON.stringify([mentorKey, group.campus])
+    const mentor = externalMentorGroups.get(cohortKey) || { studentCount: 0, groups: new Set<number>() }
     mentor.studentCount += 1
     mentor.groups.add(group.id)
-    externalMentorGroups.set(mentorKey, mentor)
+    externalMentorGroups.set(cohortKey, mentor)
   }
   const compliantMentors = [...externalMentorGroups.values()].filter(mentor =>
     mentor.groups.size === (mentor.studentCount < 3 ? 1 : 2)).length
   const externalMetricAvailable = externalDataComplete && externalIdentityComplete && externalMentorGroups.size > 0
   add('externalMentorConcentration', '外院导师集中', externalMetricAvailable
     ? compliantMentors / externalMentorGroups.size * 100 : null,
-  `${compliantMentors} / ${externalMentorGroups.size} 位外院导师符合按学生数安排的组数要求`,
+  `${compliantMentors} / ${externalMentorGroups.size} 个外院导师校区组合符合按学生数安排的组数要求`,
   !externalDataComplete ? '缺少导师是否外院的数据' : !externalIdentityComplete
-    ? '缺少外院导师身份数据' : '排期中没有可评估的外院导师')
+    ? '缺少外院导师身份或校区数据' : '排期中没有可评估的外院导师')
 
   const studentKind = (value: string) => {
     const normalized = value.replace(/\s/g, '')

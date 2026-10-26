@@ -36,7 +36,12 @@
     <el-table-column label="专家名单" min-width="220">
       <template #default="{ row }">
         <div class="flex flex-wrap gap-1">
-          <el-tag v-for="t in getScheduleExperts(row)" :key="t.id" size="small">
+          <el-tag
+            v-for="t in getScheduleExperts(row)"
+            :key="t.id"
+            size="small"
+            :style="assignedMentorColors[t.name.trim()] ? getStudentTagStyle(t.name) : undefined"
+          >
             {{ t.name }}
           </el-tag>
         </div>
@@ -66,10 +71,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { getScheduleExperts } from '../domain/scheduleExperts'
 import type { ScheduleGroup } from '../types/schedule'
-import { getMentorColor } from '../utils/color'
+import { buildMentorColorMap, getMentorColor } from '../utils/color'
 import ConflictTag from './ConflictTag.vue'
 import type { ElTable } from 'element-plus'
 
@@ -78,6 +83,7 @@ const props = defineProps<{
   groupStatus: Record<number, 'normal' | 'warning' | 'error'>
   canManage?: boolean
   highlightedGroupIds?: number[]
+  mentorColors?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -99,8 +105,10 @@ const rowClassName = ({ row }: { row: ScheduleGroup }) => {
   return classes.join(' ')
 }
 
+const assignedMentorColors = computed(() => props.mentorColors
+  || buildMentorColorMap(props.groups.flatMap(group => group.students.map(student => student.mentorName))))
 const getStudentTagStyle = (mentorName: string) => {
-  const color = getMentorColor(mentorName)
+  const color = getMentorColor(mentorName, assignedMentorColors.value)
   return {
     backgroundColor: color,
     borderColor: color,

@@ -241,6 +241,11 @@ class StudentSerializer(serializers.ModelSerializer):
         from .services.student_participation import nonparticipation_reason
         return not instance.defense_types and bool(nonparticipation_reason(instance.remark))
 
+    def validate_defenseTypes(self, value):
+        if not isinstance(value, list) or any(item not in DEFENSE_TYPE_LABELS.values() for item in value):
+            raise serializers.ValidationError('参与环节必须是预答辩、正式答辩、中期答辩组成的数组')
+        return list(dict.fromkeys(value))
+
     def validate_name(self, value):
         return value.strip()
 

@@ -1,7 +1,7 @@
 import type { ScheduleResult } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 import { getDefensePolicy } from './defense'
-import { getMentorColor } from '../utils/color'
+import { buildMentorColorMap, getMentorColor } from '../utils/color'
 import { getScheduleExperts } from './scheduleExperts'
 
 export const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!))
@@ -11,17 +11,17 @@ export function renderSchedulePrint(result: ScheduleResult, options: { includeRe
   const conflicts = options.conflicts || result.conflicts || []
   const includeRemarks = options.includeRemarks ?? true
   const policy = getDefensePolicy(result.defenseType)
+  const mentorColors = buildMentorColorMap(result.groups.flatMap(group => group.students.map(student => student.mentorName)))
   const groups = result.groups.map(group => {
     const related = conflicts.filter(conflict => conflict.groupId === group.id || conflict.relatedGroupIds?.includes(group.id) || (!conflict.groupId && !conflict.relatedGroupIds?.length))
     const hasError = related.some(conflict => conflict.level === 'error')
     const experts = getScheduleExperts(group)
     const teacherList = experts.map(teacher => {
-      const linked = group.students.find(student => student.mentorId ? student.mentorId === teacher.id : student.mentorName === teacher.name)
-      const color = linked ? getMentorColor(linked.mentorName) : '#f4f6f8'
+      const color = mentorColors[teacher.name.trim()] || '#f4f6f8'
       return `<span class="person" style="background:${color}">${escapeHtml(teacher.name)}（${escapeHtml(teacher.title)}）</span>`
     }).join(' ')
     const students = group.students.map((student, index) => {
-      const background = getMentorColor(student.mentorName)
+      const background = getMentorColor(student.mentorName, mentorColors)
       return `<tr${hasError ? ' class="conflict-row"' : ''}><td>${index + 1}</td><td>${escapeHtml(student.studentNo || '')}</td><td style="background:${background}">${escapeHtml(student.name)}</td><td>${escapeHtml(student.studentType)}</td><td style="background:${background}">${escapeHtml(student.mentorName)}</td><td>${escapeHtml(student.secretaryName || '')}</td>${includeRemarks ? `<td>${escapeHtml(student.remark || '')}</td>` : ''}</tr>`
     }).join('')
     const issues = related.length ? `<div class="issues"><strong>校验结果</strong><ul>${related.map(conflict => `<li class="${conflict.level === 'error' ? 'error' : ''}">${escapeHtml(conflict.reason)}${conflict.suggestion ? `；${escapeHtml(conflict.suggestion)}` : ''}</li>`).join('')}</ul></div>` : ''

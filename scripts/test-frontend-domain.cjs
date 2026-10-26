@@ -100,6 +100,24 @@ const unavailableQuality = evaluateSoftConstraints({ ...scoringResult, groups: s
 })) }, scoringConfig)
 assert.ok(unavailableQuality.unassessed.some(item => item.key === 'externalMentorConcentration'))
 assert.ok(unavailableQuality.unassessed.some(item => item.key === 'preferAcademicMasterFirst'))
+const campusScoringConfig = { ...scoringConfig, softWeights: {
+  balanceStudentCount: 0, preferSeniorTeacher: 0, avoidCrossCampus: 0,
+  externalMentorConcentration: 10, preferAcademicMasterFirst: 0
+} }
+let cohortStudent = 0
+const campusGroups = [['创新港', 2], ['创新港', 1], ['兴庆', 2], ['兴庆', 1]].map(([campus, count], index) => ({
+  ...scoringResult.groups[0], id: index + 1, campus, teachers: [], students: Array.from({ length: count }, () => ({
+    id: ++cohortStudent, mentorId: 1, mentorName: '同一外院导师', mentorIsExternal: true, studentType: '学硕'
+  }))
+}))
+const campusMetric = groups => evaluateSoftConstraints({ ...scoringResult, groups }, campusScoringConfig)
+assert.equal(campusMetric(campusGroups).scores[0].score, 100, 'three students in two groups in EACH campus comply')
+const wrongCampusGroups = [...campusGroups.slice(0, 2), {
+  ...campusGroups[2], students: [...campusGroups[2].students, ...campusGroups[3].students]
+}]
+assert.equal(campusMetric(wrongCampusGroups).scores[0].score, 50, 'one noncompliant campus is still penalized')
+assert.ok(campusMetric(campusGroups.map(group => ({ ...group, campus: '' }))).unassessed
+  .some(item => item.key === 'externalMentorConcentration'), 'unknown campuses must not earn a guessed score')
 const { validateWizardRules } = load('src/utils/wizardValidation.ts')
 const midCampusConfig = { ...getDefaultRuleConfig('中期答辩'), startDate: '2026-10-12', endDate: '2026-10-20', campusStartDates: { '创新港': '2026-10-12', '兴庆': '2026-10-15' } }
 assert.deepEqual(buildScheduleRules('中期答辩', midCampusConfig).campus_start_dates, midCampusConfig.campusStartDates)
@@ -132,11 +150,38 @@ assert.ok(html.includes('PRIVATE REMARK'))
 assert.ok(!renderSchedulePrint(printResult, { includeRemarks: false }).includes('PRIVATE REMARK'))
 assert.ok(html.includes('STUDENT PRIVATE &lt;备注&gt;'))
 assert.ok(!renderSchedulePrint(printResult, { includeRemarks: false }).includes('STUDENT PRIVATE'))
-const { getMentorColor } = load('src/utils/color.ts')
+const { getMentorColor, buildMentorColorMap, buildMentorColorPairs } = load('src/utils/color.ts')
 assert.ok(html.includes(`background:${getMentorColor('导师甲')}`), 'PDF follows the shared mentor color contract')
 const stressMentors = Array.from({ length: 17 }, (_, index) => `QA导师${String(index + 1).padStart(2, '0')}`)
 assert.equal(new Set(stressMentors.map(getMentorColor)).size, stressMentors.length,
   'the expanded shared palette distinguishes 17 mentors')
+const collisionMentors = ['导师001', '导师023']
+const collisionColors = buildMentorColorMap(collisionMentors)
+assert.notEqual(collisionColors['导师001'], collisionColors['导师023'])
+const manyMentors = Array.from({ length: 160 }, (_, index) => `合成导师${String(index).padStart(3, '0')}`)
+manyMentors.push('导师😀', '导师𠀀', ...collisionMentors)
+const manyPairs = buildMentorColorPairs(manyMentors)
+assert.deepEqual(manyPairs, buildMentorColorPairs([...manyMentors].reverse()), 'input order does not change the version color map')
+assert.equal(new Set(Object.values(manyPairs).map(pair => pair.light)).size, manyMentors.length)
+assert.equal(new Set(Object.values(manyPairs).map(pair => pair.dark)).size, manyMentors.length)
+assert.ok(Object.values(manyPairs).some(pair => pair.light === 'DFE5CA' && pair.dark === '46521C'), 'overflow uses the shared integer color extension')
+const coloredGroups = collisionMentors.map((mentorName, index) => ({ ...printResult.groups[0], id: index + 20,
+  leader: mentorName, teachers: [{ id: index + 20, name: mentorName, title: '教授' }],
+  students: [{ id: index + 20, name: `合成学生${index}`, studentType: '学硕', mentorName }] }))
+const collisionPrint = renderSchedulePrint({ ...printResult, groups: coloredGroups })
+for (const mentorName of collisionMentors) {
+  assert.ok(collisionPrint.includes(`background:${collisionColors[mentorName]}`), 'PDF assigns from all groups in the selected version')
+}
+assert.equal(getMentorColor('导师023', collisionColors), collisionColors['导师023'], 'the full-version map can be retained while filtering groups')
+const oppositeMentorGroups = coloredGroups.map((group, index) => ({ ...group,
+  leader: undefined, chairman: collisionMentors[1 - index],
+  teachers: [{ id: 21 - index, name: collisionMentors[1 - index], title: '教授' }]
+}))
+const formalColorPrint = renderSchedulePrint({ ...printResult, defenseType: '正式答辩', groups: oppositeMentorGroups })
+for (const name of collisionMentors) {
+  assert.ok(formalColorPrint.includes(`background:${collisionColors[name]}">${name}（教授）`),
+    'a formal reviewer uses the color of their students in the OTHER group')
+}
 const { getScheduleExperts } = load('src/domain/scheduleExperts.ts')
 const backendGroup = { ...printResult.groups[0], chairId: 1, teachers: [{ id: 3, name: '组员甲', title: '副教授' }] }
 assert.equal(getScheduleExperts(backendGroup).length, 2, 'API member-only lists also count the chair')
@@ -146,7 +191,7 @@ assert.equal((globalIssueHtml.match(/class="group has-errors"/g) || []).length, 
 const midPrintHtml = renderSchedulePrint({ ...printResult, defenseType: '中期答辩' })
 assert.ok(midPrintHtml.includes('background:#2E75B6;color:#fff;'), 'mid-term headings retain the shared blue with readable white text')
 if (process.argv.includes('--print-fixture')) {
-  const outputDir = path.resolve(__dirname, '../.tmp/v2-ui')
+  const outputDir = process.env.V2_UI_OUTPUT_DIR || path.resolve(__dirname, '../.tmp/v2-ui')
   fs.mkdirSync(outputDir, { recursive: true })
   fs.writeFileSync(path.join(outputDir, 'mid-print.html'), midPrintHtml)
 }

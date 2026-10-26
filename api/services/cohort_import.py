@@ -7,6 +7,7 @@ import hashlib
 import json
 
 from django.utils import translation
+from defense_scheduler.upload_limits import MAX_IMPORT_BATCH_SIZE
 from scheduling.policies import effective_teacher_roles
 
 from ..models import Student, Teacher
@@ -41,7 +42,7 @@ def import_cohort(request):
     uploads = [teacher_file, *student_files]
     if any(item.size > MAX_IMPORT_FILE_SIZE for item in uploads):
         raise ValueError('每份文件不能超过 5 MB')
-    if sum(item.size for item in uploads) > 20 * 1024 * 1024:
+    if sum(item.size for item in uploads) > MAX_IMPORT_BATCH_SIZE:
         raise ValueError('本批文件合计不能超过 20 MB')
     types = _json_option(request, 'defenseTypes', [])
     if not isinstance(types, list) or not types or any(item not in DEFENSE_TYPES for item in types):

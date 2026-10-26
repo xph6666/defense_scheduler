@@ -151,6 +151,7 @@
             >
               <ScheduleGroupCard
                 :group="g"
+                :mentor-colors="mentorColors"
                 :status="groupStatusMap[g.id] || 'normal'"
                 :conflict-count="groupConflictCountMap[g.id] || 0"
                 :can-manage="canEdit"
@@ -164,6 +165,7 @@
         <div v-else class="bg-white p-6 rounded-lg shadow-sm">
           <ScheduleTable
             :groups="filteredGroups"
+            :mentor-colors="mentorColors"
             :group-status="groupStatusMap"
             :can-manage="canEdit"
             :highlighted-group-ids="highlightedGroupIds"
@@ -496,6 +498,7 @@ import { Document, Warning, CircleCloseFilled, InfoFilled, Loading, RefreshRight
 import { useRoute, useRouter } from 'vue-router'
 import WorkflowSteps from '../../components/WorkflowSteps.vue'
 import WorkflowStatusBar from '../../components/WorkflowStatusBar.vue'
+import { buildMentorColorMap } from '../../utils/color'
 import { useDefenseType, workflowLink } from '../../utils/useDefenseType'
 import type { RuleConfig } from '../../types/ruleConfig'
 import ScheduleAgenda from '../../components/ScheduleAgenda.vue'
@@ -562,6 +565,8 @@ const loading = ref(false)
 const loadingMessage = ref('')
 const errorMsg = ref('')
 const result = ref<ScheduleResult | null>(null)
+const mentorColors = computed(() => buildMentorColorMap(
+  (result.value?.groups || []).flatMap(group => group.students.map(student => student.mentorName))))
 const studentCountSummary = computed(() => summarizeStudentCounts(result.value?.groups ?? [], result.value?.rules))
 const linkedHasWarnings = computed(() => !!(linkedPreflightPre.value?.warnings.length || linkedPreflightFormal.value?.warnings.length))
 const { canManage, requireAdmin } = useAdminGuard()

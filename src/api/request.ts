@@ -1,5 +1,5 @@
 import { runtimeConfig } from '../config/runtime'
-import axios, { type AxiosResponse } from 'axios'
+import axios, { type AxiosError, type AxiosResponse } from 'axios'
 
 interface ApiEnvelope<T = unknown> {
   success?: boolean
@@ -61,6 +61,18 @@ const unwrapResponse = (response: AxiosResponse) => {
   return body
 }
 
+// 没有后端提示时给出可读的中文说明，避免把 Axios 英文报错直接展示给用户
+const fallbackMessage = (error: AxiosError) => {
+  const status = error.response?.status
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return '请求超时，请稍后重试'
+  if (!status) return '无法连接服务器，请检查网络后重试'
+  if (status === 401) return '登录已过期，请重新登录'
+  if (status === 403) return '没有权限执行该操作'
+  if (status === 404) return '请求的数据不存在，可能已被删除'
+  if (status >= 500) return '服务暂时不可用，请稍后重试'
+  return '请求失败，请稍后重试'
+}
+
 request.interceptors.request.use(
   config => {
     const token = typeof window !== 'undefined' ? window.localStorage.getItem('authToken') : ''
@@ -78,7 +90,7 @@ request.interceptors.response.use(
   unwrapResponse as (response: AxiosResponse) => AxiosResponse,
   error => {
     const body = error.response?.data as ApiEnvelope | Record<string, unknown> | undefined
-    let message = error.message || '网络请求失败'
+    let message = fallbackMessage(error)
     let data: unknown = body
 
     if (body && typeof body === 'object') {

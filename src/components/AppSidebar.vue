@@ -1,93 +1,130 @@
 <template>
-  <div class="h-full flex flex-col">
-    <div class="h-14 flex items-center justify-center border-b font-bold text-lg text-blue-600 tracking-wide">
-      答辩安排助手
-    </div>
-    <!-- [TASK-P02 修改] 选择答辩类型，并由路由查询参数保持各模块上下文。 -->
-    <div class="px-4 py-3 border-b">
-      <div class="text-xs text-gray-500 mb-2">当前答辩类型</div>
-      <el-select v-model="selectedType" size="small" class="w-full" aria-label="当前答辩类型" @change="handleTypeChange">
-        <el-option v-for="type in defenseTypes" :key="type" :label="type" :value="type" />
-      </el-select>
-    </div>
+  <div class="sidebar-inner">
+    <RouterLink class="brand" to="/dashboard" aria-label="答辩安排助手工作台">
+      <span class="brand-mark">答</span>
+      <span><strong>答辩安排助手</strong><small>DEFENSE PLANNER</small></span>
+    </RouterLink>
+
     <el-menu
+      :key="selectedDefenseIndex"
       :default-active="activeMenu"
-      class="border-r-0 flex-1"
+      :default-openeds="openMenus"
+      class="sidebar-menu"
       @select="handleSelect"
     >
-      <el-menu-item index="/dashboard">
+      <div class="nav-section">总览</div>
+      <el-menu-item index="workbench">
         <el-icon><DataBoard /></el-icon>
         <span>工作台</span>
       </el-menu-item>
-      <el-menu-item index="/rule-config">
-        <el-icon><Setting /></el-icon>
-        <span>安排要求</span>
-      </el-menu-item>
-      <el-menu-item index="/schedule-results">
-        <el-icon><Calendar /></el-icon>
-        <span>分组与发布</span>
-      </el-menu-item>
-      <el-menu-item v-if="canManage" index="/schedule-wizard">
-        <el-icon><Guide /></el-icon>
-        <span>生成向导</span>
-      </el-menu-item>
-      <div class="nav-section">基础数据</div>
-      <el-menu-item index="/teachers">
-        <el-icon><Avatar /></el-icon>
-        <span>教师/专家管理</span>
-      </el-menu-item>
-      <el-menu-item index="/students">
-        <el-icon><User /></el-icon>
-        <span>学生管理</span>
-      </el-menu-item>
-      <el-menu-item index="/classrooms">
-        <el-icon><OfficeBuilding /></el-icon>
-        <span>教室管理</span>
-      </el-menu-item>
-      <div class="nav-section">其他工具</div>
-      <el-menu-item index="/operation-log">
-        <el-icon><Document /></el-icon>
-        <span>操作日志</span>
-      </el-menu-item>
-      <el-menu-item v-if="enableDemoTools" index="/demo-guide">
-        <el-icon><Guide /></el-icon>
-        <span>演示指南</span>
-      </el-menu-item>
-      <el-menu-item v-if="enableDemoTools" index="/acceptance-test">
-        <el-icon><CircleCheck /></el-icon>
-        <span>验收测试</span>
-      </el-menu-item>
+
+      <div class="nav-section">答辩安排</div>
+      <template v-for="item in defenseMenus" :key="item.type">
+        <el-sub-menu v-if="canManage" :index="item.index">
+          <template #title>
+            <el-icon><Calendar /></el-icon>
+            <span>{{ item.type }}</span>
+          </template>
+          <el-menu-item :index="`${item.index}:overview`">概览</el-menu-item>
+          <el-menu-item :index="`${item.index}:rules`">安排要求</el-menu-item>
+          <el-menu-item :index="`${item.index}:schedule`">排期方案</el-menu-item>
+        </el-sub-menu>
+        <el-menu-item v-else :index="`${item.index}:schedule`">
+          <el-icon><Calendar /></el-icon>
+          <span>{{ item.type }}</span>
+        </el-menu-item>
+      </template>
+
+      <template v-if="canManage">
+        <div class="nav-section">公共资料</div>
+        <el-menu-item index="shared:students">
+          <el-icon><User /></el-icon>
+          <span>学生管理</span>
+        </el-menu-item>
+        <el-menu-item index="shared:teachers">
+          <el-icon><Avatar /></el-icon>
+          <span>教师 / 专家管理</span>
+        </el-menu-item>
+        <el-menu-item index="shared:classrooms">
+          <el-icon><OfficeBuilding /></el-icon>
+          <span>教室管理</span>
+        </el-menu-item>
+
+        <div class="nav-section">系统</div>
+        <el-menu-item index="system:logs">
+          <el-icon><Document /></el-icon>
+          <span>操作日志</span>
+        </el-menu-item>
+      </template>
     </el-menu>
+
+    <div class="sidebar-footer">
+      <span class="sidebar-footer-dot" />
+      <span>{{ canManage ? '管理员工作区' : '只读查看' }}</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataBoard, Avatar, User, OfficeBuilding, Calendar, Setting, Document, Guide, CircleCheck } from '@element-plus/icons-vue'
-import { enableDemoTools } from '../config/features'
-
-import { defenseTypes, useDefenseType, workflowLink } from '../utils/useDefenseType'
+import { Avatar, Calendar, DataBoard, Document, OfficeBuilding, User } from '@element-plus/icons-vue'
+import { defenseLink, defenseTypes, isDefenseType, workflowDefenseType } from '../utils/useDefenseType'
 import type { DefenseType } from '../types/schedule'
 import { useAdminGuard } from '../utils/adminGuard'
-const { canManage } = useAdminGuard()
-const router = useRouter()
+
 const route = useRoute()
-const defenseType = useDefenseType()
-const selectedType = ref<DefenseType>(defenseType.value)
-const activeMenu = computed(() => route.path)
+const router = useRouter()
+const { canManage } = useAdminGuard()
 
-watch(defenseType, value => { selectedType.value = value })
+const defenseMenus = defenseTypes.map((type, index) => ({
+  type,
+  index: `defense:${index}`
+}))
 
-const handleSelect = (path: string) => {
-  if (route.path === path) return
-  void router.push(workflowLink(path))
-}
+const selectedType = computed<DefenseType>(() =>
+  isDefenseType(route.query.type) ? route.query.type : workflowDefenseType.value
+)
 
-// 类型切换走路由，让当前页面（如向导）的未保存内容确认生效；被取消时恢复下拉显示
-const handleTypeChange = async (value: DefenseType) => {
-  if (value === defenseType.value) return
-  const failure = await router.push({ path: route.path, query: { ...route.query, type: value } })
-  if (failure) selectedType.value = defenseType.value
+const selectedDefenseIndex = computed(() =>
+  defenseMenus.find(item => item.type === selectedType.value)?.index ?? defenseMenus[0].index
+)
+
+const openMenus = computed(() => canManage.value ? [selectedDefenseIndex.value] : [])
+
+const activeMenu = computed(() => {
+  if (route.path === '/dashboard' && !isDefenseType(route.query.type)) return 'workbench'
+  if (route.path === '/dashboard') return `${selectedDefenseIndex.value}:overview`
+  if (route.path === '/rule-config') return `${selectedDefenseIndex.value}:rules`
+  if (route.path === '/schedule-results') return `${selectedDefenseIndex.value}:schedule`
+  if (route.path === '/students') return 'shared:students'
+  if (route.path === '/teachers') return 'shared:teachers'
+  if (route.path === '/classrooms') return 'shared:classrooms'
+  if (route.path === '/operation-log') return 'system:logs'
+  return ''
+})
+
+const handleSelect = (index: string) => {
+  if (index === 'workbench') {
+    void router.push('/dashboard')
+    return
+  }
+
+  const defenseMenu = defenseMenus.find(item => index.startsWith(`${item.index}:`))
+  if (defenseMenu) {
+    const section = index.slice(`${defenseMenu.index}:`.length)
+    const path = section === 'overview' ? '/dashboard' : section === 'rules' ? '/rule-config' : '/schedule-results'
+    void router.push(defenseLink(path, defenseMenu.type))
+    return
+  }
+
+  const sharedRoutes: Record<string, string> = {
+    'shared:students': '/students',
+    'shared:teachers': '/teachers',
+    'shared:classrooms': '/classrooms',
+    'system:logs': '/operation-log'
+  }
+  const path = sharedRoutes[index]
+  if (path) void router.push(defenseLink(path, selectedType.value))
 }
 </script>

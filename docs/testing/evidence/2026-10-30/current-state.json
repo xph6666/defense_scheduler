@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "checked_at": "2026-10-30T07:28:52.566047+08:00",
+  "scope": "Read-only transaction on local app-data/db.sqlite3; aggregate saved-version structure and stored notices only; no generation, publication or full time-constraint revalidation.",
+  "versions": {
+    "pre": {
+      "id": 24,
+      "version": 18,
+      "status": "published",
+      "source_pre_id": null,
+      "groups": 54,
+      "unique_students": 301,
+      "duplicate_students": 0,
+      "missing_from_input_snapshot": 0,
+      "unexpected_students": 0,
+      "sizes": {
+        "6": 31,
+        "5": 23
+      },
+      "reviewer_counts": {
+        "3": 54
+      },
+      "stored_notices": {
+        "availability_pending": 86,
+        "mentor_share_exception": 8,
+        "external_distribution": 31,
+        "mentor_student_imbalance": 33,
+        "half_day_coverage": 110
+      },
+      "rules": {
+        "policy_version": 3,
+        "group_min": 5,
+        "group_max": 7,
+        "expert_count": 3
+      }
+    },
+    "formal": {
+      "id": 27,
+      "version": 9,
+      "status": "draft",
+      "source_pre_id": 24,
+      "groups": 54,
+      "unique_students": 301,
+      "duplicate_students": 0,
+      "missing_from_input_snapshot": 0,
+      "unexpected_students": 0,
+      "sizes": {
+        "6": 31,
+        "5": 23
+      },
+      "reviewer_counts": {
+        "5": 54
+      },
+      "stored_notices": {
+        "availability_pending": 86,
+        "half_day_coverage": 34
+      },
+      "rules": {
+        "policy_version": 3,
+        "group_min": 5,
+        "group_max": 7,
+        "expert_count": 5,
+        "formal_rotation": true
+      }
+    }
+  },
+  "structural_checks": {
+    "same_group_numbers": true,
+    "same_students_per_group": true,
+    "same_secretary_per_group": true,
+    "all_formal_reviewers_rotated": true,
+    "formal_mentor_avoidance": true
+  }
+}

@@ -2,13 +2,14 @@
 from collections import Counter
 
 
-def repack_sixes(packed, experts, external_max, teacher_map, chair_ids, feasible):
+def repack_sixes(packed, experts, external_max, teacher_map, chair_ids, feasible, limit=None):
+    """limit：最多再增加的组数（每次重编增加 1 组）；为 None 时不限，按原规则最多三次。"""
     import numpy as np
     from scipy.sparse import csc_matrix
     from scipy.optimize._highspy import _core as h
     result = [Counter(c) for c in packed]
     accepted = 0
-    for _ in range(3):
+    for _ in range(3 if limit is None else min(3, limit)):
         indexes = [i for i, c in enumerate(result) if sum(c.values()) == 7][:6]
         if len(indexes) != 6:
             break

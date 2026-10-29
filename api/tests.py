@@ -184,7 +184,7 @@ class IntegrationContractTests(TestCase):
                 'defenseType': '预答辩',
                 'startDate': '2025-05-10',
                 'endDate': '2025-05-12',
-                'studentCount': {'target': 6, 'min': 4, 'max': 7},
+                'studentCount': {'target': 6, 'min': 5, 'max': 7},
             },
             format='json',
         )
@@ -2408,14 +2408,29 @@ class ScheduleExportColorTests(TestCase):
                             if text and run.font.color and run.font.color.rgb:
                                 run_colors[text] = str(run.font.color.rgb)
 
-        # 结构标签与时间一律黑色：着色 run 里不再出现红色，时间也不再着色
-        self.assertNotIn('FF0000', set(run_colors.values()))
-        self.assertNotIn('时间', run_colors)
+        # 结构标签按学院样例用红色，时间值本身保持黑色
+        for label in ('第1组', '时间', '地点', '专家', '秘书', '学生'):
+            self.assertEqual(run_colors.get(label), 'FF0000', label)
         # 学生与其导师（组内专家）同色
         self.assertIsNotNone(run_colors.get('学生1'))
         self.assertEqual(run_colors.get('学生1'), run_colors.get('导师王'))
         self.assertEqual(run_colors.get('学生4'), run_colors.get('导师李'))
         self.assertNotEqual(run_colors.get('学生1'), run_colors.get('学生4'))
+
+    def test_conclusion_export_endpoint_returns_archived_review_form(self):
+        self.assertEqual(self._generate().status_code, 200)
+
+        response = self.client.get('/api/schedule/export_conclusion/', {'defense_type': 'pre'})
+
+        self.assertEqual(response.status_code, 200)
+        from docx import Document as ReadDocument
+        doc = ReadDocument(BytesIO(response.content))
+        self.assertIn('预答辩评审小组结论', doc.paragraphs[1].text)
+        student_lines = [paragraph.text for paragraph in doc.tables[0].rows[1].cells[0].paragraphs
+                         if paragraph.text.startswith('学生')]
+        self.assertTrue(student_lines)
+        self.assertIn('指导教师', student_lines[0])
+        self.assertIn('导师王', '\n'.join(student_lines))
 
     def test_excel_export_uses_mentor_font_colors(self):
         self.assertEqual(self._generate().status_code, 200)

@@ -1,127 +1,212 @@
 <template>
-  <div class="workbench">
-    <header class="workbench-heading">
-      <h1>答辩安排工作台</h1>
-      <el-button :loading="loading" @click="load">刷新进度</el-button>
+  <main class="workbench overview-page">
+    <header class="workbench-heading overview-heading">
+      <div>
+        <span class="eyebrow">答辩安排总览</span>
+        <h1>{{ scopedType ? `${scopedType}概览` : '工作台' }}</h1>
+        <p>{{ scopedType ? '查看本类型的排期状态，并从系统推荐的下一步继续。' : '查看三类答辩进度，选择一项即可继续处理。' }}</p>
+      </div>
+      <el-button :loading="loading" plain @click="load">刷新状态</el-button>
     </header>
-    <section v-if="canManage" class="wizard-entry">
-      <h2>新建答辩安排</h2>
-      <el-button type="primary" size="large" @click="router.push(workflowLink('/schedule-wizard'))">开始一次答辩安排 →</el-button>
-    </section>
-    <div class="type-picker">
-      <span>本次要安排</span><el-radio-group v-model="defenseType" aria-label="本次答辩类型">
-        <el-radio-button v-for="type in defenseTypes" :key="type" :label="type">{{ type }}</el-radio-button>
-      </el-radio-group>
-    </div>
-    <WorkflowSteps :current="!canManage ? 4 : currentResult?.groups.length ? (currentResult.status === 'published' ? 4 : 3) : materials.every(item => !!item.count) ? 2 : 1" />
-    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="mb-4" />
-    <section class="next-action" aria-live="polite">
-      <div><h2>{{ nextAction.title }}</h2><p>{{ nextAction.description }}</p></div>
-      <el-button type="primary" size="large" :disabled="loading || !!error" @click="router.push(workflowLink(nextAction.path))">{{ nextAction.button }} <span class="ml-2" aria-hidden="true">→</span></el-button>
-    </section>
-    <div v-if="!loading && !error && participation.total && !participation.current" class="workflow-note participation-note" role="status">
-      <p>{{ participation.hint }}请核对当前选择的环节，无需重复导入学生。</p>
-      <div class="participation-links"><el-button v-for="type in participation.availableTypes" :key="type" link type="primary" @click="defenseType = type">切换到{{ type }}</el-button><RouterLink :to="workflowLink('/students')" class="text-link">核对学生参与环节 →</RouterLink></div>
-    </div>
-    <section aria-labelledby="materials-title">
-      <div class="section-heading"><h2 id="materials-title">1. 资料准备</h2></div>
-      <div class="material-grid">
-        <RouterLink v-for="item in materials" :key="item.path" :to="workflowLink(item.path)" class="material-card">
-          <div class="material-top"><span class="material-label">{{ item.title }}</span><span class="material-state" :class="{ missing: item.count === 0 }">{{ item.count === null ? '尚未读取' : item.count ? '已有资料' : item.path === '/students' && participation.total ? '本环节待确认' : '待准备' }}</span></div>
-          <div class="material-count">{{ item.count ?? '—' }}<small>{{ item.unit }}</small></div>
-          <p v-if="item.path === '/students'">{{ participation.hint }}</p>
-          <span class="material-link">{{ item.path === '/students' && participation.total && !item.count ? '核对参与环节' : canManage && item.count === 0 ? '去导入资料' : '查看与补充' }} <span aria-hidden="true">→</span></span>
-        </RouterLink>
-      </div>
-    </section>
-    <section class="workbench-bottom">
-      <div class="workbench-panel">
-        <div class="section-heading"><h2>2. 确认本次要求</h2></div>
-        <el-button @click="router.push(workflowLink('/rule-config'))">{{ canManage ? '设置日期与人数' : '查看安排要求' }}</el-button>
-      </div>
-      <div class="workbench-panel">
-        <div class="section-heading"><h2>3. 本次安排进度</h2><el-tag v-if="currentResult?.groups.length" :type="currentResult.status === 'published' ? 'success' : 'warning'">{{ currentResult.status === 'published' ? '已发布' : '草稿' }}</el-tag></div>
-        <template v-if="currentResult?.groups.length"><p>{{ currentResult.groups.length }} 个分组 · {{ scheduledStudents }} 名学生<span v-if="errorCount"> · {{ errorCount }} 项问题需要处理</span></p><el-button @click="router.push(workflowLink('/schedule-results'))">{{ currentResult.status === 'published' ? '查看并导出安排' : '检查分组安排' }}</el-button></template>
-        <p v-else>{{ loading || error ? '读取成功后将在这里显示安排进度。' : canManage ? '还没有安排。准备资料并确认要求后，就可以生成草稿。' : '管理员发布安排后，会显示在这里。' }}</p>
-      </div>
-    </section>
-    <details class="secondary-details">
-      <summary>查看全部类型的统计与管理工具</summary><div class="overview-detail">
-        <span>全部教师 {{ teachers?.length ?? '—' }} 人</span><span>全部学生 {{ students?.length ?? '—' }} 人</span><span>已有 {{ scheduleOverview.typeCount }} 类安排，共 {{ scheduleOverview.totalGroups }} 组</span><span>最近生成：{{ scheduleOverview.latestGeneratedAt }}</span>
-        <span>全部类型：{{ conflictOverview.errorCount }} 项错误、{{ conflictOverview.warningCount }} 项提醒（最近检测 {{ conflictOverview.checkedAt }}）</span>
-        <el-button v-if="enableDemoTools && canManage" type="warning" plain @click="handleResetDemoData">重置演示数据</el-button>
-      </div>
-    </details>
-  </div>
+
+    <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="mb-5">
+      <template #default><el-button link type="primary" @click="load">重新读取</el-button></template>
+    </el-alert>
+
+    <el-skeleton v-if="loading && !error" :rows="5" animated />
+
+    <template v-else-if="!error">
+      <section v-if="scopedType" class="overview-focus" :aria-labelledby="`focus-${scopedType}`">
+        <div class="focus-topline">
+          <div>
+            <span class="status-kicker">{{ summaryFor(scopedType).statusLabel }}</span>
+            <h2 :id="`focus-${scopedType}`">{{ scopedType }}</h2>
+            <p>{{ summaryFor(scopedType).description }}</p>
+          </div>
+          <el-tag :type="summaryFor(scopedType).tagType" effect="light" size="large">
+            {{ summaryFor(scopedType).statusLabel }}
+          </el-tag>
+        </div>
+
+        <div class="overview-focus-grid">
+          <div class="overview-metric"><span>参加本类型的学生</span><strong>{{ summaryFor(scopedType).studentCount }}</strong></div>
+          <div class="overview-metric"><span>可用教师 / 专家</span><strong>{{ summaryFor(scopedType).teacherCount }}</strong></div>
+          <div class="overview-metric"><span>{{ summaryFor(scopedType).result ? '当前分组' : '最近状态' }}</span><strong>{{ summaryFor(scopedType).result ? `${summaryFor(scopedType).groupCount} 组` : summaryFor(scopedType).statusShort }}</strong></div>
+        </div>
+
+        <div class="focus-action">
+          <div>
+            <strong>{{ summaryFor(scopedType).nextTitle }}</strong>
+            <p>{{ summaryFor(scopedType).nextDescription }}</p>
+          </div>
+          <el-button type="primary" size="large" :disabled="summaryFor(scopedType).disabled" @click="go(summaryFor(scopedType).actionPath, scopedType)">
+            {{ summaryFor(scopedType).actionLabel }}
+          </el-button>
+        </div>
+      </section>
+
+      <section v-else class="overview-grid" aria-label="三类答辩状态">
+        <article
+          v-for="type in defenseTypes"
+          :key="type"
+          class="defense-overview-card"
+          :class="summaryFor(type).cardClass"
+        >
+          <div class="overview-card-head">
+            <div>
+              <span class="overview-label">答辩类型</span>
+              <h2>{{ type }}</h2>
+            </div>
+            <el-tag :type="summaryFor(type).tagType" effect="light">{{ summaryFor(type).statusLabel }}</el-tag>
+          </div>
+          <div class="overview-count">
+            <div><strong>{{ summaryFor(type).studentCount }}</strong><span>参排学生</span></div>
+            <div><strong>{{ summaryFor(type).groupCount || '—' }}</strong><span>{{ summaryFor(type).result ? '当前分组' : '分组' }}</span></div>
+          </div>
+          <p class="overview-next">{{ summaryFor(type).nextDescription }}</p>
+          <el-button type="primary" plain :disabled="summaryFor(type).disabled" @click="go(summaryFor(type).actionPath, type)">
+            {{ summaryFor(type).actionLabel }}
+          </el-button>
+        </article>
+      </section>
+    </template>
+  </main>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
 import { listTeachers } from '../api/teacher'
 import { listStudents } from '../api/student'
-import { listClassrooms } from '../api/classroom'
 import { getScheduleResults } from '../api/schedule'
-import type { Teacher } from '../types/teacher'
-import type { Student } from '../types/student'
-import type { Classroom } from '../types/classroom'
 import type { DefenseType, ScheduleResult } from '../types/schedule'
-import { summarizeConflictOverview, summarizeScheduleOverview } from '../utils/dashboardOverview'
-import { resetDemoData } from '../utils/demoSeed'
-import { addOperationLog } from '../utils/operationLogStorage'
-import { enableDemoTools } from '../config/features'
+import type { Student } from '../types/student'
+import type { Teacher } from '../types/teacher'
+import { defenseLink, defenseTypes, isDefenseType } from '../utils/useDefenseType'
 import { useAdminGuard } from '../utils/adminGuard'
-import { defenseTypes, useDefenseType, workflowLink } from '../utils/useDefenseType'
-import WorkflowSteps from '../components/WorkflowSteps.vue'
-import { summarizeParticipation } from '../utils/studentParticipation'
+
+const route = useRoute()
 const router = useRouter()
-const defenseType = useDefenseType()
-const { canManage, requireAdmin } = useAdminGuard()
-const teachers = ref<Teacher[] | null>(null)
-const students = ref<Student[] | null>(null)
-const classrooms = ref<Classroom[] | null>(null)
+const { canManage } = useAdminGuard()
+const scopedType = computed(() => isDefenseType(route.query.type) ? route.query.type : null)
+const teachers = ref<Teacher[]>([])
+const students = ref<Student[]>([])
 const results = ref<Partial<Record<DefenseType, ScheduleResult>>>({})
 const loading = ref(true)
 const error = ref('')
-const participation = computed(() => summarizeParticipation(students.value || [], defenseType.value))
-const currentResult = computed(() => results.value[defenseType.value])
-const errorCount = computed(() => currentResult.value?.conflicts?.filter(c => c.level === 'error').length || 0)
-const scheduledStudents = computed(() => new Set(currentResult.value?.groups.flatMap(g => g.students.map(s => s.id))).size)
-const scheduleOverview = computed(() => summarizeScheduleOverview(Object.values(results.value)))
-const conflictOverview = computed(() => summarizeConflictOverview(Object.values(results.value)))
-const materials = computed(() => [
-  { title: '学生名单', path: '/students', count: students.value?.filter(s => s.defenseTypes.includes(defenseType.value)).length ?? null, unit: '人', hint: `参加${defenseType.value}的学生。请核对学号、导师与参与环节。` },
-  { title: '教师与专家', path: '/teachers', count: teachers.value?.filter(t => t.isActive !== false && (!t.availableTypes?.length || t.availableTypes.includes(defenseType.value))).length ?? null, unit: '人', hint: '可参加本次答辩的教师。请补充职称和不可用时间。' },
-  { title: '教室预约资料', path: '/classrooms', count: classrooms.value?.length ?? null, unit: '间', hint: '预答辩与正式答辩先确定人员和时间，再据此预约教室。' }
-])
-const nextAction = computed(() => {
-  if (loading.value) return { title: '正在查看已有资料…', description: '稍等片刻，读取后会告诉您可以从哪里继续。', button: '读取中', path: '/dashboard' }
-  if (error.value) return { title: '暂时无法确认进度', description: '请点击上方“刷新进度”重试，避免把读取失败当作没有资料。', button: '等待重新读取', path: '/dashboard' }
-  if (!canManage.value) return { title: '查看已发布的答辩安排', description: '您可以查看分组、答辩时间，并下载 Word 或 Excel 文件。', button: '查看安排', path: '/schedule-results' }
-  const missing = materials.value.find(item => !item.count)
-  if (missing?.path === '/students' && participation.value.total) return { title: `核对${defenseType.value}的学生参与环节`, description: participation.value.hint + ' 可切换到已有学生的环节，或在学生管理补充参与环节。', button: '核对参与环节', path: '/students' }
-  if (missing) return { title: `先准备${missing.title}`, description: missing.hint + ' 已有 Excel 文件可以直接导入。', button: `准备${missing.title}`, path: missing.path }
-  if (currentResult.value?.groups.length) return { title: currentResult.value.status === 'published' ? '安排已发布，可以导出了' : errorCount.value ? `草稿已生成，还有 ${errorCount.value} 项问题需要处理` : '草稿已生成，请核对分组', description: '您可以继续查看本次安排。修改已发布内容时，需要生成新的草稿。', button: currentResult.value.status === 'published' ? '查看并导出' : '继续检查安排', path: '/schedule-results' }
-  return { title: '资料已有，接下来确认日期和人数', description: '先核对本次要求，再生成分组草稿。高级要求可按需展开。', button: '确认安排要求', path: '/rule-config' }
-})
+
+function summaryFor(type: DefenseType) {
+  const result = results.value[type]
+  const scheduledCount = new Set(result?.groups.flatMap(group => group.students.map(student => student.id)) || []).size
+  const studentCount = students.value.filter(student => !student.participationExcluded && student.defenseTypes.includes(type)).length
+  const teacherCount = teachers.value.filter(teacher => teacher.isActive !== false && (!teacher.availableTypes?.length || teacher.availableTypes.includes(type))).length
+  const errorCount = result?.conflicts?.filter(conflict => conflict.level === 'error').length || 0
+  const warningCount = result?.conflicts?.filter(conflict => conflict.level === 'warning').length || 0
+  const unassignedCount = result?.unassignedStudents?.length || 0
+  const hasSchedule = !!result?.groups.length
+  const isPublished = result?.status === 'published'
+
+  let statusLabel = '尚未生成'
+  let statusShort = '未生成'
+  let tagType: 'success' | 'warning' | 'danger' | 'info' = 'info'
+  let description = '准备好学生与教师资料后，即可设置要求并生成草稿。'
+  let nextTitle = '从当前状态继续'
+  let nextDescription = description
+  let actionLabel = '查看本类型概览'
+  let actionPath = '/rule-config'
+  let disabled = false
+  let cardClass = ''
+
+  if (hasSchedule && isPublished) {
+    statusLabel = '已发布'
+    statusShort = `${scheduledCount} 人已安排`
+    tagType = 'success'
+    description = `已发布 ${result!.groups.length} 个分组，可查看和导出当前版本。`
+    nextTitle = '查看已发布安排'
+    nextDescription = description
+    actionLabel = '查看排期方案'
+    actionPath = '/schedule-results'
+    cardClass = 'is-ready'
+  } else if (hasSchedule) {
+    statusLabel = errorCount || unassignedCount ? '草稿待处理' : '草稿待核对'
+    statusShort = `${scheduledCount} 人已安排`
+    tagType = errorCount || unassignedCount ? 'danger' : 'warning'
+    description = `当前有 ${result!.groups.length} 个分组；${errorCount ? `${errorCount} 项硬冲突` : '暂无硬冲突'}，${unassignedCount ? `${unassignedCount} 名学生未安排` : '未安排学生为 0'}${warningCount ? `，另有 ${warningCount} 项提醒` : ''}。`
+    nextTitle = errorCount || unassignedCount ? '处理草稿中的问题' : '核对草稿并发布'
+    nextDescription = description
+    actionLabel = errorCount || unassignedCount ? '查看待处理项' : '核对并发布'
+    actionPath = '/schedule-results'
+    cardClass = 'is-attention'
+  } else if (!canManage.value) {
+    statusLabel = '暂无已发布安排'
+    statusShort = '等待发布'
+    tagType = 'info'
+    description = '管理员发布本类型安排后，可在这里查看和导出。'
+    nextTitle = '等待管理员发布'
+    nextDescription = description
+    actionLabel = '查看排期方案'
+    actionPath = '/schedule-results'
+  } else {
+    const missingStudents = studentCount === 0
+    const missingTeachers = teacherCount === 0
+    const missing = missingStudents ? '学生名单' : missingTeachers ? '教师 / 专家资料' : null
+    statusLabel = missing ? '资料待准备' : '待设置要求'
+    statusShort = missing ? '资料待准备' : '待设置'
+    tagType = 'warning'
+    description = missing
+      ? `请先补充${missing}，之后即可设置规则并生成草稿。`
+      : '资料已有记录，下一步是确认日期、人数和角色要求。'
+    nextTitle = missing ? `先补充${missing}` : '确认日期和排期要求'
+    nextDescription = description
+    actionLabel = missing ? '前往公共资料' : '设置安排要求'
+    actionPath = missingStudents ? '/students' : missingTeachers ? '/teachers' : '/rule-config'
+    cardClass = 'is-attention'
+  }
+
+  return {
+    result,
+    studentCount,
+    teacherCount,
+    groupCount: result?.groups.length || 0,
+    statusLabel,
+    statusShort,
+    tagType,
+    description,
+    nextTitle,
+    nextDescription,
+    actionLabel,
+    actionPath,
+    disabled,
+    cardClass
+  }
+}
+
+function go(path: string, type: DefenseType) {
+  void router.push(defenseLink(path, type))
+}
+
 async function load() {
-  loading.value = true; error.value = ''
+  loading.value = true
+  error.value = ''
   try {
-    const [t, s, c, ...schedules] = await Promise.all([listTeachers(), listStudents(), listClassrooms(), ...defenseTypes.map(getScheduleResultsForType)])
-    teachers.value = t as Teacher[]; students.value = s as Student[]; classrooms.value = c as Classroom[]
-    results.value = Object.fromEntries(defenseTypes.flatMap((type, index) => schedules[index] ? [[type, schedules[index]]] : []))
-  } catch (e) { error.value = e instanceof Error ? e.message : '资料读取失败，请重试' }
-  finally { loading.value = false }
+    const [teacherRows, studentRows, ...scheduleRows] = await Promise.all([
+      listTeachers(),
+      listStudents(),
+      ...defenseTypes.map(type => getScheduleResults(type))
+    ])
+    teachers.value = teacherRows as Teacher[]
+    students.value = studentRows as Student[]
+    results.value = Object.fromEntries(defenseTypes.flatMap((type, index) => {
+      const result = scheduleRows[index]
+      if (!result || (!canManage.value && result.status !== 'published')) return []
+      return [[type, result]]
+    }))
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '读取答辩进度失败，请重试。'
+  } finally {
+    loading.value = false
+  }
 }
-const getScheduleResultsForType = (type: DefenseType) => getScheduleResults(type)
-async function handleResetDemoData() {
-  if (!requireAdmin()) return
-  try {
-    await ElMessageBox.confirm('确定重置演示资料和排期结果吗？', '重置演示数据', { type: 'warning' })
-    resetDemoData(); addOperationLog({ type: '重置演示数据', module: 'Dashboard', description: '重置演示资料与排期' })
-    await load(); ElMessage.success('演示数据已重置')
-  } catch { /* cancelled */ }
-}
+
 onMounted(load)
 </script>

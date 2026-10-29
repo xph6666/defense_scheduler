@@ -1,5 +1,5 @@
 <template>
-  <div class="workflow-status-bar">
+  <div class="workflow-status-bar" role="list" aria-label="排期流程">
     <div
       v-for="(step, index) in steps"
       :key="step.key"
@@ -8,19 +8,24 @@
         `step-${step.status}`,
         { 'is-current': step.status === 'current' }
       ]"
+      role="listitem"
+      :aria-current="step.status === 'current' ? 'step' : undefined"
     >
       <div class="step-indicator">
-        <el-icon v-if="step.status === 'done'" class="icon-done"><CircleCheck /></el-icon>
-        <el-icon v-else-if="step.status === 'error'" class="icon-error"><Warning /></el-icon>
+        <el-icon v-if="step.status === 'done'" class="step-icon"><CircleCheck /></el-icon>
+        <el-icon v-else-if="step.status === 'error'" class="step-icon"><Warning /></el-icon>
         <span v-else class="step-num">{{ index + 1 }}</span>
       </div>
       <div class="step-content">
         <div class="step-title">{{ step.title }}</div>
         <div class="step-desc">{{ step.description }}</div>
       </div>
-      <div v-if="index < steps.length - 1" class="step-connector">
-        <div class="connector-line" :class="{ 'is-done': step.status === 'done' }"></div>
-      </div>
+      <div
+        v-if="index < steps.length - 1"
+        class="step-connector"
+        :class="{ 'is-done': step.status === 'done' }"
+        aria-hidden="true"
+      ></div>
     </div>
   </div>
 </template>
@@ -109,25 +114,28 @@ const steps = computed<WorkflowStep[]>(() => {
 <style scoped>
 .workflow-status-bar {
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   background: white;
   border: 1px solid #e0e5ec;
   border-radius: 8px;
-  padding: 16px 20px;
-  gap: 8px;
+  padding: 18px 24px;
   overflow-x: auto;
 }
 
 .workflow-status-step {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   position: relative;
-  flex: 1;
-  min-width: 140px;
+  flex: 1 1 0;
+  min-width: 136px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 0 12px;
 }
 
 .step-indicator {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   width: 32px;
   height: 32px;
@@ -137,10 +145,11 @@ const steps = computed<WorkflowStep[]>(() => {
   justify-content: center;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1;
   border: 2px solid #c9d5e3;
   color: #6b7788;
   background: white;
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
 .step-done .step-indicator {
@@ -159,16 +168,20 @@ const steps = computed<WorkflowStep[]>(() => {
   background: #00467f;
   border-color: #00467f;
   color: white;
-  box-shadow: 0 0 0 4px rgba(0, 70, 127, 0.15);
+  box-shadow: 0 0 0 4px rgba(0, 70, 127, 0.14);
 }
 
-.icon-done, .icon-error {
+.step-icon {
   font-size: 18px;
 }
 
+.step-num {
+  font-variant-numeric: tabular-nums;
+}
+
 .step-content {
-  flex: 1;
   min-width: 0;
+  margin-top: 10px;
 }
 
 .step-title {
@@ -197,7 +210,7 @@ const steps = computed<WorkflowStep[]>(() => {
   font-size: 12px;
   color: #9aa5b4;
   margin-top: 2px;
-  line-height: 1.4;
+  line-height: 1.5;
   transition: color 0.3s ease;
 }
 
@@ -211,45 +224,66 @@ const steps = computed<WorkflowStep[]>(() => {
 
 .step-connector {
   position: absolute;
-  right: -4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 20px;
+  top: 15px;
+  left: calc(50% + 28px);
+  width: calc(100% - 56px);
   height: 2px;
-}
-
-.connector-line {
-  width: 100%;
-  height: 100%;
+  border-radius: 2px;
   background: #dce3eb;
-  transition: background 0.3s ease;
+  transition: background-color 0.3s ease;
 }
 
-.connector-line.is-done {
+.step-connector.is-done {
   background: #356d9a;
+}
+
+@media (max-width: 1024px) {
+  .workflow-status-bar {
+    flex-direction: column;
+    padding: 18px 20px;
+    overflow: visible;
+  }
+
+  .workflow-status-step {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+    text-align: left;
+    padding: 0 0 20px;
+  }
+
+  .workflow-status-step:last-child {
+    padding-bottom: 0;
+  }
+
+  .step-content {
+    margin-top: 0;
+    padding-top: 4px;
+  }
+
+  .step-connector {
+    top: 32px;
+    bottom: 0;
+    left: 15px;
+    width: 2px;
+    height: auto;
+  }
 }
 
 @media (max-width: 760px) {
   .workflow-status-bar {
-    flex-wrap: nowrap;
-    padding: 12px;
-    gap: 4px;
+    padding: 14px 16px;
   }
-  .workflow-status-step {
-    min-width: 100px;
-    flex-direction: column;
-    align-items: center;
-    text-align: center;
-    gap: 6px;
-  }
-  .step-connector {
-    display: none;
-  }
+
   .step-title {
-    font-size: 12px;
+    font-size: 13px;
   }
+
   .step-desc {
-    font-size: 11px;
+    font-size: 12px;
   }
 }
 </style>

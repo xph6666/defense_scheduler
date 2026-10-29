@@ -71,11 +71,13 @@
       />
     </div>
 
-    <!-- Dialog -->
-    <el-dialog
+    <!-- Edit in a right-side drawer so the list context remains visible. -->
+    <el-drawer
       v-model="dialogVisible"
       :title="isEdit ? '编辑教室' : '新增教室'"
-      width="500px"
+      size="min(520px, 96vw)"
+      direction="rtl"
+      class="entity-form-drawer"
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
@@ -104,7 +106,7 @@
           <el-button type="primary" @click="submitForm" :loading="submitLoading">确定</el-button>
         </span>
       </template>
-    </el-dialog>
+    </el-drawer>
 
     <ImportDialog v-if="canManage" v-model="importVisible" type="classroom" @success="fetchData" />
   </div>

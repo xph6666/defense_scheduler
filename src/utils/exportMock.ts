@@ -4,7 +4,8 @@ import { createCsvBlob, downloadBlob } from './download'
 
 export function exportScheduleToCsv(
   result: ScheduleResult,
-  conflicts: ScheduleConflict[] = []
+  conflicts: ScheduleConflict[] = [],
+  includeRemarks = result.rules?.include_remarks ?? result.rules?.includeRemarks ?? true
 ) {
   const headers = [
     '答辩类型',
@@ -18,7 +19,7 @@ export function exportScheduleToCsv(
     '专家名单',
     '学生名单',
     '学生-导师关系',
-    '备注',
+    ...(includeRemarks ? ['备注'] : []),
     '冲突状态'
   ]
 
@@ -31,6 +32,10 @@ export function exportScheduleToCsv(
     const teachers = group.teachers.map(t => t.name).join('；')
     const students = group.students.map(s => s.name).join('；')
     const studentMentor = group.students.map(s => `${s.name}-${s.mentorName}`).join('；')
+    const remarks = [
+      group.remark ? `分组：${group.remark}` : '',
+      ...group.students.filter(student => student.remark).map(student => `${student.name}：${student.remark}`)
+    ].filter(Boolean).join('；')
 
     return [
       group.defenseType,
@@ -44,7 +49,7 @@ export function exportScheduleToCsv(
       teachers,
       students,
       studentMentor,
-      group.remark || '',
+      ...(includeRemarks ? [remarks] : []),
       status
     ]
   })

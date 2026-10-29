@@ -144,7 +144,7 @@ class CrossGroupRepair:
         proposed = [best[0] if plan is left_plan else best[1] if plan is right_plan else plan.group
                     for plan in self.p.plans]
         soft = {'external_distribution', 'half_day_coverage', 'student_group_exception', 'missing_student',
-                'mentor_student_imbalance', 'pre_group_capacity'}
+                'mentor_student_imbalance', 'mentor_share_exception', 'pre_group_capacity'}
         if any(c['type'] not in soft for c in validate(proposed, self.p.students, self.p.teachers, self.p.rules)):
             return False
         from .personnel_first import Demand

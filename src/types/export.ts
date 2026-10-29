@@ -2,6 +2,7 @@ export type ExportStatus = 'idle' | 'exporting' | 'success' | 'error'
 
 export interface ExportOptions {
   defenseType: '预答辩' | '正式答辩' | '中期答辩'
+  includeRemarks?: boolean
   includeConflicts?: boolean
   includeRemark?: boolean
   mockMode?: boolean

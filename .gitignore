@@ -32,6 +32,7 @@ dist-ssr
 venv/ 
 __pycache__/ 
 .pytest_cache/
+.ruff_cache/
 *.pyc 
 db.sqlite3 
 .idea/ 
@@ -61,3 +62,7 @@ staticfiles/
 .env.production
 .venv/
 .runtime-deps/
+
+# Test temporary directories created at the project root
+/tmp????????/
+/pre-plan-*/

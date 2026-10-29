@@ -1,0 +1,129 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "scope": "Read-only saved-input snapshot runs; no database writes or publication; concurrent workloads make elapsed times non-comparable.",
+  "backend": {
+    "command": ".venv/Scripts/python.exe manage.py test --noinput",
+    "tests": 481,
+    "seconds": 105.368,
+    "result": "OK"
+  },
+  "frontend": {
+    "domain": "passed",
+    "build": "passed",
+    "lint": "passed with --ignore-pattern tmp*/ --ignore-pattern pre-plan-*/; default scan hit EPERM on backend temporary directories",
+    "build_warnings": [
+      "outdated Browserslist data",
+      "chunks above 500 kB"
+    ]
+  },
+  "sources_sha256": {
+    "scheduling/formal_rotation.py": "5f64be508d0fab0095421c9f40e696167a2831f496005392c14e7f23faa3736a",
+    "scheduling/personnel_first.py": "0d8d41456c6264beca451fba85ed1176423d2af105773815bb04be64a1cb16f6",
+    "scheduling/current.py": "e1755de45cbbb822a1f715a76fbf906770b370ef55496f9a7f44764b9db98ffa",
+    "scheduling/policies.py": "8c1502514985fe2f4942afbe8a255d26150d28a208327996211d945af2ae337f",
+    "scheduling/preflight.py": "a5c5fc27d08f6983a111bc9cf73646f0979cfc77e1cc922685f81c7dc01ce726",
+    "api/services/schedules.py": "9f8d5e312bd1ae962035e125e7df57ce98889f5c37face332ebd694d8144a610",
+    "api/authentication.py": "6c03dfe25349395f563a8665917e758f813d9ee8231a958f6a1db477d7769e1a",
+    "api/test_formal_rotation.py": "0dc262f4c13147a635f360819b20636fa70fdd49b26a20ce0b31d2b06a979c5a",
+    "api/test_current_scheduling.py": "15d972b9837433d5af42443018a0676b132f7a3a782cc932a8b40f462852db14",
+    "api/test_balanced_pre.py": "917ae0c8aff9c64d369ba34c6d2fe9064629fc33888b664a643aa9a4a16bec02",
+    "scripts/qa/balanced-pre-snapshot.py": "8af1b3b6478b9c6d4f5c814b6732a6db0692375433f8bde82abb9a6c94347f74",
+    "src/domain/scheduleRules.ts": "385557ed92aa7804c120125e609e5a789c93ccab80c06149e771cdadd17a844c",
+    "src/components/RuleConfigForm.vue": "afa518b98f4081723dfc8eaf00d731ea2df87b0924963540239226abb8e57225",
+    "src/views/schedule/ScheduleResult.vue": "4cc6f8e2e9c0b5d0cba9bf1108ed77369b4b36d12bc0dc2d1720e44304b297c0",
+    "scripts/test-frontend-domain.cjs": "8c6d3735e3515ad61dfaff0a51149ea5d407dfac724c092ad92b15f9d136346d"
+  },
+  "input_snapshots": {
+    "pre": {
+      "rules_sha256": "3c3adcb99a82e3516295e049e6f52d653ccc766fec12deaf0e46cece4a0880c9",
+      "payload_sha256": "2f8ae70b5abd795b8d290ba8eb75866d28c1027d3ed981aafedf965293ba53e6"
+    },
+    "formal": {
+      "rules_sha256": "7b1d453ad315d8c4201767ba0a154d9cd30cff0585ccac5855e44fd564273a37",
+      "payload_sha256": "f0ad2894fb6119c46cd44115034a963af79ef8348d7ecc823f1b397e0b55d7fc"
+    }
+  },
+  "scenarios": {
+    "3": {
+      "pre": {
+        "groups": 54,
+        "students": 301,
+        "unassigned": 0,
+        "sizes": {
+          "5": 23,
+          "6": 31
+        },
+        "two_external_panels": 30,
+        "independent_checks": "passed",
+        "relaxed_chairs": 0,
+        "cross_campus_teacher_days": 10,
+        "seconds": 142.095,
+        "time_assumptions": 86
+      },
+      "formal": {
+        "groups": 54,
+        "students": 301,
+        "unassigned": 0,
+        "sizes": {
+          "5": 23,
+          "6": 31
+        },
+        "two_external_panels": 0,
+        "independent_checks": "passed",
+        "relaxed_chairs": 0,
+        "cross_campus_teacher_days": 0,
+        "seconds": 3.848,
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-11-10",
+          "2026-11-11",
+          "2026-11-12",
+          "2026-11-13"
+        ],
+        "placement_status": "optimal"
+      },
+      "rotation": "fixed group numbers, students and secretaries retained; every reviewer rotated with mentor avoidance"
+    },
+    "5": {
+      "pre": {
+        "groups": 56,
+        "students": 301,
+        "unassigned": 0,
+        "sizes": {
+          "5": 35,
+          "6": 21
+        },
+        "two_external_panels": 39,
+        "independent_checks": "passed",
+        "relaxed_chairs": 0,
+        "cross_campus_teacher_days": 16,
+        "seconds": 129.609,
+        "time_assumptions": 86
+      },
+      "formal": {
+        "groups": 56,
+        "students": 301,
+        "unassigned": 0,
+        "sizes": {
+          "5": 35,
+          "6": 21
+        },
+        "two_external_panels": 0,
+        "independent_checks": "passed",
+        "relaxed_chairs": 0,
+        "cross_campus_teacher_days": 0,
+        "seconds": 20.31,
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-11-10",
+          "2026-11-11",
+          "2026-11-12",
+          "2026-11-13"
+        ],
+        "placement_status": "milp_status_1"
+      },
+      "rotation": "fixed group numbers, students and secretaries retained; every reviewer rotated with mentor avoidance"
+    }
+  }
+}

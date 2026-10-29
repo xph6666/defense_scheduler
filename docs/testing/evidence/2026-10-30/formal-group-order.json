@@ -1,0 +1,94 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "requirement": "Actual formal half-days must be nondecreasing in natural order of original pre-defense group numbers; parallel groups allowed.",
+  "database_mutated": false,
+  "backend": {
+    "command": ".venv/Scripts/python.exe manage.py test --noinput",
+    "tests": 486,
+    "seconds": 120.031,
+    "result": "OK"
+  },
+  "frontend": {
+    "domain": "passed",
+    "build": "passed",
+    "lint": "passed; excluding tmp*/ and pre-plan-*/ runtime directories"
+  },
+  "sources_sha256": {
+    "scheduling/group_order.py": "1f19ad00f026d6685132c4f2de58c981d4d6970ea238d6023c9ccbf3c7194aec",
+    "scheduling/formal_rotation.py": "087082ab60255cff42080cc51fbc4fbeb60ed85b3a755a0a73b9c440f199232d",
+    "scheduling/current.py": "cb4e3228ea214765134d99541dcd81925d7f3a725c1659466a778a31b8cd4206",
+    "scheduling/policies.py": "5a0c9cef6887092c3d68d95dbdfc6597ca0ee969b7e3743ef3fd69da6f10933d",
+    "api/services/rules.py": "f15961bf5666f094d419eabef5b0a400b16768678dfaf731f2fcaf62a7ede1c2",
+    "api/schedule_views.py": "bf0c22512c6a311951cfade217120b12a9237e6a17f484b6c03bc026db4e98b4",
+    "api/test_formal_rotation.py": "e661815ac6428766d0d79ad150272a1a457096123d548eeed1e0982a2a53def5",
+    "api/test_current_scheduling.py": "ebb450f4a7ecc396d1c486bd74b4c4f869afa3e1c7c1c64ae88dc662b84de2ce",
+    "scripts/qa/balanced-pre-snapshot.py": "bb2786890b4b02be307c44f4acc9740a54dfbb19728f4f7f163cea8961865434",
+    "src/components/RuleConfigForm.vue": "e74a3b629366d2c491ac42b194da127c4260c0be830d924c016f6b823cc72e30"
+  },
+  "scenarios": {
+    "3": {
+      "groups": 54,
+      "students": 301,
+      "unassigned": 0,
+      "seconds": 0.86,
+      "cross_campus_teacher_days": 14,
+      "relaxed_chairs": 0,
+      "independent_checks": "passed",
+      "time_assumptions": 86,
+      "days_used": [
+        "2026-11-10",
+        "2026-11-11",
+        "2026-11-12",
+        "2026-11-13",
+        "2026-11-16",
+        "2026-11-17",
+        "2026-11-18"
+      ],
+      "placement_status": "ordered_greedy_complete",
+      "group_order": "ascending_original_group_number",
+      "time_reversals": 0,
+      "pre_result_sha256": "144f4e0ead8e61e09cdc52086d8b75515a5122337681d562eb18cad051d40108",
+      "first_group": {
+        "group_id": "G001",
+        "time": "2026-11-10 09:00-12:00"
+      },
+      "last_group": {
+        "group_id": "G054",
+        "time": "2026-11-18 09:00-12:00"
+      }
+    },
+    "5": {
+      "groups": 56,
+      "students": 301,
+      "unassigned": 0,
+      "seconds": 1.065,
+      "cross_campus_teacher_days": 3,
+      "relaxed_chairs": 0,
+      "independent_checks": "passed",
+      "time_assumptions": 86,
+      "days_used": [
+        "2026-11-10",
+        "2026-11-11",
+        "2026-11-12",
+        "2026-11-13",
+        "2026-11-16",
+        "2026-11-17",
+        "2026-11-18",
+        "2026-11-19"
+      ],
+      "placement_status": "ordered_greedy_complete",
+      "group_order": "ascending_original_group_number",
+      "time_reversals": 0,
+      "pre_result_sha256": "8a6227b35b7aeeb9f48b44fb2227f32c8c44eda5c8dca7b64e41cbe8830d0707",
+      "first_group": {
+        "group_id": "G001",
+        "time": "2026-11-10 09:00-12:00"
+      },
+      "last_group": {
+        "group_id": "G056",
+        "time": "2026-11-19 09:00-12:00"
+      }
+    }
+  }
+}

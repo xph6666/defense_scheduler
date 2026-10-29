@@ -4,10 +4,12 @@ import type { DefenseType } from '../types/schedule'
 
 import { isDefenseType } from '../domain/defense'
 export { defenseTypes } from '../domain/defense'
+export { isDefenseType }
 let saved: string | null = null
 try { saved = sessionStorage.getItem('workflow-defense-type') } catch { /* optional preference */ }
 export const workflowDefenseType = ref<DefenseType>(isDefenseType(saved) ? saved : '预答辩')
 export const workflowLink = (path: string) => ({ path, query: { type: workflowDefenseType.value } })
+export const defenseLink = (path: string, type: DefenseType = workflowDefenseType.value) => ({ path, query: { type } })
 
 export function useDefenseType() {
   const route = useRoute()

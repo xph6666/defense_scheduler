@@ -9,6 +9,7 @@ from ..models import Group, ScheduleVersion, Student, Teacher
 from ..serializers import DEFENSE_TYPE_LABELS
 from .scheduling_input import build_algorithm_input
 from .rules import normalize_schedule_rules
+from scheduling.policies import FORMAL_EXPERT_COUNT, formal_rotation_rules
 
 class ScheduleApplication:
     RULE_KEY_ALIASES = {'mentor_avoidance': 'avoid_supervisor'}
@@ -19,27 +20,36 @@ class ScheduleApplication:
     def _normalize_rules(self, rules):
         return normalize_schedule_rules(rules)
 
+    @staticmethod
+    def _apply_formal_rules(rules, source_chair_title=None):
+        """正式答辩（policy 3）固定 5 位专家；沿用预答辩分组时启用专家轮换与导师回避。"""
+        rules.update(expert_count=FORMAL_EXPERT_COUNT, expert_min=FORMAL_EXPERT_COUNT)
+        if rules.get('preserve_pre_defense_groups', True):
+            rules.pop('linked_translation', None)
+            rules.update(formal_rotation_rules(source_chair_title))
+        return rules
+
     def prepare_generation_rules(self, rules):
         rules = dict(rules)
-        if (rules.get('policy_version') == 3 and rules['defense_type'] == 'formal'
-                and rules.get('preserve_pre_defense_groups', True)):
-            source = ScheduleVersion.objects.filter(defense_type='pre', is_current=True).first()
-            if not source or (not source.groups.exists() and not rules.get('linked_translation')):
-                raise ValueError('请先生成并核对预答辩分组，再平移到正式答辩')
-            if rules['start_date'] <= source.rules_snapshot.get('end_date', ''):
-                raise ValueError('正式答辩开始日期必须晚于预答辩结束日期')
-            if rules['expert_count'] < source.rules_snapshot.get('expert_count', 3):
-                raise ValueError('平移后专家人数不能少于预答辩')
-            rules.update(linked_translation=True,
-                         external_expert_max=max(rules.get('external_expert_max', 1),
-                                                source.rules_snapshot.get('external_expert_max', 1)),
-                         source_chair_title=source.rules_snapshot.get('chair_title', '副教授'),
-                         avoid_supervisor=False, supervisor_policy='same_group')
+        if rules.get('policy_version') == 3 and rules['defense_type'] == 'formal':
+            source = None
+            if rules.get('preserve_pre_defense_groups', True):
+                source = ScheduleVersion.objects.filter(defense_type='pre', is_current=True).first()
+                # 联合生成时本轮预答辩可能没有成组，正式答辩仍需逐人说明原因
+                if not source or (not source.groups.exists() and not rules.get('formal_rotation')):
+                    raise ValueError('请先生成并核对预答辩分组，再生成正式答辩')
+                if rules['start_date'] <= source.rules_snapshot.get('end_date', ''):
+                    raise ValueError('正式答辩开始日期必须晚于预答辩结束日期')
+            self._apply_formal_rules(rules, source.rules_snapshot.get('chair_title') if source else None)
         return rules
 
     def preflight_check(self, rules, *, check_inherited_groups=True):
         """生成排期前的资料预检，返回可生成状态、错误、警告和统计信息。"""
         rules = self._normalize_rules(rules)
+        if rules.get('policy_version') == 3 and rules['defense_type'] == 'formal':
+            source = (ScheduleVersion.objects.filter(defense_type='pre', is_current=True).first()
+                      if rules.get('preserve_pre_defense_groups', True) else None)
+            self._apply_formal_rules(rules, source.rules_snapshot.get('chair_title') if source else None)
         payload, notices = self._build_algorithm_input(
             rules['defense_type'], self._extract_rule_date_range(rules), rules)
 
@@ -194,12 +204,17 @@ class ScheduleApplication:
             })
 
         from scheduling.preflight import (external_mentor_capacity_issues, inherited_group_size_issues,
-                                          resource_availability_issues)
+                                          personnel_capacity_issues, resource_availability_issues)
         errors.extend(external_mentor_capacity_issues(payload, rules))
         if check_inherited_groups:
             errors.extend(inherited_group_size_issues(payload, rules))
         if rules.get('policy_version') != 3:
             warnings.extend(resource_availability_issues(payload, rules))
+        else:
+            # 新排期：日期半天数与秘书、评审容量的必要条件，生成前提示
+            capacity_errors, capacity_warnings = personnel_capacity_issues(payload, rules)
+            errors.extend(capacity_errors)
+            warnings.extend(capacity_warnings)
         can_generate = len(errors) == 0
 
         return {
@@ -233,13 +248,13 @@ class ScheduleApplication:
         if not payload['teachers'] and rules.get('policy_version') != 3:
             raise ValueError(f'没有可参加【{label}】的教师，请检查教师数据中的"可参加答辩类型"设置')
         try:
-            if rules.get('linked_translation') and source_pre:
+            if rules.get('formal_rotation') and source_pre:
                 from algorithm import GroupDraft, parse_teacher, parse_student, parse_time_range
-                from scheduling.translation import translate_panels
+                from scheduling.formal_rotation import rotate_panels
                 source = [GroupDraft(g.group_id, g.campus, list(g.students.values_list('pk', flat=True)),
                     parse_time_range(g.time), None, g.chair_id, list(g.experts.values_list('pk', flat=True)), g.secretary_id)
                     for g in source_pre.groups.prefetch_related('students', 'experts')]
-                result = translate_panels(source, [parse_teacher(t) for t in payload['teachers']],
+                result = rotate_panels(source, [parse_teacher(t) for t in payload['teachers']],
                     [parse_student(s) for s in payload['students']], rules)
             else:
                 from .pre_plan_cache import read_pre_plan, remember_pre_plan
@@ -250,6 +265,10 @@ class ScheduleApplication:
                     remember_pre_plan(payload, rules, result)
         except (SchedulingError, ValueError, TypeError) as exc:
             raise ValueError(f'排期参数错误: {exc}')
+        if rules.get('policy_version') == 3 and rules['defense_type'] == 'pre':
+            # Provisional numbers may move during optimization. Enforce the final
+            # chronological numbers only after generation and for future edits.
+            rules['pre_group_order'] = True
         # 将使用的随机种子持久化到规则快照，便于复现
         if result.get('random_seed') is not None:
             rules['random_seed'] = result['random_seed']

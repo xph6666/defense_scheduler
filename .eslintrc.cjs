@@ -22,6 +22,9 @@ module.exports = {
     'node_modules/',
     'coverage/',
     'test-data/',
+    '.tmp/',
+    'tmp*/',
+    'pre-plan-*/',
     '*.config.js',
     '*.config.ts'
   ],

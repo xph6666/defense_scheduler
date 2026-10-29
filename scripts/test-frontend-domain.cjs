@@ -48,8 +48,10 @@ for (const [type, minimum] of [['预答辩', 3], ['正式答辩', 5], ['中期�
   assert.equal(rules.course_half_day_blocking, true)
 }
 const formal = normalizeRuleConfig({ ...getDefaultRuleConfig('正式答辩'), expertCount: { target: 9, min: 2 } })
-assert.equal(formal.expertCount.target, 3)
-assert.equal(formal.expertCount.min, 3)
+assert.equal(formal.expertCount.target, 5)
+assert.equal(formal.expertCount.min, 5)
+assert.equal(formal.mentorAvoidance, true)
+assert.equal(buildScheduleRules('正式答辩', { ...formal, mentorAvoidance: false }).avoid_supervisor, true)
 const legacyPre = normalizeRuleConfig({ ...getDefaultRuleConfig('预答辩'), policyVersion: undefined, expertCount: { target: 3, min: 3 } })
 assert.equal(legacyPre.expertCount.target, 3)
 assert.equal(legacyPre.expertCount.min, 3)
@@ -143,7 +145,8 @@ assert.ok(!renderSchedulePrint(printResult, { includeRemarks: false }).includes(
 assert.ok(html.includes('STUDENT PRIVATE &lt;备注&gt;'))
 assert.ok(!renderSchedulePrint(printResult, { includeRemarks: false }).includes('STUDENT PRIVATE'))
 const { getMentorColor } = load('src/utils/color.ts')
-assert.ok(html.includes(`background:${getMentorColor('导师甲')}`), 'PDF follows the shared mentor color contract')
+const { buildMentorColors, groupMentorColors } = load('src/domain/mentorColors.ts')
+assert.ok(html.includes(`background:${groupMentorColors(printResult.groups[0], buildMentorColors(printResult.groups))['导师甲'].backgroundColor}`), 'PDF follows collision-free version colors')
 const stressMentors = Array.from({ length: 17 }, (_, index) => `QA导师${String(index + 1).padStart(2, '0')}`)
 assert.equal(new Set(stressMentors.map(getMentorColor)).size, stressMentors.length,
   'the expanded shared palette distinguishes 17 mentors')
@@ -227,3 +230,32 @@ const { isPreDefenseChairEligible } = load('src/domain/scheduleExperts.ts')
 for (const title of ['副教授', '教授', '副研究员', '研究员']) assert.equal(isPreDefenseChairEligible(title), true)
 for (const title of ['讲师', '其他', '外院导师（职称待确认）']) assert.equal(isPreDefenseChairEligible(title), false)
 console.log('Pre-defense chair title eligibility passed')
+
+const { buildMentorShares } = load('src/domain/mentorShares.ts')
+const { mentorColorSeparation } = load('src/domain/mentorColors.ts')
+const colorGroup = (id, names, shares) => ({ id, groupName: `G${id}`, defenseType: '预答辩', campus: '创新港',
+  teachers: names.map((name, i) => ({ id: i + 1, name, title: '副教授', roles: ['普通专家'] })),
+  students: names.flatMap((name, i) => Array.from({ length: shares[i] }, (_, n) => ({ id: id * 100 + i * 10 + n, mentorName: name }))) })
+const colorGroups = [colorGroup(1, ['刘帅', '刘杨', '张萌'], [3, 2, 1]),
+  colorGroup(2, ['赵加坤', '赵国帅', '王文杰'], [3, 2, 1]), colorGroup(3, ['刘帅', '赵加坤', '赵国帅'], [2, 2, 2])]
+const versionColors = buildMentorColors(colorGroups)
+assert.deepEqual(versionColors, buildMentorColors([...colorGroups].reverse()), 'ordering must not change teacher colors')
+for (const group of colorGroups) {
+  const local = groupMentorColors(group, versionColors)
+  const names = group.teachers.map(t => t.name)
+  assert.equal(new Set(names.map(n => local[n].backgroundColor)).size, names.length)
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+    assert(mentorColorSeparation(local[names[i]], local[names[j]]) >= 20, 'same-group colors must be perceptually distinct')
+  }
+}
+assert.deepEqual(groupMentorColors(colorGroups[0], versionColors)['刘帅'], groupMentorColors(colorGroups[2], versionColors)['刘帅'])
+const summaries = buildMentorShares(colorGroups, true)
+assert.equal(summaries[1].kind, 'explained')
+assert.equal(summaries[2].kind, 'explained')
+assert(summaries[2].reason.includes('王文杰'))
+assert.equal(buildMentorShares(colorGroups, false)[1].kind, 'unbalanced', 'partial assignment cannot prove a mentor has only one student')
+assert.equal(summaries[3].kind, 'balanced')
+console.log('Co-occurrence teacher colors and explained 3+2+1 exceptions passed')
+const colorFixture = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../shared/mentor-color-fixtures.json'), 'utf8'))
+const distinctPalette = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../shared/mentor-colors.json'), 'utf8')).distinctPalette
+assert.deepEqual(Object.fromEntries(Object.entries(versionColors).map(([name, s]) => [name, distinctPalette.findIndex(p => `#${p.light}` === s.backgroundColor)])), colorFixture.indexes)

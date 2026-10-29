@@ -5,7 +5,7 @@ from ..mentor_colors import build_mentor_color_map
 from scheduling.policies import scenario_policy
 
 
-def build_schedule_workbook(schedule_version, defense_type, conflicts=None):
+def build_schedule_workbook(schedule_version, defense_type, conflicts=None, include_remarks=None):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -14,7 +14,8 @@ def build_schedule_workbook(schedule_version, defense_type, conflicts=None):
     wb.remove(default_sheet)
 
     groups = list(export_groups(schedule_version))
-    include_remarks = schedule_version.rules_snapshot.get('include_remarks', True)
+    if include_remarks is None:
+        include_remarks = schedule_version.rules_snapshot.get('include_remarks', True)
     scenario_color = scenario_policy(defense_type)['color'].lstrip('#')
     conflicts = conflicts or []
     error_groups = {g for c in conflicts if c.get('level') == 'error' for g in c.get('relatedGroupIds', [])}

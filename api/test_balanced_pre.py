@@ -15,6 +15,16 @@ def rules(stage='pre', count=3):
 
 
 class BalancedPreTests(SimpleTestCase):
+    def test_coverage_search_uses_all_five_required_mentors(self):
+        from types import SimpleNamespace
+        from scheduling.balanced_counts import pack_counts
+        counts = Counter({tid: 1 for tid in range(1, 6)})
+        staff = {tid: SimpleNamespace(is_external=False) for tid in counts}
+        packed, diagnostics = pack_counts(counts, 6, 5, 7, 5, 2, staff,
+                                          {1}, lambda demand: True)
+        self.assertEqual(sum(packed, Counter()), counts)
+        self.assertEqual(diagnostics['coverage_uncovered'], 0)
+
     def test_only_five_six_seven_are_allowed(self):
         for count in (5, 6, 7):
             result = generate_schedule(teachers(), students(count), [], rules())
@@ -178,7 +188,7 @@ class BalancedPreTests(SimpleTestCase):
 class PreFirstAPITests(TestCase):
     setUp = fixtures.CurrentSchedulingAPITests.setUp
 
-    def test_separate_translation_preserves_pre_version_and_fixed_group(self):
+    def test_separate_rotation_preserves_pre_version_students_and_secretary(self):
         from api.models import Teacher
         Teacher.objects.filter(pk=1).update(title='副教授')
         pre = self.client.post('/api/schedule/generate/', {'rules': rules()}, format='json')
@@ -188,10 +198,12 @@ class PreFirstAPITests(TestCase):
         self.assertEqual(formal.status_code, 200, formal.data)
         self.assertEqual(formal.data['sourcePreVersionId'], pre.data['versionId'])
         left, right = pre.data['groups'][0], formal.data['groups'][0]
-        for key in ('groupName', 'chairId', 'secretaryId'):
+        for key in ('groupName', 'secretaryId'):
             self.assertEqual(left[key], right[key])
         self.assertEqual({s['id'] for s in left['students']}, {s['id'] for s in right['students']})
-        self.assertTrue({t['id'] for t in left['teachers']} <= {t['id'] for t in right['teachers']})
+        self.assertFalse({left['chairId'], *[t['id'] for t in left['teachers']]} &
+                         {right['chairId'], *[t['id'] for t in right['teachers']]})
+        self.assertTrue(formal.data['rules']['avoid_supervisor'])
         self.assertEqual(len({right['chairId'], *[t['id'] for t in right['teachers']]}), 5)
         current = self.client.get('/api/schedule/current/', {'defense_type': 'pre'})
         self.assertEqual(current.data['versionId'], pre.data['versionId'])
@@ -215,11 +227,11 @@ class PreFirstAPITests(TestCase):
         current = self.client.get('/api/schedule/current/', {'defense_type': 'pre'}).data
         self.assertEqual(current['groups'][0]['groupName'], group['groupName'])
 
-    def test_translation_keeps_unavailable_original_teacher_as_unassigned(self):
+    def test_rotation_does_not_require_original_reviewer_availability(self):
         from api.models import Teacher
         self.client.post('/api/schedule/generate/', {'rules': rules()}, format='json')
         Teacher.objects.filter(pk=1).update(unavailable_times='2026-11-03 00:00-23:59')
         response = self.client.post('/api/schedule/generate/', {'rules': rules('formal', 5)}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data['groups'], [])
-        self.assertEqual(len(response.data['unassignedStudents']), 6)
+        self.assertEqual(len(response.data['groups']), 1)
+        self.assertEqual(response.data['unassignedStudents'], [])

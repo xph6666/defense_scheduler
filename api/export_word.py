@@ -1,164 +1,250 @@
-"""排期结果导出为 Word 时间安排表。
+"""排期结果导出为学院归档的《学位论文答辩时间安排》Word 文档。
 
-版式对齐学院归档样例（排答辩文档/生成文档/ 下的真实安排表）：
-- 标题、副标题居中，正文为两列表格，每组一块（组号/时间/地点/组长|主席/专家/秘书/学生）；
-- 结构标签、时间、地点等一律黑色，只有导师与学生姓名着色——导师与其学生同色，
-  预答辩/中期时导师在组内可直观看出师生配对，正式答辩（导师回避）时学生保留颜色
-  便于人工核对回避是否正确。
-- 色值来自 shared/mentor-colors.json（与网页同一份数据源）。
+版式对齐 ``test-data/26年数据/学位论文答辩/`` 下的真实归档样例：
+
+- 标题（黑体 15 磅居中）、副标题（仿宋_GB2312 12 磅，写明答辩日期、单元数、年级和
+  人数）、注意事项，随后是两列表格：每组一个「第N组」分隔行，接着时间／地点／［主席］
+  ／专家／秘书／学生；
+- 表格固定列宽 1276 + 8505 缇并向左溢出正文宽度，与样例一致；
+- 结构标签按样例用红色，人名按导师配色（``shared/mentor-colors.json``，与网页同一
+  份数据源）：导师与其学生同色——预答辩／中期能直接看出师生配对，正式答辩（导师
+  回避）时便于人工核对回避是否正确；
+- 结尾是「软件学院 + 日期」。
+
+预答辩与中期的样例不单列组长，组长排在该组专家首位；正式答辩样例单列「主席」，
+所以只有正式答辩多一行。
 """
-from datetime import datetime
+from datetime import date
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
 
-from .schedule_integrity import export_groups
+from . import word_forms as forms
 from .mentor_colors import build_mentor_color_map
+from .schedule_integrity import export_groups
 
-WEEKDAY_LABELS = '一二三四五六日'
+# 页面与列宽取自样例：Letter 纸型、左右 3.17 厘米页边距。
+PAGE = dict(width_cm=21.59, height_cm=27.94, left_cm=3.17, right_cm=3.17,
+            top_cm=2.2, bottom_cm=2.2)
+COLUMN_WIDTHS = (1276, 8505)
+TABLE_INDENT = -714
+ROW_HEIGHT = 567
+BODY_SIZE = 14
 
-
-def _styled_run(paragraph, text, color=None, bold=False, size=12):
-    """写入一个 run 并设置中文字体（宋体需要单独设置 eastAsia 才对中文生效）"""
-    run = paragraph.add_run(text)
-    run.font.name = 'Times New Roman'
-    run._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
-    run.font.size = Pt(size)
-    run.bold = bold
-    if color:
-        run.font.color.rgb = RGBColor.from_string(color)
-    return run
-
-
-def _format_time_label(raw):
-    """'2026-04-07 09:00-12:00' → '2026年4月7日 周二 09:00-12:00'"""
-    if not raw:
-        return '待定'
-    try:
-        date_part, clock = raw.split(' ', 1)
-        day = datetime.strptime(date_part, '%Y-%m-%d').date()
-        return f'{day.year}年{day.month}月{day.day}日 周{WEEKDAY_LABELS[day.weekday()]} {clock}'
-    except (ValueError, IndexError):
-        return raw
-
-
-# [TASK-P12 修改] Word 表格标签支持错误级问题着色。
-def _label_cell(cell, text, color=None):
-    """写入加粗结构标签，可按冲突级别着色。"""
-    paragraph = cell.paragraphs[0]
-    _styled_run(paragraph, text, color=color, bold=True)
-
-
-def _names_with_colors(cell, names_with_color, separator='、'):
-    """在单元格里逐人写 run，各自带颜色，分隔符保持黑色"""
-    paragraph = cell.paragraphs[0]
-    for index, (name, color) in enumerate(names_with_color):
-        if index:
-            _styled_run(paragraph, separator)
-        _styled_run(paragraph, name, color=color)
+# 标题、副标题前缀与注意事项是学院的固定文案，随答辩类型不同。
+FORM_TEXTS = {
+    'pre': {
+        'title': '软件工程硕士研究生{month}学位论文预答辩时间安排',
+        'period': '学位论文预答辩时间:',
+        'count_students': True,
+        'chair_label': None,
+        'notes': ['注:本人打印4本论文（普通装订），准备好PPT.提前半小时到答辩教室！'],
+    },
+    'formal': {
+        'title': '软件工程硕士研究生{month}学位论文正式答辩时间安排',
+        'period': '学位论文正式答辩时间:',
+        'count_students': True,
+        'chair_label': '主席',
+        'notes': ['注：本人打印6本论文（5本指定打印版、1本普通装订）、毕业登记表和评审材料、'
+                  '盲审修改说明导师签字后提前提交至答辩秘书处，准备好PPT在答辩时回答专家质问、'
+                  '携带纸笔记录专家的问题和建议，提前半小时到答辩教室！'],
+    },
+    'mid': {
+        'title': '{grade}软件工程硕士研究生中期考核时间安排',
+        'period': '中期考核时间段：',
+        'count_students': False,
+        'chair_label': None,
+        'notes': ['注：1、请未缴清学费的同学，中期考核前主动缴清学费，否则成绩无法录入系统！',
+                  '    2、中期考核结束：提交专家签字后的《开题报告》、《中期报告》。',
+                  '    3、提前打印5-6本《开题报告》、《中期报告》（A4纸装订）、成绩单一份，'
+                  '准备好PPT.提前半小时到答辩教室！'],
+    },
+}
 
 
-# [TASK-P12 修改] 输出学生关系与可选备注，并在 Word 中列出冲突。
-def export_schedule_word(schedule_version, defense_label, include_remarks=True, conflicts=None):
-    """生成 Word 时间安排表文档对象；调用方负责写入响应。"""
+def export_arrangement_document(schedule_version, defense_type=None, include_remarks=True,
+                                conflicts=None, issue_date=None):
+    """生成《时间安排》Word 文档对象；调用方负责写入响应。"""
+    defense_type = defense_type or schedule_version.defense_type
+    texts = FORM_TEXTS.get(defense_type, FORM_TEXTS['pre'])
     groups = list(export_groups(schedule_version))
     color_map = build_mentor_color_map(groups)
-    conflicts = conflicts or []
-    student_total = sum(len(group.students.all()) for group in groups)
-    chair_label = '主席' if schedule_version.defense_type == 'formal' else '组长'
+    slots = forms.slots_of(groups)
+    grade = _grade_label(groups)
+    students_total = sum(len(group.students.all()) for group in groups)
 
     doc = Document()
+    forms.configure_document(doc, **PAGE, base_size=BODY_SIZE)
 
-    title = doc.add_paragraph()
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    suffix = '（草稿，未发布）' if schedule_version.status != 'published' else ''
-    _styled_run(title, f'软件工程硕士研究生{defense_label}时间安排{suffix}', bold=True, size=16)
+    title = forms.add_paragraph(doc, align='center', line=300)
+    forms.styled_run(title, _title_text(texts, defense_type, slots, grade), font=forms.HEI,
+                     size=15, color=forms.BLACK)
 
-    subtitle = doc.add_paragraph()
-    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _styled_run(subtitle, f'共 {len(groups)} 组，{student_total} 名学生', size=12)
+    subtitle = forms.add_paragraph(doc, align='center', line=300)
+    forms.styled_run(subtitle, _subtitle_text(texts, slots, grade, students_total),
+                     font=forms.FANG_SONG, size=12, color=forms.BLACK)
 
-    note = doc.add_paragraph()
-    _styled_run(note, '注：请提前半小时到达答辩教室，准备好论文与 PPT。', size=10.5)
+    if defense_type == 'mid':
+        roster = _committee_text(groups)
+        if roster:
+            paragraph = forms.add_paragraph(doc, line=300)
+            forms.styled_run(paragraph, f'中期考核组成员：{roster}', font=forms.FANG_SONG,
+                             size=12, color=forms.BLACK)
 
-    table = doc.add_table(rows=0, cols=2)
-    table.style = 'Table Grid'
+    for note in texts['notes']:
+        paragraph = forms.add_paragraph(doc, align='left', line=300)
+        forms.styled_run(paragraph, note, font=forms.FANG_SONG, size=12, color=forms.BLACK)
 
+    table = forms.build_table(doc, COLUMN_WIDTHS, indent=TABLE_INDENT, border_size=4,
+                              inside_size=6, border_color=forms.BLACK)
     for index, group in enumerate(groups, start=1):
-        students = sorted(
-            group.students.all(),
-            key=lambda s: ((s.mentor_name or ''), s.id),
-        )
-        related_conflicts = [conflict for conflict in conflicts
-            if group.id in (conflict.get('relatedGroupIds') or [])
-            or not conflict.get('relatedGroupIds')]
-        has_errors = any(conflict.get('level') == 'error' for conflict in related_conflicts)
+        _add_group_rows(table, index, group, texts, color_map, include_remarks)
 
-        header_row = table.add_row()
-        _label_cell(header_row.cells[0], f'第{index}组', 'C00000' if has_errors else None)
+    # 样例在表格后留三个空段再落款，纸面上给「软件学院 + 日期」留出位置。
+    for _ in range(3):
+        forms.add_paragraph(doc, align='center')
+    signature = forms.add_paragraph(doc, align='center')
+    forms.styled_run(signature, '软件学院', font=forms.FANG_SONG, size=14, bold=True)
+    issued = forms.add_paragraph(doc, align='center')
+    stamp = issue_date or date.today()
+    forms.styled_run(issued, f'{stamp.year}年{stamp.month}月{stamp.day}日',
+                     font=forms.FANG_SONG, size=14, bold=True)
 
-        time_row = table.add_row()
-        _label_cell(time_row.cells[0], '时间')
-        _styled_run(time_row.cells[1].paragraphs[0], _format_time_label(group.time))
-
-        room_row = table.add_row()
-        _label_cell(room_row.cells[0], '地点')
-        room_text = f"{group.campus or ''}{group.room.name if group.room else '待定'}"
-        _styled_run(room_row.cells[1].paragraphs[0], room_text)
-
-        if group.chair is not None:
-            chair_row = table.add_row()
-            _label_cell(chair_row.cells[0], chair_label)
-            _names_with_colors(
-                chair_row.cells[1],
-                [(group.chair.name, color_map.get(group.chair.name))],
-            )
-
-        expert_row = table.add_row()
-        _label_cell(expert_row.cells[0], '专家')
-        _names_with_colors(
-            expert_row.cells[1],
-            [(expert.name, color_map.get(expert.name)) for expert in group.experts.all()],
-        )
-
-        secretary_row = table.add_row()
-        _label_cell(secretary_row.cells[0], '秘书')
-        if group.secretary is not None:
-            _styled_run(secretary_row.cells[1].paragraphs[0], group.secretary.name)
-
-        student_row = table.add_row()
-        _label_cell(student_row.cells[0], '学生名单')
-        for student_index, student in enumerate(students):
-            paragraph = student_row.cells[1].paragraphs[0] if student_index == 0 else student_row.cells[1].add_paragraph()
-            student_color = color_map.get((student.mentor_name or '').strip())
-            _styled_run(paragraph, f'{student.student_no or ""} ')
-            _styled_run(paragraph, student.name, color=student_color)
-            _styled_run(paragraph, f'（{student.student_type}；导师：')
-            _styled_run(paragraph, student.mentor_name or '未分配', color=student_color)
-            _styled_run(paragraph, f'；秘书：{student.secretary_name or "未分配"}')
-            if include_remarks and student.remark:
-                _styled_run(paragraph, f'；备注：{student.remark}')
-        for conflict in related_conflicts:
-            conflict_row = table.add_row()
-            color = 'C00000' if conflict.get('level') == 'error' else None
-            _label_cell(conflict_row.cells[0], conflict.get('type') or '校验结果', color)
-            _styled_run(conflict_row.cells[1].paragraphs[0], conflict.get('reason') or '', color=color)
-
-    # 统一列宽：标签列窄、内容列宽（python-docx 需要逐单元格设置才稳定生效）
-    for row in table.rows:
-        row.cells[0].width = Cm(2.5)
-        row.cells[1].width = Cm(13.5)
-
-    doc.add_paragraph()
-    footer = doc.add_paragraph()
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    _styled_run(footer, '软件学院', size=12)
-
-    footer_date = doc.add_paragraph()
-    footer_date.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    generated = schedule_version.created_at
-    _styled_run(footer_date, f'{generated.year}年{generated.month}月{generated.day}日', size=12)
-
+    if conflicts:
+        _append_conflicts(doc, conflicts)
     return doc
+
+
+def export_schedule_word(schedule_version, defense_label='', include_remarks=True, conflicts=None):
+    """旧入口别名：早期只导出过《时间安排》，保留以免外部脚本失效。
+
+    ``defense_label`` 已不再使用，答辩类型以版本自身的 ``defense_type`` 为准。
+    """
+    return export_arrangement_document(schedule_version, schedule_version.defense_type,
+                                       include_remarks, conflicts)
+
+
+def _add_group_rows(table, index, group, texts, color_map, include_remarks):
+    chair = getattr(group, 'chair', None)
+    chair_name = chair.name if chair is not None and getattr(chair, 'name', '') else ''
+
+    header = forms.add_row(table, height=ROW_HEIGHT)
+    forms.set_cell_runs(header.cells[0], [(f'第{index}组', {'color': forms.RED})],
+                        align='center', size=BODY_SIZE)
+    forms.set_cell_runs(header.cells[1], [('\u3000', {})], align='left', size=BODY_SIZE)
+
+    room_name = group.room.name if getattr(group, 'room', None) else '待定'
+    rows = [('时间', [forms.arrangement_slot_text(group.time)]),
+            ('地点', [f'{group.campus or ""}{room_name}'])]
+    if texts['chair_label']:
+        rows.append((texts['chair_label'], [chair_name or '待定']))
+    rows.append(('专家', _expert_segments(group, texts, color_map)))
+    rows.append(('秘书', [group.secretary.name if group.secretary else '待定']))
+    rows.append(('学生', _student_segments(group, color_map, include_remarks)))
+
+    for label, segments in rows:
+        row = forms.add_row(table, height=ROW_HEIGHT)
+        forms.set_cell_runs(row.cells[0], [(label, {'color': forms.RED})], align='center',
+                            size=BODY_SIZE)
+        forms.set_cell_runs(row.cells[1], segments, align='left', size=BODY_SIZE)
+
+
+def _expert_segments(group, texts, color_map):
+    """专家行：正式答辩的主席单列一行，因此不再重复；其余类型组长排在首位。"""
+    chair = getattr(group, 'chair', None)
+    chair_name = chair.name if chair is not None and getattr(chair, 'name', '') else ''
+    names = []
+    if chair_name and not texts['chair_label']:
+        names.append(chair_name)
+    for expert in group.experts.all():
+        if expert.name and expert.name != chair_name and expert.name not in names:
+            names.append(expert.name)
+    return _name_segments(names, color_map) or ['待定']
+
+
+def _name_segments(names, color_map):
+    segments = []
+    for index, name in enumerate(names):
+        if index:
+            segments.append(('、', {}))
+        segments.append((name, {'color': color_map.get(name)}))
+    return segments
+
+
+def _student_segments(group, color_map, include_remarks):
+    """学生行：按学号顺序只写姓名，备注按开关附在姓名后，保持样例的紧凑排版。"""
+    segments = []
+    for index, student in enumerate(_ordered_students(group)):
+        if index:
+            segments.append(('、', {}))
+        mentor = (student.mentor_name or '').strip()
+        segments.append((student.name, {'color': color_map.get(mentor)}))
+        if include_remarks and student.remark:
+            segments.append((f'（{student.remark}）', {}))
+    return segments or ['待定']
+
+
+def _ordered_students(group):
+    """名单按学号排序，缺学号的排在后面，保证同一版本每次导出顺序一致。"""
+    return sorted(group.students.all(), key=lambda item: ((item.student_no or '').strip(), item.id))
+
+
+def _title_text(texts, defense_type, slots, grade):
+    if defense_type == 'mid':
+        return texts['title'].format(grade=f'{grade}级' if grade else '')
+    days = [slot.day for slot in slots if slot.parsed]
+    month = f'{min(days).year}年{min(days).month}月' if days else ''
+    return texts['title'].format(month=month)
+
+
+def _subtitle_text(texts, slots, grade, students_total):
+    """副标题：答辩日期（共 N 个单元）+ 年级人数，样例只对学位论文答辩写人数。"""
+    body = f'{texts["period"]}{forms.date_span_text(slots)}（共{len(slots)}个单元）'
+    if texts.get('count_students') and students_total:
+        body += f' {grade}级{students_total}人' if grade else f' 共{students_total}人'
+    return body
+
+
+def _grade_label(groups):
+    """从学号前四位推断年级；学号不统一或不像年份时返回空串，宁可不写也不编造。"""
+    prefixes = set()
+    for group in groups:
+        for student in group.students.all():
+            number = (student.student_no or '').strip()
+            if len(number) < 4 or not number[:4].isdigit():
+                return ''
+            prefixes.add(number[:4])
+    if len(prefixes) != 1:
+        return ''
+    year = prefixes.pop()
+    return year if 2000 <= int(year) <= 2100 else ''
+
+
+def _committee_text(groups):
+    """中期时间安排表要求列出全部中期考核组成员，按组顺序去重。"""
+    names = []
+    for group in groups:
+        chair = getattr(group, 'chair', None)
+        candidates = [chair] if chair is not None else []
+        candidates.extend(group.experts.all())
+        candidates.append(group.secretary)
+        for teacher in candidates:
+            name = getattr(teacher, 'name', '') if teacher is not None else ''
+            if name and name not in names:
+                names.append(name)
+    return '、'.join(names)
+
+
+def _append_conflicts(doc, conflicts):
+    """把导出时的校验提示附在文档末尾，避免污染归档表格本体。"""
+    heading = forms.add_paragraph(doc, align='left', page_break_before=True)
+    forms.styled_run(heading, f'校验提示（共 {len(conflicts)} 项，导出前请人工复核）',
+                     font=forms.HEI, size=12, color=forms.BLACK)
+    for conflict in conflicts:
+        paragraph = forms.add_paragraph(doc, align='left')
+        color = forms.ERROR if conflict.get('level') == 'error' else forms.BLACK
+        forms.styled_run(paragraph, f'{conflict.get("type") or "校验结果"}：', size=10.5,
+                         bold=True, color=color)
+        forms.styled_run(paragraph, conflict.get('reason') or '', size=10.5, color=color)
+
+
+__all__ = ['export_arrangement_document', 'export_schedule_word', 'FORM_TEXTS', 'PAGE']

@@ -18,7 +18,8 @@ def panel_cost(counts, target, experts):
     return (sum(counts.values()) - target) ** 2 + mentor_share_excess(counts, experts)
 
 
-def distribution_metrics(groups, students, teachers):
+def distribution_metrics(groups, students, teachers, mentors_attend=True):
+    """mentors_attend=False 用于正式答辩导师回避且不到场的情形，此时导师不计出场。"""
     student_map = {s.id: s for s in students}
     visits = Counter()
     panels = []
@@ -28,7 +29,7 @@ def distribution_metrics(groups, students, teachers):
         shares = {str(tid): counts[tid] for tid in sorted(reviewers)}
         panels.append({'group_id': group.group_id, 'mentor_students': shares,
                        'share_excess': mentor_share_excess(counts, len(reviewers))})
-        visits.update(reviewers | {group.secretary_id} | set(counts))
+        visits.update(reviewers | {group.secretary_id} | (set(counts) if mentors_attend else set()))
     return {'panels': panels, 'share_excess': sum(p['share_excess'] for p in panels),
             'appearances': {str(t.id): visits[t.id] for t in teachers},
             'appearance_square_sum': sum(n * n for n in visits.values())}

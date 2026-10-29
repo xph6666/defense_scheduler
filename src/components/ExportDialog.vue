@@ -61,11 +61,17 @@
 
       <div class="p-2">
         <div class="text-xs text-gray-500 mb-2">导出格式</div>
-        <el-radio-group v-model="format">
-          <el-radio value="word">Word 时间安排表（推荐，含导师-学生同色标注）</el-radio>
+        <el-radio-group v-model="format" class="export-format-group">
+          <el-radio value="word">Word 时间安排表（学院归档版式，含导师-学生同色标注）</el-radio>
+          <el-radio value="conclusion">Word 评审小组结论（学院归档版式，每组一页，用于专家勾选与签名）</el-radio>
           <el-radio value="excel">Excel 分组明细（每组一个工作表，同色标注）</el-radio>
           <el-radio value="pdf">PDF · 打印或保存为 PDF（师生同色，冲突标红）</el-radio>
         </el-radio-group>
+      </div>
+
+      <div class="export-option-row">
+        <div><strong>包含备注</strong><p>控制本次导出文件是否包含学生备注。</p></div>
+        <el-switch v-model="includeRemarks" />
       </div>
 
       <div class="text-xs text-gray-400 p-2">
@@ -84,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { WarningFilled, InfoFilled, Document } from '@element-plus/icons-vue'
 import type { ExportOptions } from '../types/export'
 
@@ -107,19 +113,34 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'confirm', format: 'excel' | 'word' | 'pdf'): void
+  (e: 'confirm', format: 'excel' | 'word' | 'conclusion' | 'pdf', includeRemarks: boolean): void
 }>()
 
-const format = ref<'excel' | 'word' | 'pdf'>('excel')
+const format = ref<'excel' | 'word' | 'conclusion' | 'pdf'>('word')
+const includeRemarks = ref(props.options.includeRemarks ?? true)
 
 const visible = computed({
   get: () => props.modelValue,
   set: (val) => emit('update:modelValue', val)
 })
 
+watch(() => props.modelValue, open => {
+  if (open) includeRemarks.value = props.options.includeRemarks ?? true
+})
+
 const handleConfirm = () => {
   if (props.stats.errorCount > 0) return
   visible.value = false
-  emit('confirm', format.value)
+  emit('confirm', format.value, includeRemarks.value)
 }
 </script>
+
+<style scoped>
+/* 四种导出的说明都比较长，竖排才不会在对话框里换行错位 */
+.export-format-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+</style>

@@ -63,11 +63,13 @@
           <el-input-number v-model="form.studentCount.target" :min="form.defenseType === '中期答辩' ? 10 : 5" :max="form.defenseType === '中期答辩' ? 12 : 7" controls-position="right" class="w-full" />
         </el-form-item>
         <el-form-item label="专家人数（含组长）">
-          <el-select v-if="form.defenseType !== '中期答辩'" :model-value="expertCountInput" @change="handleExpertCountChange"><el-option :value="3" label="3 人" /><el-option :value="5" label="5 人" /></el-select>
+          <el-input-number v-if="form.defenseType === '正式答辩'" :model-value="5" disabled controls-position="right" class="w-full" />
+          <el-select v-else-if="form.defenseType === '预答辩'" :model-value="expertCountInput" @change="handleExpertCountChange"><el-option :value="3" label="3 人" /><el-option :value="5" label="5 人" /></el-select>
           <el-input-number v-else :model-value="expertCountInput" @change="handleExpertCountChange" :min="expertMinimum" controls-position="right" class="w-full" />
         </el-form-item>
       </div>
-      <p v-if="form.defenseType !== '中期答辩'" class="text-sm text-gray-600 mb-3">每组仅允许 5～7 人，以 6 人为主，少量 5 或 7 人组消化余数。允许同导师多名学生同组；仅在无法满足人数底线时，必要的小组可安排第 2 位外院导师。先平衡教师出场次数和参与学生数，再尽量集中在同日上午、下午。预答辩固定组号，正式阶段沿用分组和原教师，按人数要求补充本院专家。</p>
+      <p v-if="form.defenseType === '预答辩'" class="text-sm text-gray-600 mb-3">每组仅允许 5～7 人，以 6 人为主，少量 5 或 7 人组消化余数。允许同导师多名学生同组；仅在无法满足人数底线时，必要的小组可安排第 2 位外院导师。先平衡教师出场次数和参与学生数，再尽量集中在同日上午、下午。全部优化完成后按日期和半天确定最终组号；正式答辩沿用相同学生组、组号和答辩顺序。</p>
+      <p v-if="form.defenseType === '正式答辩' && form.preservePreDefenseGroups" class="text-sm text-gray-600 mb-3">沿用预答辩组号、学生和秘书，按原组号从小到大顺排日期和上午、下午，同一半天可并行多组。主席与专家全部轮换，回避本组学生的导师；导师不要求到场。减少同日跨校区并平衡评审次数。日期不足时列出未安排学生及原因，请延长日期。</p>
       <p class="text-sm text-gray-600 mb-3">{{ expertGuidance }}；主席/组长计入专家总数，秘书单独 1 人。</p>
       <el-popover placement="top" trigger="click" width="280"><template #reference><el-button link type="primary" size="small">查看人数范围</el-button></template><p>学生 {{ form.studentCount.min }}–{{ form.studentCount.max }} 人；{{ expertGuidance }}；秘书 1 人。</p></el-popover>
     </el-card>
@@ -87,10 +89,11 @@
                 <el-switch v-model="form.enabled" />
               </el-form-item>
             </el-col>
-            <el-col :xs="24" :sm="12" :lg="8" v-if="form.defenseType === '正式答辩' && form.policyVersion !== 3">
+            <el-col :xs="24" :sm="12" :lg="8" v-if="form.defenseType === '正式答辩'">
               <el-form-item label="启用导师回避">
-                <el-switch v-model="form.mentorAvoidance" />
-                <el-popover placement="top" trigger="click" width="260"><template #reference><button type="button" class="form-help-trigger" aria-label="导师回避说明">?</button></template><p>开启后导师不进入其学生所在组</p></el-popover>
+                <el-switch v-if="!form.preservePreDefenseGroups" v-model="form.mentorAvoidance" />
+                <el-switch v-else :model-value="true" disabled />
+                <el-popover placement="top" trigger="click" width="260"><template #reference><button type="button" class="form-help-trigger" aria-label="导师回避说明">?</button></template><p>沿用预答辩分组时固定开启：导师不能担任本组评审或秘书，且不要求到场。</p></el-popover>
               </el-form-item>
             </el-col>
             <el-col :xs="24" :sm="12" v-else>
@@ -115,9 +118,8 @@
           </el-form-item>
           <el-form-item v-if="form.defenseType === '正式答辩'" label="沿用预答辩分组">
             <el-switch v-model="form.preservePreDefenseGroups" />
-            <span class="text-xs text-gray-500 ml-2">优先沿用学生任务单元；时间不可行时局部补排。</span>
+            <span class="text-xs text-gray-500 ml-2">沿用组号、学生和秘书，评审全部更换；容量不足时逐人说明原因，请延长日期。</span>
           </el-form-item>
-          <el-form-item label="导出包含备注"><el-switch v-model="form.includeRemarks" /></el-form-item>
         </el-card>
 
         <!-- 人数规则 -->
@@ -234,8 +236,7 @@
     </details>
     <div v-if="!readonly && !hideActions" class="rule-actions flex flex-wrap justify-end gap-3 py-4">
       <el-button @click="$emit('reset', form.defenseType)">恢复默认</el-button>
-      <el-button :loading="saving" @click="$emit('save', form)">仅保存要求</el-button>
-      <el-button type="primary" :loading="saving" @click="$emit('continue', form)">保存并去生成排期 →</el-button>
+      <el-button type="primary" :loading="saving" @click="$emit('save', form)">保存要求</el-button>
     </div>
   </el-form>
 </template>
@@ -272,6 +273,8 @@ const handleExpertCountChange = (value: number | null | undefined) => {
 }
 const expertGuidance = computed(() => form.value.defenseType === '中期答辩'
   ? `中期答辩至少 ${form.value.expertCount.min} 位专家`
+  : form.value.defenseType === '正式答辩'
+    ? '正式答辩固定 5 位专家，外院至多 1 位；主席优先教授或研究员，不足时按预答辩组长职称放宽并提示'
   : `本阶段使用 ${form.value.expertCount.target} 位专家：优先 2 名本院、1 名外院；5 人时增加 2 名本院专家。无可用外院专家时用本院补足`)
 
 const disableEndDate = (date: Date) => {

@@ -9,12 +9,15 @@ from .fairness import mentor_share_excess, panel_cost
 
 
 def pack_counts(counts, target, minimum, maximum, experts, external_max,
-                teacher_map, chair_ids, feasible, seeds=()):
+                teacher_map, chair_ids, feasible, seeds=(), max_groups=None):
     """Jointly balance group size, mentor shares and mentor appearances.
 
     Columns describe mentor seat quotas, never student IDs. Uncovered seats
     have a dominant cost, so an optimizer timeout keeps an explicit partial
     result rather than inventing a small panel or violating availability.
+
+    max_groups：排期日期内本校区最多可同时开设的组数（由秘书、组长和评审人数估算）；
+    为 None 时不限制。受限时宁可明确留下未覆盖学生，也不生成之后排不进时段的小组。
     """
     import numpy as np
     from scipy.sparse import csc_matrix
@@ -138,24 +141,27 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
         visits = sum(initial[i] for i, candidate in enumerate(candidates) if tid in candidate)
         for column in attendance_columns[tid][:int(visits)]:
             initial[column] = 1
+    if max_groups is not None and initial[:count].sum() > max_groups:
+        # 起点组数超过时段容量：改用“全部未覆盖”的可行起点，由求解器在容量内重新覆盖
+        initial[:] = 0
+        initial[count:count + len(mentors)] = totals[:len(mentors)]
     # A moderate first objective finds incumbents faster than a single heavily
     # weighted objective. Refine headcounts only after protecting its coverage.
     refinement_costs = np.array(costs, dtype=float)
-    costs = np.array([100 * (sum(d.values()) - target) ** 2 + mentor_share_excess(d, experts)
-                      + 1000 * int(sum(d.values()) == 4)
-                      + max(0, sum(teacher_map[t].is_external for t in d) - 1) + .01
-                      for d in candidates]
-                     + [100 * uncovered_weight + 1000 * total * int(minimum == 4)] * len(mentors)
-                     + list(costs[count + len(mentors):]), dtype=float)
+    # First minimize uncovered students alone. A large penalty mixed with
+    # fairness and panel sizes is mathematically dominant, but makes bounded
+    # MIP search spend time improving complete panels while seats remain out.
+    # The refinement below protects this coverage before optimizing quality.
+    costs = np.zeros(len(costs), dtype=float)
+    costs[count:count + len(mentors)] = 1
     assert len(costs) == matrix.shape[1]
     # SciPy's pinned HiGHS binding accepts an incumbent. Starting from the
     # validated greedy cover ensures a timeout can never discard that cover.
     lp = highs_core.HighsLp()
     lp.num_col_, lp.num_row_ = len(costs), 2 * len(mentors)
     coverage_bounds = list(bounds)
-    for i, demand in enumerate(candidates):
-        if len(demand) > 3 and not initial[i]:
-            coverage_bounds[i] = 0
+    # Every feasible committee size must be available during coverage search,
+    # including four/five required mentors in five-expert mode.
     if not sum(initial[count:count + len(mentors)]):
         coverage_bounds[count:count + len(mentors)] = [0] * len(mentors)
     lp.col_cost_, lp.col_lower_, lp.col_upper_ = costs, np.zeros(len(costs)), coverage_bounds
@@ -172,6 +178,11 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
     solver.setOptionValue('mip_rel_gap', .01)
     solver.setOptionValue('mip_heuristic_effort', .5)
     solver.passModel(lp)
+    capacity_rows = 0
+    if max_groups is not None and count:
+        # 时段容量：本校区组数不得超过排期日期内可同时开设的组数
+        solver.addRow(0, float(max_groups), count, np.arange(count, dtype=np.int32), np.ones(count))
+        capacity_rows = 1
     incumbent = initial.copy()
     coverage_seed = 'greedy'
     full_cover_status = 'not_needed'
@@ -182,6 +193,9 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
     preferred_groups = max(ceil(total / maximum), (total + target // 2) // target,
                            ceil(external_visits / external_max))
     preferred_groups = min(preferred_groups, total // minimum) if total // minimum >= ceil(total / maximum) else None
+    if preferred_groups is not None and max_groups is not None:
+        # 容量不足以容纳全部学生时不再要求目标组数，只在容量内尽量多覆盖
+        preferred_groups = min(preferred_groups, max_groups) if max_groups >= ceil(total / maximum) else None
     prefer_group_count = preferred_groups is not None and round(sum(initial[:count])) != preferred_groups
     group_row = False
     if count and (sum(initial[count:count + len(mentors)]) > 0 or prefer_group_count):
@@ -206,7 +220,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                 incumbent = rounded
                 coverage_seed = 'full_cover_search'
         if coverage_seed != 'full_cover_search' and group_row:
-            solver.deleteRows(1, np.array([matrix.shape[0]], dtype=np.int32))
+            solver.deleteRows(1, np.array([matrix.shape[0] + capacity_rows], dtype=np.int32))
             group_row = False
             if sum(incumbent[count:count + len(mentors)]) > 0:
                 solver.clearSolver()
@@ -241,6 +255,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
         if next_solution.value_valid and np.dot(costs, next_solution.col_value) < np.dot(costs, candidate):
             candidate = np.array(next_solution.col_value)
     coverage_status = str(solver.getModelStatus())
+    coverage_uncovered = int(round(sum(candidate[count:count + len(mentors)])))
     if count:
         # This extra constraint prevents the size optimization from discarding
         # students already covered, even when the search times out.
@@ -273,7 +288,8 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
     integers = np.rint(candidate).astype(int)
     # Never trust a timed-out solver's non-integral or infeasible incumbent.
     if (np.max(np.abs(candidate - integers)) > 1e-5
-            or not np.allclose(matrix @ integers, totals)):
+            or not np.allclose(matrix @ integers, totals)
+            or (max_groups is not None and integers[:count].sum() > max_groups)):
         return [], {'status': 'search_limit', 'candidates': count}
     packed = [Counter(candidate) for candidate, copies in zip(candidates, integers[:count])
               for _ in range(int(copies))]
@@ -282,6 +298,8 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                     'coverage_solver_status': coverage_status,
                     'coverage_seed': coverage_seed, 'full_cover_status': full_cover_status,
                     'preferred_groups': preferred_groups, 'group_count_protected': group_row,
+                    'coverage_objective': 'unassigned_students_only',
+                    'coverage_uncovered': coverage_uncovered,
                     'initial_cost': round(float(np.dot(costs, initial)), 2),
                     'final_cost': round(float(np.dot(costs, candidate)), 2),
                     'candidates': count, 'uncovered': int(sum(integers[count:count + len(mentors)]))}

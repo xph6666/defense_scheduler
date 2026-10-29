@@ -29,16 +29,20 @@ def validated(payload, rules, result):
                              None, g['chair_id'], list(g['expert_ids']), g['secretary_id']) for g in result['groups']]
         if len({g.group_id for g in groups}) != len(groups):
             return None
+        from scheduling.group_order import finalize_pre_group_numbers
+        groups, names = finalize_pre_group_numbers(groups)
         students = [parse_student(s) for s in payload['students']]
         teachers = [parse_teacher(t) for t in payload['teachers']]
         by_id = {s.id: s for s in students}
         if any(sid not in by_id or by_id[sid].campus != g.campus for g in groups for sid in g.student_ids):
             return None
-        conflicts = validate(groups, students, teachers, rules)
-        warnings = {'mentor_student_imbalance', 'half_day_coverage', 'external_distribution', 'student_group_exception'}
+        conflicts = validate(groups, students, teachers, {**rules, 'pre_group_order': True})
+        warnings = {'mentor_student_imbalance', 'mentor_share_exception', 'half_day_coverage', 'external_distribution', 'student_group_exception'}
         if any(c['type'] not in warnings for c in conflicts):
             return None
         candidate = deepcopy(result)
+        by_final_name = {names[row['group_id']]: row for row in candidate['groups']}
+        candidate['groups'] = [{**by_final_name[g.group_id], 'group_id': g.group_id} for g in groups]
         candidate['conflicts'] = conflicts
         candidate['unassigned_students'] = []
         from scheduling.fairness import distribution_metrics, mentor_share_excess

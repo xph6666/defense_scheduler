@@ -8,7 +8,9 @@ export function normalizeRuleConfig(config: RuleConfig): RuleConfig {
   const softWeights = { ...policy.softWeights, ...config.softWeights }
   if (legacyWeights) for (const key of Object.keys(config.softWeights) as (keyof typeof softWeights)[]) softWeights[key] *= 10
   const current = config.defenseType !== '中期答辩'
-  const expertCount = current ? {
+  const formal = config.defenseType === '正式答辩'
+  const rotation = formal && (config.preservePreDefenseGroups ?? true)
+  const expertCount = formal ? { target: 5, min: 5 } : current ? {
     target: config.policyVersion === 3 && config.expertCount?.target === 5 ? 5 : 3,
     min: config.policyVersion === 3 && config.expertCount?.target === 5 ? 5 : 3
   } : {
@@ -20,6 +22,7 @@ export function normalizeRuleConfig(config: RuleConfig): RuleConfig {
     ...config,
     policyVersion: current ? policyVersion : 2,
     expertCountIncludesChair: true,
+    mentorAvoidance: rotation ? true : config.mentorAvoidance,
     expertCount,
     studentCount: current ? {
       target: config.studentCount?.target >= 5 && config.studentCount.target <= 7 ? config.studentCount.target : 6,

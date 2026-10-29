@@ -3,7 +3,6 @@ import { enableDemoTools } from '../config/features'
 
 const MainLayout = () => import('../layout/MainLayout.vue')
 const Dashboard = () => import('../views/Dashboard.vue')
-const ScheduleWizard = () => import('../views/ScheduleWizard.vue')
 const TeacherList = () => import('../views/teacher/TeacherList.vue')
 const StudentList = () => import('../views/student/StudentList.vue')
 const ClassroomList = () => import('../views/classroom/ClassroomList.vue')
@@ -46,9 +45,8 @@ const router = createRouter({
       children: [
         {
           path: 'schedule-wizard',
-          name: 'ScheduleWizard',
-          component: ScheduleWizard,
-          meta: { title: '分步安排向导' }
+          redirect: to => ({ path: '/schedule-results', query: to.query }),
+          meta: { title: '排期方案' }
         },
         {
           path: 'dashboard',

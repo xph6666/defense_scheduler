@@ -1,0 +1,123 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "scope": "New drafts assign final pre-defense numbers after all optimization; formal uses same student groups, numbers, secretary and chronological group order. Saved database versions were not changed.",
+  "backend": {
+    "tests": 490,
+    "seconds": 75.872,
+    "result": "OK",
+    "command": ".venv/Scripts/python.exe manage.py test --noinput"
+  },
+  "frontend": {
+    "domain": "passed",
+    "build": "passed",
+    "lint": "passed; excluding tmp*/ and pre-plan-*/ runtime directories"
+  },
+  "sources_sha256": {
+    "scheduling/group_order.py": "fc9962b1eb1a6e0ee4d876d9526b856c57f24de052e162d5fa117eb4b6a8c35f",
+    "scheduling/personnel_first.py": "e5cb7352e1d6a73ef841d5d086c0eec21752a284f143bb5179413a7cc13b6591",
+    "scheduling/current.py": "6192af16fd73e597f41ecbc51106d85c24d7806bb090e315bd68f96a871621df",
+    "api/services/pre_plan_cache.py": "f5a56a293d3dcfd5961e01b69b2baba0cc1ba894f1306be3c83b9b4084720423",
+    "api/services/rules.py": "e7e30d28c62383bfa014c8a998e573b5c42042a389f9787c82badbab92bf7ae3",
+    "api/services/schedules.py": "9a72fc0b7c821368633b617aabed965a2f4c82dd8cd53c3f76ba4c9f7e8f9ad0",
+    "api/schedule_views.py": "16c39978f36cec19d47bc0fbd50feb840e6dc473bc455f1835ae51c37a54b5f2",
+    "api/test_pre_group_order.py": "31225dc611b7d6aa31f39d7d8b05d98743beab1ecce444f6ef906b45287ad1b6",
+    "scripts/qa/balanced-pre-snapshot.py": "a26934a0c1550f5ae5a5214daa88ff24a6023ccdddc55b7ec92c47235854a956",
+    "src/components/RuleConfigForm.vue": "5d83b180e5e2d7953dd656367555da2662efe4ee486b9e3743ac7e2958d4d15f",
+    "src/views/schedule/ScheduleResult.vue": "024b1595c5593c1b37a347fe7f206732ca6d77313cec91659d6587c2ba536a59"
+  },
+  "input_snapshots": {
+    "pre": {
+      "rules_sha256": "3c3adcb99a82e3516295e049e6f52d653ccc766fec12deaf0e46cece4a0880c9",
+      "payload_sha256": "2f8ae70b5abd795b8d290ba8eb75866d28c1027d3ed981aafedf965293ba53e6"
+    },
+    "formal": {
+      "rules_sha256": "31f5505b85ae17b21dd0da19cd9590a5bec17f72fa32a335efb4881958cd10ce",
+      "payload_sha256": "f0ad2894fb6119c46cd44115034a963af79ef8348d7ecc823f1b397e0b55d7fc"
+    }
+  },
+  "scenarios": {
+    "3": {
+      "pre": {
+        "groups": 54,
+        "students": 301,
+        "unassigned": 0,
+        "seconds": 110.489,
+        "cross_campus_teacher_days": 10,
+        "relaxed_chairs": 0,
+        "independent_checks": "passed",
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-10-05",
+          "2026-10-06",
+          "2026-10-07"
+        ],
+        "time_reversals": 0
+      },
+      "formal": {
+        "groups": 54,
+        "students": 301,
+        "unassigned": 0,
+        "seconds": 0.065,
+        "cross_campus_teacher_days": 8,
+        "relaxed_chairs": 0,
+        "independent_checks": "passed",
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-11-10",
+          "2026-11-11",
+          "2026-11-12",
+          "2026-11-13"
+        ],
+        "time_reversals": 0
+      },
+      "identical_group_numbers": true,
+      "identical_students_and_secretary": true,
+      "raw_result_sha256": "811b72ff408bed0fac99e7c145c24fd877c6a9e04561ede25c3c74c682a0c70b"
+    },
+    "5": {
+      "pre": {
+        "groups": 56,
+        "students": 301,
+        "unassigned": 0,
+        "seconds": 108.885,
+        "cross_campus_teacher_days": 16,
+        "relaxed_chairs": 0,
+        "independent_checks": "passed",
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-10-05",
+          "2026-10-06",
+          "2026-10-07",
+          "2026-10-08",
+          "2026-10-09",
+          "2026-10-12",
+          "2026-10-13"
+        ],
+        "time_reversals": 0
+      },
+      "formal": {
+        "groups": 56,
+        "students": 301,
+        "unassigned": 0,
+        "seconds": 0.083,
+        "cross_campus_teacher_days": 4,
+        "relaxed_chairs": 0,
+        "independent_checks": "passed",
+        "time_assumptions": 86,
+        "days_used": [
+          "2026-11-10",
+          "2026-11-11",
+          "2026-11-12",
+          "2026-11-13",
+          "2026-11-16",
+          "2026-11-17"
+        ],
+        "time_reversals": 0
+      },
+      "identical_group_numbers": true,
+      "identical_students_and_secretary": true,
+      "raw_result_sha256": "d59199b30dc6a40d6fcad7954a7413202175aaaf3b8d87e32aaa82ada8a45df9"
+    }
+  }
+}

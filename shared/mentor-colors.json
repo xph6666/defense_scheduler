@@ -1,11 +1,11 @@
 {
-  "version": 2,
+  "version": 3,
   "description": [
     "导师配色的唯一数据源。前端（网页标签底色）与后端（Word/Excel 导出字体色）都只读这一份，",
-    "槽位一律由 index = jsHash(导师姓名) % palette.length 决定，因此同一导师在网页与导出中恒定同色。",
+    "完整排期按同组关系为导师分配 distinctPalette，优先保证组内色差及跨组一致；旧单姓名接口保留 jsHash 槽位。",
     "light 供网页标签底色（浅底深字），dark 供导出字体着色（白底深字）。",
     "色值不带 # 前缀，由各消费方自行格式化：CSS 侧补 #，openpyxl / python-docx 直接使用。",
-    "保留历年安排表的前 16 色，并追加 48 色，扩展至 64 个颜色槽位。"
+    "palette 保留 64 个历史兼容槽位；distinctPalette 提供新版同组分色的浅底和深色文字。"
   ],
   "hashVectors": {
     "unknown": 54,
@@ -17,6 +17,16 @@
     "张三": 41,
     "李四": 13
   },
+  "distinctPalette": [
+    { "light": "C7E5FF", "dark": "155A95" },
+    { "light": "FFD6A5", "dark": "914800" },
+    { "light": "BEE6B4", "dark": "286324" },
+    { "light": "DAC5F2", "dark": "63349A" },
+    { "light": "F3BBCB", "dark": "8F2450" },
+    { "light": "F5EA9B", "dark": "756000" },
+    { "light": "AEDFE0", "dark": "155D63" },
+    { "light": "DDD1C3", "dark": "654C33" }
+  ],
   "palette": [
     { "light": "D6F0DD", "dark": "00B050" },
     { "light": "DCE9F9", "dark": "558ED5" },

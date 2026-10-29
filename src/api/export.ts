@@ -15,11 +15,11 @@ const USE_MOCK = runtimeConfig.useMock
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-export async function exportScheduleExcel(defenseType: DefenseType, versionId?: number) {
+export async function exportScheduleExcel(defenseType: DefenseType, versionId?: number, includeRemarks?: boolean) {
   if (USE_MOCK) {
     await sleep(600)
 
-    const result = await getScheduleResults(defenseType)
+    const result = await getScheduleResults(defenseType, versionId)
     if (!result) {
       return createCsvBlob('暂无排期数据可导出')
     }
@@ -27,7 +27,7 @@ export async function exportScheduleExcel(defenseType: DefenseType, versionId?: 
     const { conflicts } = readLocalConflicts(defenseType)
     const freshConflicts = checkConflictsMock(result)
     assertNoHardConflicts(freshConflicts.length ? freshConflicts : conflicts)
-    exportScheduleToCsv(result, freshConflicts.length ? freshConflicts : conflicts)
+    exportScheduleToCsv(result, freshConflicts.length ? freshConflicts : conflicts, includeRemarks)
     await createOperationLog({
       type: '导出结果',
       module: '排期管理',
@@ -39,28 +39,43 @@ export async function exportScheduleExcel(defenseType: DefenseType, versionId?: 
   }
 
   const blob = await request.get('/schedule/export/', {
-    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId },
+    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId, ...(includeRemarks === undefined ? {} : { include_remarks: includeRemarks }) },
     responseType: 'blob'
   }) as Blob
   downloadBlob(blob, `defense_schedule_${toBackendDefenseType(defenseType)}.xlsx`)
   return blob
 }
 
-export async function exportScheduleWord(defenseType: DefenseType, versionId?: number) {
+export async function exportScheduleWord(defenseType: DefenseType, versionId?: number, includeRemarks?: boolean) {
   if (USE_MOCK) {
     await sleep(600)
     return createCsvBlob('Mock 模式不支持 Word 导出')
   }
 
   const blob = await request.get('/schedule/export_word/', {
-    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId },
+    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId, ...(includeRemarks === undefined ? {} : { include_remarks: includeRemarks }) },
     responseType: 'blob'
   }) as Blob
   downloadBlob(blob, `${defenseType}时间安排.docx`)
   return blob
 }
 
-export async function exportSchedulePdf(defenseType: DefenseType, versionId?: number) {
+/** 学院归档的第二种 Word：《评审小组结论》（每组一页，供专家现场勾选等级并签名）。 */
+export async function exportScheduleConclusion(defenseType: DefenseType, versionId?: number, includeRemarks?: boolean) {
+  if (USE_MOCK) {
+    await sleep(600)
+    return createCsvBlob('Mock 模式不支持 Word 导出')
+  }
+
+  const blob = await request.get('/schedule/export_conclusion/', {
+    params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId, ...(includeRemarks === undefined ? {} : { include_remarks: includeRemarks }) },
+    responseType: 'blob'
+  }) as Blob
+  downloadBlob(blob, `${defenseType}评审小组结论.docx`)
+  return blob
+}
+
+export async function exportSchedulePdf(defenseType: DefenseType, versionId?: number, includeRemarks?: boolean) {
   const preview = window.open('', '_blank')
   if (!preview) throw new Error('打印窗口未打开，请允许此站点弹出窗口后重试')
   preview.opener = null
@@ -70,11 +85,11 @@ export async function exportSchedulePdf(defenseType: DefenseType, versionId?: nu
     if (!result?.groups.length) throw new Error('暂无排期数据可打印')
     const local = USE_MOCK ? readLocalConflicts(defenseType).conflicts : []
     // [TASK-P12 修改] PDF优先采用所选历史版本的备注开关。
-    const includeRemarks = result.rules?.include_remarks ?? result.rules?.includeRemarks ?? config.includeRemarks
+    const includeRemarksForExport = includeRemarks ?? result.rules?.include_remarks ?? result.rules?.includeRemarks ?? config.includeRemarks
     const currentConflicts = USE_MOCK ? checkConflictsMock(result) : result.conflicts || []
     assertNoHardConflicts(currentConflicts.length ? currentConflicts : local)
     preview.document.open()
-    preview.document.write(renderSchedulePrint(result, { includeRemarks, conflicts: currentConflicts.length ? currentConflicts : local }))
+    preview.document.write(renderSchedulePrint(result, { includeRemarks: includeRemarksForExport, conflicts: currentConflicts.length ? currentConflicts : local }))
     preview.document.close()
     if (USE_MOCK) {
       await createOperationLog({

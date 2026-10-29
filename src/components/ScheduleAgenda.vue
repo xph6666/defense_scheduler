@@ -16,7 +16,12 @@
         <div class="agenda-body">
           <div class="material-top"><h3>{{ group.groupName }}</h3><el-tag v-if="problemCount(group.id)" type="warning">{{ problemCount(group.id) }} 项待核对</el-tag><el-tag v-else type="success">无分组冲突</el-tag></div>
           <p>学生 {{ group.students.length }} 人 · {{ group.defenseType === '正式答辩' ? '主席' : '组长' }}：{{ group.chairman || group.leader || '待安排' }} · 秘书：{{ group.secretary || '待安排' }}</p>
-          <details class="agenda-members"><summary>查看教师与学生名单</summary><p>专家：{{ getScheduleExperts(group).map(teacher => teacher.name).join('、') || '待安排' }}</p><p>学生：{{ group.students.map(student => `${student.name}（导师：${student.mentorName || '未填写'}）`).join('、') || '暂无学生' }}</p></details>
+          <details class="agenda-members">
+            <summary>查看教师与学生名单</summary>
+            <p>专家：<span v-for="teacher in getScheduleExperts(group)" :key="teacher.id" class="agenda-mentor" :style="mentorStyle(group, teacher.name)">{{ teacher.name }}</span></p>
+            <p>学生：<span v-for="student in group.students" :key="student.id" class="agenda-mentor" :style="mentorStyle(group, student.mentorName)">{{ student.name }}（导师：{{ student.mentorName || '未填写' }}）</span></p>
+            <p v-if="mentorShares?.[group.id]">导师学生数：{{ mentorShares[group.id].pattern }} · {{ mentorShares[group.id].reason }}</p>
+          </details>
           <div class="agenda-actions"><el-button v-if="canManage" size="small" @click="$emit('adjust', group)">调整本组</el-button><el-button v-if="problemCount(group.id)" size="small" type="warning" plain @click="$emit('problem', group.id)">查看问题</el-button></div>
         </div>
       </article>
@@ -26,6 +31,8 @@
 <script setup lang="ts">
 import { computed, watch, nextTick } from 'vue'
 import { getScheduleExperts } from '../domain/scheduleExperts'
+import { buildMentorColors, groupMentorColors, neutralMentorColor, type MentorColorMap } from '../domain/mentorColors'
+import type { MentorShares } from '../domain/mentorShares'
 import type { ScheduleGroup } from '../types/schedule'
 import type { ScheduleConflict } from '../types/conflict'
 const props = defineProps<{
@@ -33,10 +40,15 @@ const props = defineProps<{
   conflicts: ScheduleConflict[]
   canManage: boolean
   highlightedGroupIds?: number[]
+  mentorColors?: MentorColorMap
+  mentorShares?: Record<number, MentorShares>
 }>()
 defineEmits<{ (event: 'adjust', group: ScheduleGroup): void; (event: 'problem', groupId: number): void }>()
 
 const highlightedGroupIds = computed(() => props.highlightedGroupIds || [])
+const colors = computed(() => Object.fromEntries(props.groups.map(group => [group.id,
+  groupMentorColors(group, props.mentorColors ?? buildMentorColors(props.groups))])))
+const mentorStyle = (group: ScheduleGroup, name: string) => colors.value[group.id]?.[name.trim()] ?? neutralMentorColor
 
 const days = computed(() => {
   const sorted = props.groups
@@ -62,6 +74,7 @@ watch(highlightedGroupIds, async (ids) => {
 </script>
 
 <style scoped>
+.agenda-mentor { display: inline-block; border: 1px solid; border-radius: 4px; padding: 2px 6px; margin: 3px; }
 .agenda-group.is-highlighted {
   animation: agendaHighlightPulse 2s ease-out;
   border-left: 4px solid #00467f !important;

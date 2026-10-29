@@ -39,7 +39,11 @@ class PersonnelPlanner:
 
     def __init__(self, teachers, students, rules, seed_groups=(), refine_seed_only=False):
         from algorithm import build_candidate_slots, meets_chair_requirement
-        self.teachers, self.students, self.rules = teachers, students, rules
+        self.teachers, self.students, self.rules = teachers, students, dict(rules)
+        if rules['defense_type'] == 'pre':
+            # Saved snapshots enforce fixed numbers during edits, but fresh
+            # generation still optimizes provisional groups before numbering.
+            self.rules.pop('pre_group_order', None)
         self.teacher_map = {t.id: t for t in teachers}
         self.slots = build_candidate_slots(rules, [])
         self.available_ids = {slot: {t.id for t in teachers if available(t, slot)} for slot in self.slots}
@@ -209,8 +213,10 @@ class PersonnelPlanner:
             return feasible_cache[key]
 
         result = []
+        caps = self.campus_group_caps(cohorts)
         for campus, remaining in sorted(cohorts.items(), key=lambda item: str(item[0])):
             packed = []
+            cap = caps.get(campus)
             # External mentors seed different panels; internal mentors then
             # fill their seats instead of leaving many small external panels.
             order = sorted(remaining, key=lambda tid: (
@@ -287,23 +293,58 @@ class PersonnelPlanner:
                 else:
                     optimized, diagnostics = pack_counts(remaining, target, minimum, self.rules['group_max'],
                         self.rules['expert_count'], external_max, self.teacher_map, self.chair_ids,
-                        lambda counts: feasible(campus, counts), seed_counts)
+                        lambda counts: feasible(campus, counts), seed_counts, max_groups=cap)
                 if target == 6 and self.rules['group_max'] == 7:
                     from .compact_counts import repack_sixes
+                    # 七人组改六人组会增加组数，容量受限时不得超过本校区可开设的组数
                     optimized, blocks = repack_sixes(optimized, self.rules['expert_count'], external_max,
-                        self.teacher_map, self.chair_ids, lambda counts: feasible(campus, counts))
+                        self.teacher_map, self.chair_ids, lambda counts: feasible(campus, counts),
+                        limit=None if cap is None else max(0, cap - len(optimized)))
                     diagnostics['six_seat_repack_blocks'] = blocks
+                diagnostics['group_cap'] = cap
                 self.packing_diagnostics.append({'campus': campus, **diagnostics})
                 self.search_limited |= diagnostics['status'] in ('bounded', 'search_limit')
                 covered = sum(optimized, Counter())
+                if cap is not None and len(optimized) >= cap:
+                    reason = (f'排期日期内可同时开设的小组数不足（{campus or "本校区"}最多约 {cap} 组，'
+                              f'受 {len(self.secretary_ids)} 位秘书和评审人数限制）；请延长日期范围或补充秘书')
+                else:
+                    reason = f'在本次搜索范围内，未找到满足每组至少 {minimum} 人、导师评审、时间及专家资格的组合'
                 for tid, count in (remaining - covered).items():
-                    self.failed_demands.append((Demand(campus, Counter({tid: count})),
-                        f'在本次搜索范围内，未找到满足每组至少 {minimum} 人、导师评审、时间及专家资格的组合'))
+                    self.failed_demands.append((Demand(campus, Counter({tid: count})), reason))
                 packed = [Demand(campus, counts) for counts in optimized]
             result.extend(packed)
         result.sort(key=lambda d: (sum(set(d.mentors) <= ids for ids in self.available_ids.values()),
                                    -d.size, str(d.campus), str(sorted(d.mentors, key=str))))
         return result
+
+    def slot_group_capacity(self):
+        """各半天可同时开设组数的上界之和：秘书、合格组长和到场人数取最小值。"""
+        size = self.rules['expert_count'] + 1
+        return sum(min(len(ids & self.secretary_ids), len(ids & self.chair_ids), len(ids) // size)
+                   for ids in self.available_ids.values())
+
+    def campus_group_caps(self, cohorts):
+        """日期容量不足以按目标人数成组时，按学生人数为各校区分配组数上限；容量充足时返回空字典。
+
+        先满足各校区按每组最多人数所需的最少组数，余量再按学生比例（最大余数法）分配；
+        若连最少组数都放不下，则整体按学生比例分配，未能覆盖的学生会明确列为未安排。
+        """
+        capacity = self.slot_group_capacity()
+        target, maximum = self.rules['group_size'], self.rules['group_max']
+        sizes = {campus: sum(counts.values()) for campus, counts in cohorts.items()}
+        if not sizes or capacity >= sum(max(-(-n // maximum), round(n / target)) for n in sizes.values()):
+            return {}
+        total = sum(sizes.values())
+        minimum = {campus: -(-n // maximum) for campus, n in sizes.items()}
+        base = minimum if sum(minimum.values()) <= capacity else {campus: 0 for campus in sizes}
+        spare = capacity - sum(base.values())
+        shares = {campus: spare * n / total for campus, n in sizes.items()}
+        caps = {campus: base[campus] + int(shares[campus]) for campus in sizes}
+        leftover = capacity - sum(caps.values())
+        for campus in sorted(shares, key=lambda c: (-(shares[c] - int(shares[c])), str(c)))[:leftover]:
+            caps[campus] += 1
+        return caps
 
     def occupied(self, tid, slot, except_group=None):
         key = (tid, slot, except_group)
@@ -358,7 +399,7 @@ class PersonnelPlanner:
         seen = set()
         # More external seats are allowed only when their own students require
         # them. Optional reviewers never add a second external teacher.
-        limits = [max(1, sum(self.teacher_map[t].is_external for t in fixed))]
+        limits = [max(1, sum(self.teacher_map[t].is_external for t in self.required_reviewers(demand)))]
         if limits[0] > self.rules.get('external_expert_max', 1):
             return
         for external_limit in limits:
@@ -423,6 +464,9 @@ class PersonnelPlanner:
             external = sum(self.teacher_map[tid].is_external for tid in reviewers)
             if external > self.rules.get('external_expert_max', 1) or len(reviewers) > self.rules['expert_count']:
                 return False
+            if external > 1 and any(self.teacher_map[tid].is_external
+                                    for tid in reviewers - self.required_reviewers(item)):
+                return False
             free = {tid for tid in self.available_ids[when] - reserved
                     if not self.occupied(tid, when, gid) and not self.conflicts_with(tid, people)}
             domains.append(free & self.secretary_ids)
@@ -459,22 +503,28 @@ class PersonnelPlanner:
                 self.failed_demands.append((demand, '导师缺失、停用或未参加本次答辩'))
                 continue
             best, best_score = None, None
+            causes = set()  # 各半天被拒的原因，用于给出准确的未安排说明
             for slot in self.slots:
                 overlapping = [plan for plan in self.plans if slot.overlaps(plan.group.time_slot)]
                 attendance = [plan.demand for plan in overlapping] + [demand]
                 headcount = sum(self.rules['expert_count'] + 1 + (
                     len(item.mentors) if self.rules.get('avoid_supervisor') else 0) for item in attendance)
                 if headcount > len(self.available_ids[slot]):
+                    causes.add('capacity' if mentors <= self.available_ids[slot] else 'mentor_time')
                     continue
                 if self.rules['expert_count'] == 5 and 4 * len(attendance) > sum(
                         not self.teacher_map[tid].is_external for tid in self.available_ids[slot]):
+                    causes.add('capacity' if mentors <= self.available_ids[slot] else 'mentor_time')
                     continue
                 eligible = self.eligible(demand, slot)
                 if not mentors <= eligible:
+                    causes.add('mentor_busy' if mentors <= self.available_ids[slot] else 'mentor_time')
                     continue
                 chairs = self.chair_ids & eligible
                 if self.rules.get('avoid_supervisor'):
                     chairs -= mentors
+                if not chairs:
+                    causes.add('panel')
                 for chair in sorted(chairs, key=lambda tid: (tid not in self.required_reviewers(demand), self.rank(tid, slot))):
                     people = mentors | {chair}
                     score = (int(chair not in self.required_reviewers(demand)),
@@ -489,8 +539,10 @@ class PersonnelPlanner:
                     # Feasibility lookahead assigns nobody. Actual expert and
                     # secretary reservations happen only after every chair exists.
                     if self.panel_for_chair(demand, slot, chair, eligible) is None:
+                        causes.add('panel')
                         continue
                     if not self.can_staff_together(demand, slot, chair, overlapping):
+                        causes.add('capacity')
                         continue
                     group_id = f'G{len(self.plans) + 1:03}'
                     best = PanelPlan(demand, GroupDraft(group_id, demand.campus, [], slot, None, chair))
@@ -499,12 +551,22 @@ class PersonnelPlanner:
                 self.plans.append(best)
                 self.reserve(best.group.group_id, best.group.time_slot, mentors | {best.group.chair_id}, demand.size)
             else:
-                unknown = any((not self.teacher_map[tid].raw.get('availability_confirmed')
-                               and not self.teacher_map[tid].raw.get('availability_assumed'))
-                              or self.teacher_map[tid].raw.get('availability_invalid') for tid in mentors)
-                reason = ('导师可用时间待确认或格式无效' if unknown else
-                          '没有同时满足导师时间、组长资格及专家人数要求的空余时段')
-                self.failed_demands.append((demand, reason))
+                self.failed_demands.append((demand, self.chair_failure_reason(mentors, causes)))
+
+    def chair_failure_reason(self, mentors, causes):
+        """按各半天被拒原因给出可操作的说明：时间、占用或容量，避免一律归为日期问题。"""
+        if any((not self.teacher_map[tid].raw.get('availability_confirmed')
+                and not self.teacher_map[tid].raw.get('availability_assumed'))
+               or self.teacher_map[tid].raw.get('availability_invalid') for tid in mentors):
+            return '导师可用时间待确认或格式无效'
+        if 'capacity' in causes:
+            return (f'导师共同可用的半天中，秘书或评审名额已被其他小组占满（全部 {len(self.secretary_ids)} 位秘书'
+                    '每个半天各带一组）；请延长日期范围或补充秘书')
+        if not causes or causes == {'mentor_time'}:
+            return '本组导师在排期日期内没有共同可用的半天；请核对导师可用时间或延长日期范围'
+        if causes <= {'mentor_time', 'mentor_busy'}:
+            return '本组导师共同可用的半天均已被其他小组占用；请延长日期范围'
+        return '没有同时满足导师时间、组长资格及专家人数要求的空余时段'
 
     def assign_staff(self):
         """Phase 2: scarce panels first, with bounded backtracking per time component.
@@ -526,6 +588,8 @@ class PersonnelPlanner:
         for component in components:
             best, best_score = {}, (-1, -1)
             chosen = {}
+            # 搜索预算按时间分量分别计算：前面的分量用完预算不应使后面分量一组都排不上
+            budget_start = self.search_nodes
 
             def search(pending, student_count):
                 nonlocal best, best_score
@@ -534,7 +598,7 @@ class PersonnelPlanner:
                     best, best_score = dict(chosen), score
                 if not pending:
                     return len(chosen) == len(component)
-                if self.search_nodes >= self.MAX_SEARCH_NODES:
+                if self.search_nodes - budget_start >= self.MAX_SEARCH_NODES:
                     self.search_limited = True
                     return False
                 self.search_nodes += 1
@@ -560,7 +624,7 @@ class PersonnelPlanner:
                     self.reserve(gid, *original)
                     if solved:
                         return True
-                    if self.search_nodes >= self.MAX_SEARCH_NODES:
+                    if self.search_nodes - budget_start >= self.MAX_SEARCH_NODES:
                         self.search_limited = True
                         break
                 # Keep a maximal partial plan if a genuine shortage or the
@@ -753,9 +817,16 @@ class PersonnelPlanner:
             if cross_group['accepted_pairs']:
                 self.compact_attendance()
         groups = [plan.group for plan in self.plans]
+        if self.rules['defense_type'] == 'pre':
+            from .group_order import finalize_pre_group_numbers
+            groups, names = finalize_pre_group_numbers(groups)
+            self.reservations = {names.get(gid, gid): value for gid, value in self.reservations.items()}
+            self.plans.sort(key=lambda p: p.group.group_id)
+            self.invalidate_calendar()
         from .fairness import distribution_metrics
         fairness = distribution_metrics(groups, self.students, self.teachers)
-        conflicts = validate(groups, self.students, self.teachers, self.rules)
+        validation_rules = {**self.rules, 'pre_group_order': True} if self.rules['defense_type'] == 'pre' else self.rules
+        conflicts = validate(groups, self.students, self.teachers, validation_rules)
         for conflict in conflicts:
             if conflict['type'] == 'missing_student' and conflict.get('student_id') in self.reasons:
                 sid = conflict['student_id']
@@ -763,7 +834,7 @@ class PersonnelPlanner:
                 conflict['description'] = f'学生 {student.name} 未安排：{self.reasons[sid]}（已尝试局部补排）'
         if self.reasons and (self.search_limited or self.candidates_limited):
             conflicts.append(make_conflict('search_limit',
-                '本次候选或回溯搜索达到保护上限，已保留满足硬约束的部分安排；未安排不代表无可行解，请补充资源或调整日期后重试', []))
+                '本次候选或回溯搜索达到保护上限，已保留满足硬约束的部分安排；未安排不代表无可行解，请先按各学生列出的未安排原因处理', []))
         return {'groups': [serialize_group(g) for g in groups], 'conflicts': conflicts,
                 'diagnostics': {'algorithm': 'personnel-first-3', 'staff_search_nodes': self.search_nodes,
                                 'fairness': fairness,

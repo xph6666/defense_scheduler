@@ -11,6 +11,11 @@ from rest_framework.exceptions import AuthenticationFailed, Throttled
 class LocalPasswordlessAuthentication(BaseAuthentication):
     """Allow the desktop user to enter directly, only over loopback."""
 
+    def authenticate_header(self, request):
+        # DRF uses the first authenticator's challenge for all failed logins.
+        # Preserve token clients' 401 contract when loopback access is ineligible.
+        return 'Token'
+
     def authenticate(self, request):
         from urllib.parse import urlsplit
         from django.contrib.auth import get_user_model

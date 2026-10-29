@@ -37,7 +37,7 @@ class CrossGroupTests(SimpleTestCase):
         self.assertEqual(sorted(covered), list(range(1, 13)))
         self.assertEqual(len(covered), len(set(covered)))
         self.assertTrue(all(5 <= len(group.student_ids) <= 7 for group in groups))
-        soft = {'external_distribution', 'half_day_coverage', 'student_group_exception', 'mentor_student_imbalance'}
+        soft = {'external_distribution', 'half_day_coverage', 'student_group_exception', 'mentor_student_imbalance', 'mentor_share_exception'}
         self.assertFalse([c for c in validate(groups, p.students, p.teachers, p.rules) if c['type'] not in soft])
         self.assertEqual({g.group_id for g in groups}, {'G001', 'G002'})
         for group in groups:

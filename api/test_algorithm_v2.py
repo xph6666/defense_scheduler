@@ -886,31 +886,60 @@ class FormalSecretaryExportV2Tests(TestCase):
         self.assertEqual(displayed['secretaryId'], secretary_id)
         self.assertEqual(displayed['secretaryName'], secretary_name)
 
-    def test_word_export_includes_relationships_optional_remarks_and_conflict_marking(self):
+    def test_word_exports_render_arrangement_and_conclusion_forms(self):
+        """两种归档 Word：安排表按样例只列姓名，结论表把姓名与导师写在下划线空位上。"""
         from docx.shared import RGBColor
-        from .export_word import export_schedule_word
+        from .export_conclusion import export_conclusion_document
+        from .export_word import export_arrangement_document
 
         self.student.mentor = self.old_secretary
         self.student.mentor_name = self.old_secretary.name
         self.student.remark = '测试备注'
         self.student.student_no = 'WORD-001'
         self.student.save(update_fields=['mentor', 'mentor_name', 'remark', 'student_no'])
-        conflict = {'relatedGroupIds': [self.group.pk], 'level': 'error', 'type': '导师冲突', 'reason': '冲突测试'}
-        document = export_schedule_word(self.version, '正式答辩', True, [conflict])
-        text = '\n'.join(cell.text for row in document.tables[0].rows for cell in row.cells)
-        self.assertIn('WORD-001', text)
-        self.assertIn('导师：预答辩原秘书', text)
-        self.assertIn('秘书：正式答辩改选秘书', text)
-        self.assertIn('测试备注', text)
-        self.assertIn('冲突测试', text)
-        conflict_run = next(run for row in document.tables[0].rows for cell in row.cells
-                    for paragraph in cell.paragraphs for run in paragraph.runs
-                    if '冲突测试' in run.text)
+        conflict = {'relatedGroupIds': [self.group.pk], 'level': 'error',
+                    'type': '导师冲突', 'reason': '冲突测试'}
+
+        arrangement = export_arrangement_document(self.version, 'formal', True, [conflict])
+        table_text = '\n'.join(cell.text for row in arrangement.tables[0].rows for cell in row.cells)
+        self.assertIn('版本秘书学生', table_text)
+        self.assertIn('（测试备注）', table_text)
+        self.assertIn('正式答辩改选秘书', table_text)
+        # 学院样例的时间安排表只写姓名和备注，学号与逐人导师关系留给结论表
+        self.assertNotIn('WORD-001', table_text)
+        self.assertNotIn('导师：', table_text)
+        appendix = '\n'.join(paragraph.text for paragraph in arrangement.paragraphs)
+        self.assertIn('冲突测试', appendix)
+        conflict_run = next(run for paragraph in arrangement.paragraphs
+                            for run in paragraph.runs if '冲突测试' in run.text)
         self.assertEqual(conflict_run.font.color.rgb, RGBColor.from_string('C00000'))
 
-        without_remarks = export_schedule_word(self.version, '正式答辩', False)
-        text_without_remarks = '\n'.join(cell.text for row in without_remarks.tables[0].rows for cell in row.cells)
+        without_remarks = export_arrangement_document(self.version, 'formal', False, [conflict])
+        text_without_remarks = '\n'.join(cell.text for row in without_remarks.tables[0].rows
+                                         for cell in row.cells)
         self.assertNotIn('测试备注', text_without_remarks)
+
+        conclusion = export_conclusion_document(self.version, 'formal', True)
+        lines = [paragraph.text for row in conclusion.tables[0].rows
+                 for cell in row.cells for paragraph in cell.paragraphs]
+        student_lines = [line for line in lines if line.startswith('学生1')]
+        self.assertTrue(student_lines, lines)
+        self.assertIn('版本秘书学生', student_lines[0])
+        self.assertIn('指导教师', student_lines[0])
+        self.assertIn('预答辩原秘书', student_lines[0])
+
+    def test_conclusion_export_pads_blank_student_lines_and_page_breaks_each_group(self):
+        from .export_conclusion import MIN_STUDENT_ROWS, export_conclusion_document
+
+        self.group.experts.clear()
+        document = export_conclusion_document(self.version, 'formal', True)
+
+        cell = document.tables[0].rows[1].cells[0]
+        student_lines = [paragraph.text for paragraph in cell.paragraphs
+                         if paragraph.text.startswith('学生')]
+        self.assertEqual(len(student_lines), MIN_STUDENT_ROWS)
+        self.assertIn('指导教师', student_lines[-1])
+        self.assertIn('待定', document.tables[0].rows[0].cells[3].text)
 
     def test_excel_export_prints_all_columns_together_and_repeats_table_headers(self):
         from .services.export_excel import build_schedule_workbook

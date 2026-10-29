@@ -13,7 +13,6 @@
         <el-button type="primary" @click="openImport">
           <el-icon class="mr-1"><Upload /></el-icon>导入 Excel
         </el-button>
-        <el-button type="primary" plain @click="cohortImportVisible = true">批量导入学生与导师</el-button>
         <el-button type="warning" @click="openTimetableImport">
           <el-icon class="mr-1"><Calendar /></el-icon>导入课表
         </el-button>
@@ -94,11 +93,13 @@
       />
     </div>
 
-    <!-- Dialog -->
-    <el-dialog
+    <!-- Edit in a right-side drawer so the list context remains visible. -->
+    <el-drawer
       v-model="dialogVisible"
       :title="isEdit ? '编辑教师' : '新增教师'"
-      width="600px"
+      size="min(560px, 96vw)"
+      direction="rtl"
+      class="entity-form-drawer"
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px">
@@ -177,10 +178,9 @@
           <el-button type="primary" @click="submitForm" :loading="submitLoading">确定</el-button>
         </span>
       </template>
-    </el-dialog>
+    </el-drawer>
 
     <ImportDialog v-if="canManage" v-model="importVisible" type="teacher" @success="fetchData" />
-    <CohortImportDialog v-if="canManage" v-model="cohortImportVisible" @success="fetchData" />
     <TimetableImportDialog v-if="canManage" v-model="timetableImportVisible" @success="fetchData" />
   </div>
 </template>
@@ -194,7 +194,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Plus, Upload, Delete, Calendar } from '@element-plus/icons-vue'
 import ImportDialog from '../../components/ImportDialog.vue'
-import CohortImportDialog from '../../components/CohortImportDialog.vue'
 import TimetableImportDialog from '../../components/TimetableImportDialog.vue'
 import { listTeachers, createTeacher, updateTeacher, deleteTeacher, batchDeleteTeachers } from '../../api/teacher'
 import type { Teacher } from '../../types/teacher'
@@ -205,7 +204,6 @@ const submitLoading = ref(false)
 const batchDeleteLoading = ref(false)
 const dialogVisible = ref(false)
 const importVisible = ref(false)
-const cohortImportVisible = ref(false)
 const timetableImportVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref<FormInstance>()

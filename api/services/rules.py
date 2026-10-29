@@ -8,7 +8,7 @@ def normalize_schedule_rules(raw):
         raise ValidationError('排期规则必须是对象')
     rules = dict(raw)
     for internal_key in ('_source_pre_version_id', 'reserve_formal_resources', 'refresh_secretary_bindings',
-                         'linked_translation', 'source_chair_title'):
+                         'linked_translation', 'source_chair_title', 'formal_rotation', 'formal_group_order', 'pre_group_order'):
         rules.pop(internal_key, None)
     defense_type = rules.setdefault('defense_type', 'pre')
     if defense_type not in ('pre', 'formal', 'mid'):

@@ -20,8 +20,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     serializer_class = ScheduleVersionSerializer
 
     read_actions = {
-        'current', 'export', 'export_excel', 'export_word', 'check_conflicts',
-        'versions', 'record_pdf_export',
+        'current', 'export', 'export_excel', 'export_word', 'export_conclusion',
+        'check_conflicts', 'versions', 'record_pdf_export',
     }
 
     def get_permissions(self):
@@ -39,6 +39,10 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         'external_distribution': ('外院专家分布提示', 'warning'),
         'student_group_exception': ('学生分组人数提示', 'warning'),
         'mentor_student_imbalance': ('组内导师学生数不均衡', 'warning'),
+        'mentor_share_exception': ('已解释的导师人数例外', 'info'),
+        'chair_title_relaxed': ('主席职称放宽提示', 'warning'),
+        'formal_group_order': ('正式答辩组号时序冲突', 'error'),
+        'pre_group_order': ('预答辩组号时序冲突', 'error'),
         'pre_group_capacity': ('预答辩人数与组长资格冲突', 'warning'),
         'remark_confirmation': ('教师备注待确认', 'warning'),
         'availability_pending': ('教师可用时间待确认', 'warning'),
@@ -86,7 +90,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     # 比较规则快照时忽略的内部字段（运行时生成，不影响业务规则一致性）
     _RULES_COMPARE_IGNORE = {'random_seed', '_source_pre_version_id',
                              'reserve_formal_resources', 'refresh_secretary_bindings',
-                             'linked_translation', 'source_chair_title'}
+                             'linked_translation', 'source_chair_title', 'formal_rotation', 'formal_group_order', 'pre_group_order'}
 
     @classmethod
     def _rules_equivalent(cls, a, b):
@@ -219,10 +223,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         formal_rules = self._normalize_rules({**formal_raw, 'defense_type': 'formal', 'policy_version': formal_raw.get('policy_version', 3),
             'preserve_pre_defense_groups': True, 'formal_mentor_same_session': True})
         if pre_rules['policy_version'] == 3:
-            if formal_rules['expert_count'] < pre_rules['expert_count']:
-                return Response({'error': '平移后专家人数不能少于预答辩；支持 3→3、3→5 或 5→5'}, status=400)
-            formal_rules.update(linked_translation=True, source_chair_title=pre_rules['chair_title'],
-                                avoid_supervisor=False, supervisor_policy='same_group')
+            # 正式答辩沿用本轮预答辩的学生和秘书，评审全部轮换；派生规则与单独生成一致
+            self._apply_formal_rules(formal_rules, pre_rules['chair_title'])
         if formal_rules['start_date'] <= pre_rules['end_date']:
             return Response({'error': '正式答辩开始日期必须晚于预答辩结束日期'}, status=400)
         key = request.data.get('request_key')
@@ -519,10 +521,27 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     # [TASK-P12 修改] Word 导出按所选版本传递备注配置和冲突信息。
     @action(detail=False, methods=['get'], url_path='export_word')
     def export_word(self, request):
-        """导出当前排期为 Word 时间安排表（版式对齐学院归档样例，导师与学生同色）"""
+        """导出学院归档格式的《学位论文答辩时间安排》Word 文档"""
+        from .export_word import export_arrangement_document
+
+        return self._word_form_response(request, export_arrangement_document,
+                                        document_name='时间安排', audit_format='Word',
+                                        ascii_slug='schedule')
+
+    @action(detail=False, methods=['get'], url_path='export_conclusion')
+    def export_conclusion(self, request):
+        """导出学院归档格式的《评审小组结论》Word 文档（每组一页）"""
+        from .export_conclusion import export_conclusion_document
+
+        return self._word_form_response(request, export_conclusion_document,
+                                        document_name='评审小组结论',
+                                        audit_format='Word-评审结论',
+                                        ascii_slug='conclusion')
+
+    def _word_form_response(self, request, builder, *, document_name, audit_format, ascii_slug):
+        """两种 Word 归档表共用的选版本、硬冲突拦截、备注开关和审计逻辑。"""
         defense_type = request.query_params.get('defense_type', 'pre')
         schedule_version = self._selected_version(request, defense_type)
-
         if not schedule_version:
             return Response({'error': '暂无排期结果可导出'}, status=404)
         blocking_conflicts = self._blocking_export_conflicts(schedule_version)
@@ -534,27 +553,31 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
 
         from urllib.parse import quote
 
-        from .export_word import export_schedule_word
-
         defense_label = DEFENSE_TYPE_LABELS.get(defense_type, defense_type)
         conflicts = self._format_conflicts(schedule_version, self._check_conflicts(schedule_version))
-        rules = schedule_version.rules_snapshot or {}
-        include_remarks = rules.get('include_remarks', rules.get('includeRemarks', True))
-        doc = export_schedule_word(schedule_version, defense_label, include_remarks, conflicts)
+        notes = self._include_remarks(schedule_version, request.query_params.get('include_remarks'))
+        doc = builder(schedule_version, defense_type, notes, conflicts)
 
         response = HttpResponse(
             content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         )
-        ascii_name = f'defense_schedule_{defense_type}.docx'
-        utf8_name = quote(f'{defense_label}时间安排.docx')
         response['Content-Disposition'] = (
-            f"attachment; filename={ascii_name}; filename*=UTF-8''{utf8_name}"
+            f"attachment; filename=defense_{ascii_slug}_{defense_type}.docx; "
+            f"filename*=UTF-8''{quote(f'{defense_label}{document_name}.docx')}"
         )
         doc.save(response)
-        audit(request, '导出', f'导出{defense_label}排期（Word）',
-              format='Word', defense_type=defense_type,
+        audit(request, '导出', f'导出{defense_label}{document_name}（Word）',
+              format=audit_format, defense_type=defense_type,
               version_id=schedule_version.id, version=schedule_version.version)
         return response
+
+    @staticmethod
+    def _include_remarks(schedule_version, raw_value):
+        """备注开关：请求参数优先，否则沿用版本生成时的规则快照。"""
+        if raw_value is not None:
+            return raw_value.strip().lower() in {'1', 'true', 'yes', 'on'}
+        rules = schedule_version.rules_snapshot or {}
+        return rules.get('include_remarks', rules.get('includeRemarks', True))
 
     @action(detail=False, methods=['get'])
     def export(self, request):
@@ -570,7 +593,13 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 'conflicts': blocking_conflicts,
             }, status=400)
         conflicts = self._format_conflicts(version, self._check_conflicts(version))
-        workbook = build_schedule_workbook(version, defense_type, conflicts)
+        include_remarks_param = request.query_params.get('include_remarks')
+        include_remarks = (
+            include_remarks_param.strip().lower() in {'1', 'true', 'yes', 'on'}
+            if include_remarks_param is not None
+            else None
+        )
+        workbook = build_schedule_workbook(version, defense_type, conflicts, include_remarks)
         response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         response['Content-Disposition'] = f'attachment; filename=defense_schedule_{defense_type}.xlsx'
         workbook.save(response)

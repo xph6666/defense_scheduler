@@ -3,12 +3,13 @@
 色板与哈希算法与前端共用同一份数据源 ``shared/mentor-colors.json``：
 
 - 网页标签底色取 ``light`` 变体，Word/Excel 导出字体色取 ``dark`` 变体；
-- 两端都以 ``js_hash(导师姓名) % len(palette)`` 取槽位，同一导师在两处恒定同色；
+- 完整排期按同组关系为教师分色，旧单姓名接口保留哈希兼容；
 - 模块不内联任何色值，改配色只需改那个 JSON。
 
 色值一律不带 ``#`` 前缀（openpyxl 与 python-docx 的入参格式）。
 """
 import json
+import math
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -64,14 +65,55 @@ def mentor_color(name):
 def build_mentor_color_map(groups):
     """收集本场确有学生参加的导师及其导出用色（导师姓名 → RRGGBB）。
 
-    颜色本身只由姓名决定，此处的集合过滤才是重点：只有真的有学生参赛的导师才着色，
+    组内教师优先使用差异明显的颜色，同一排期跨组一致；只有真的有学生参赛的导师才着色，
     避免无关专家被上色而稀释「师生配对」这一视觉含义。
     调用方需 prefetch groups 的 students，否则会逐组查询。
     """
     mentors = set()
+    graph = {}
     for group in groups:
+        names = set()
         for student in group.students.all():
             mentor = (student.mentor_name or '').strip()
             if mentor:
                 mentors.add(mentor)
-    return {mentor: mentor_color(mentor) for mentor in sorted(mentors)}
+                names.add(mentor)
+        chair = getattr(group, 'chair', None)
+        if chair and getattr(chair, 'name', ''):
+            names.add(chair.name.strip())
+        experts = getattr(group, 'experts', None)
+        if experts:
+            names.update(t.name.strip() for t in experts.all() if t.name.strip())
+        for name in names:
+            graph.setdefault(name, set()).update(names - {name})
+    colors = distinct_mentor_indexes(graph)
+    entries = load_color_source()['distinctPalette']
+    return {mentor: entries[colors[mentor]]['dark'] for mentor in sorted(mentors)}
+
+
+def _lab(hex_color):
+    rgb = [int(hex_color[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    r, g, b = [v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in rgb]
+    def f(v):
+        return math.cbrt(v) if v > .008856 else 7.787 * v + 16 / 116
+    x = f((.4124564 * r + .3575761 * g + .1804375 * b) / .95047)
+    y = f(.2126729 * r + .7151522 * g + .072175 * b)
+    z = f((.0193339 * r + .119192 * g + .9503041 * b) / 1.08883)
+    return 116 * y - 16, 500 * (x - y), 200 * (y - z)
+
+
+def distinct_mentor_indexes(graph):
+    """Same version-wide DSATUR ordering and color-distance rule as the UI."""
+    entries = load_color_source()['distinctPalette']
+    labs = [_lab(p['light']) for p in entries]
+    assigned = {}
+    def distance(a, b):
+        return math.sqrt(sum((v - labs[b][i]) ** 2 for i, v in enumerate(labs[a])))
+    while len(assigned) < len(graph):
+        pending = [name for name in graph if name not in assigned]
+        name = min(pending, key=lambda n: (-len({assigned[t] for t in graph[n] if t in assigned}),
+                                           -len(graph[n]), n.encode('utf-16-be')))
+        neighbors = [assigned[t] for t in graph[name] if t in assigned]
+        options = [i for i in range(len(entries)) if i not in neighbors] or list(range(len(entries)))
+        assigned[name] = min(options, key=lambda i: (-min((distance(i, other) for other in neighbors), default=0), i))
+    return assigned

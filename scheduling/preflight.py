@@ -1,7 +1,85 @@
 """Necessary capacity bounds, without running or changing a schedule."""
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .policies import pre_mentor_committee, secretary_is_qualified, teacher_can_role
+
+
+def personnel_capacity_issues(payload, rules):
+    """新排期（policy 3）的日期与人员容量必要条件，返回 (错误, 提示)，不执行排期。
+
+    通过检查不代表一定能全部安排；未通过时生成仍会尽量安排，并逐人列出未安排原因。
+    """
+    if rules.get('policy_version') != 3 or rules.get('defense_type') not in ('pre', 'formal'):
+        return [], []
+    from algorithm import build_candidate_slots, parse_teacher
+    from .current import available
+    from .policies import formal_chair_level, pre_chair_is_qualified
+    errors, warnings = [], []
+
+    def issue(kind, level, description, suggestion, names=()):
+        names = list(names)
+        (errors if level == 'error' else warnings).append({
+            'type': kind, 'level': level, 'description': description, 'suggestion': suggestion,
+            'studentNames': [], 'teacherNames': names[:5], 'count': len(names)})
+
+    if rules.get('avoid_holiday') and not rules.get('exclude_dates'):
+        issue('holiday_dates_missing', 'warning',
+              '已开启“避开节假日”，但没有填写需要避开的日期；系统没有内置节假日表，节假日仍可能安排答辩。',
+              '请在安排要求的“排除日期”中填写本次需要避开的节假日。')
+    slots = build_candidate_slots(rules, [])
+    if not slots:
+        issue('no_schedule_slots', 'error', '排期日期范围内没有可安排的半天（已排除周末和指定日期）。',
+              '请扩大日期范围，或调整周末与排除日期设置。')
+        return errors, warnings
+    students = payload['students']
+    if not students or not payload['teachers']:
+        return errors, warnings
+    teachers = [parse_teacher(t) for t in payload['teachers']]
+    free = [{t.id for t in teachers if available(t, slot)} for slot in slots]
+    sizes = Counter(student.get('campus') for student in students)
+    group_size, group_max = int(rules['group_size']), int(rules['group_max'])
+    target_groups = sum(max(-(-n // group_max), round(n / group_size)) for n in sizes.values())
+    minimum_groups = sum(-(-n // group_max) for n in sizes.values())
+    secretaries = {t.id for t in teachers if secretary_is_qualified(t, rules.get('secretary_title', '讲师'))}
+    experts = int(rules['expert_count'])
+    if rules['defense_type'] == 'pre':
+        chairs = {t.id for t in teachers if pre_chair_is_qualified(t, rules)}
+        # 每组需 1 位秘书、1 位合格组长及 expert_count 位评审，且同一半天互不重复
+        capacity = sum(min(len(ids & secretaries), len(ids & chairs), len(ids) // (experts + 1)) for ids in free)
+        basis = f'按 {len(secretaries)} 位秘书、合格组长和评审人数'
+        groups, need_text = minimum_groups, f'{len(students)} 名学生按每组最多 {group_max} 人也至少需要 {minimum_groups} 组'
+    else:
+        rotation = bool(rules.get('formal_rotation'))
+        flex = min(max(0, int(rules.get('external_expert_max', 1))), experts - 1)
+        internal_need = experts - flex
+        chairs = {t.id for t in teachers if formal_chair_level(t, rules) is not None}
+        internal = {t.id for t in teachers if not t.is_external and (teacher_can_role(t, 'expert') or t.id in chairs)}
+        capacity = sum(min(len(ids & internal) // max(1, internal_need), len(ids & chairs), len(ids & secretaries))
+                       for ids in free)
+        inherited = {student.get('previous_group_id') for student in students} - {None}
+        groups = len(inherited) if rotation and inherited else minimum_groups
+        basis = f'每组需 {experts} 位专家（本院至少 {internal_need} 位），本院可任专家 {len(internal)} 位'
+        need_text = f'正式答辩{"沿用" if rotation and inherited else "至少需要"} {groups} 组'
+        if rotation and inherited:
+            # 同一秘书负责的各组必须安排在不同半天
+            loads = Counter(secretary for _, secretary in {(student.get('previous_group_id'), student.get('secretary_id'))
+                                                           for student in students if student.get('previous_group_id') is not None})
+            names = {t.id: t.name for t in teachers}
+            heavy = sorted((tid for tid, load in loads.items() if tid is not None and load > len(slots)), key=str)
+            if heavy:
+                issue('secretary_slot_capacity', 'warning',
+                      f'秘书 {"、".join(names.get(tid, str(tid)) for tid in heavy[:5])} 沿用的组数超过正式答辩日期内的 {len(slots)} 个半天，'
+                      '同一秘书的各组只能安排在不同半天。', '请延长正式答辩日期范围。',
+                      [names.get(tid, str(tid)) for tid in heavy])
+    if capacity < groups:
+        issue('slot_capacity', 'warning',
+              f'日期范围内共 {len(slots)} 个半天，{basis}，最多约可安排 {capacity} 组；{need_text}，部分学生将无法安排。',
+              '请延长日期范围，或补充秘书、评审教师的可用时间。')
+    elif rules['defense_type'] == 'pre' and capacity < target_groups:
+        issue('slot_capacity', 'warning',
+              f'日期范围内最多约可安排 {capacity} 组，按每组 {group_size} 人约需 {target_groups} 组；容量偏紧，将多安排 {group_max} 人组。',
+              f'如需以 {group_size} 人组为主，请延长日期范围。')
+    return errors, warnings
 
 
 def external_mentor_capacity_issues(payload, rules):

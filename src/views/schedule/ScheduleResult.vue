@@ -1,7 +1,5 @@
 <template>
   <div class="space-y-4">
-    <WorkflowSteps v-if="!guided" :current="result?.status === 'published' ? 4 : 3" />
-
     <!-- 流程引导状态条 -->
     <WorkflowStatusBar
       v-if="!guided"
@@ -21,7 +19,7 @@
 
       <div :class="{ 'mt-5': !guided }">
         <ScheduleToolbar
-          v-model:defenseType="defenseType"
+          :defense-type="defenseType"
           v-model:viewMode="viewMode"
           :loading="loading || publishing || moving || adjustSaving"
           :has-result="!!result?.groups.length"
@@ -88,20 +86,6 @@
           <span class="text-gray-400 text-xs">种子：{{ result?.randomSeed }}</span>
         </div>
       </div>
-      <section v-if="!loading && result?.groups.length" class="student-count-summary" aria-label="学生人数分布">
-        <div class="student-count-heading">
-          <strong>学生人数分布</strong>
-          <span v-if="studentCountSummary.target !== null">本版本目标 {{ studentCountSummary.target }} 人/组</span>
-          <span v-else>该版本未记录目标人数</span>
-          <span v-if="studentCountSummary.preferredGroupCount !== null" class="student-count-match">{{ studentCountSummary.preferredMinimum === studentCountSummary.target ? '达到目标' : `${studentCountSummary.preferredMinimum}～${studentCountSummary.preferredMaximum} 人均衡区间` }} {{ studentCountSummary.preferredGroupCount }} / {{ studentCountSummary.groupCount }} 组</span>
-        </div>
-        <div class="student-count-buckets">
-          <span v-for="bucket in studentCountSummary.buckets" :key="bucket.size" class="student-count-bucket" :class="{ 'is-target': bucket.isTarget }">
-            {{ bucket.size }} 人组 <strong>× {{ bucket.count }}</strong><span v-if="bucket.isTarget"> · 目标</span>
-          </span>
-        </div>
-        <p class="section-tip mt-2">统计本版本全部分组，不随日期、校区筛选改变。</p>
-      </section>
     </div>
 
     <div v-if="result?.groups.length" class="schedule-filters">
@@ -117,9 +101,30 @@
       <template #header><strong>未安排学生（{{ result.unassignedStudents.length }} 人，已尝试局部补排）</strong></template>
       <el-table :data="result.unassignedStudents" row-key="id"><el-table-column prop="name" label="学生" width="140" /><el-table-column prop="reason" label="未安排原因" /></el-table>
     </el-card>
-    <details v-if="result?.teacherWorkloads?.length" class="bg-white p-4 rounded-lg shadow-sm">
-      <summary>教师工作量与任务分布</summary>
-      <el-table :data="result.teacherWorkloads" row-key="id"><el-table-column prop="name" label="教师" /><el-table-column prop="supervisedStudents" label="指导学生数" /><el-table-column prop="studentCount" label="参与学生数" /><el-table-column prop="groupCount" label="参与组数" /><el-table-column label="到场时段" min-width="240"><template #default="{ row }">{{ row.sessions.join('；') || '未安排' }}</template></el-table-column></el-table>
+    <details v-if="result?.groups.length" class="schedule-analytics">
+      <summary>统计与质量分析 <span>人数分布、教师工作量、软目标评分</span></summary>
+      <section class="student-count-summary" aria-label="学生人数分布">
+        <div class="student-count-heading">
+          <strong>学生人数分布</strong>
+          <span v-if="studentCountSummary.target !== null">本版本目标 {{ studentCountSummary.target }} 人/组</span>
+          <span v-else>该版本未记录目标人数</span>
+          <span v-if="studentCountSummary.preferredGroupCount !== null" class="student-count-match">{{ studentCountSummary.preferredMinimum === studentCountSummary.target ? '达到目标' : `${studentCountSummary.preferredMinimum}～${studentCountSummary.preferredMaximum} 人均衡区间` }} {{ studentCountSummary.preferredGroupCount }} / {{ studentCountSummary.groupCount }} 组</span>
+        </div>
+        <div class="student-count-buckets">
+          <span v-for="bucket in studentCountSummary.buckets" :key="bucket.size" class="student-count-bucket" :class="{ 'is-target': bucket.isTarget }">
+            {{ bucket.size }} 人组 <strong>× {{ bucket.count }}</strong><span v-if="bucket.isTarget"> · 目标</span>
+          </span>
+        </div>
+        <p class="section-tip mt-2">统计本版本全部分组，不随日期、校区筛选改变。</p>
+      </section>
+      <section v-if="result?.teacherWorkloads?.length" class="analytics-section">
+        <h3>教师工作量与任务分布</h3>
+        <el-table :data="result.teacherWorkloads" row-key="id"><el-table-column prop="name" label="教师" /><el-table-column prop="supervisedStudents" label="指导学生数" /><el-table-column prop="studentCount" label="参与学生数" /><el-table-column prop="groupCount" label="参与组数" /><el-table-column label="到场时段" min-width="240"><template #default="{ row }">{{ row.sessions.join('；') || '未安排' }}</template></el-table-column></el-table>
+      </section>
+      <section class="analytics-section">
+        <h3>分组质量评分</h3>
+        <SoftConstraintPanel :summary="optimizationSummary" :conflicts="conflicts" />
+      </section>
     </details>
     <div v-if="loading" class="bg-white p-6 rounded-lg shadow-sm">
       <p v-if="loadingMessage" class="mb-4 text-sm text-gray-600" role="status">{{ loadingMessage }}</p>
@@ -136,6 +141,8 @@
         <ScheduleAgenda
           v-else-if="viewMode === 'agenda'"
           :groups="filteredGroups"
+          :mentor-colors="mentorColors"
+          :mentor-shares="mentorShares"
           :conflicts="conflicts"
           :can-manage="canEdit"
           :highlighted-group-ids="highlightedGroupIds"
@@ -151,6 +158,8 @@
             >
               <ScheduleGroupCard
                 :group="g"
+                :mentor-colors="mentorColors"
+                :share-summary="mentorShares[g.id]"
                 :status="groupStatusMap[g.id] || 'normal'"
                 :conflict-count="groupConflictCountMap[g.id] || 0"
                 :can-manage="canEdit"
@@ -164,9 +173,11 @@
         <div v-else class="bg-white p-6 rounded-lg shadow-sm">
           <ScheduleTable
             :groups="filteredGroups"
+            :mentor-colors="mentorColors"
             :group-status="groupStatusMap"
             :can-manage="canEdit"
             :highlighted-group-ids="highlightedGroupIds"
+            @select="openGroupDetails"
             @adjust="openAdjust"
           />
         </div>
@@ -175,19 +186,18 @@
       <div class="lg:col-span-1 space-y-4 conflict-sidebar">
         <ConflictPanel
           :conflicts="conflicts"
+          :groups="result?.groups || []"
           :loading="conflictLoading"
           @check="handleCheckConflicts"
-          @view-detail="openConflictDetail"
           @locate="handleLocateConflict"
         />
-        <details class="secondary-details"><summary>查看分组质量评分</summary><SoftConstraintPanel :summary="optimizationSummary" :conflicts="conflicts" /></details>
       </div>
     </div>
   </div>
 
   <el-dialog v-model="generationVisible" title="生成前，确认这次安排" width="min(560px, 94vw)" :close-on-click-modal="false">
     <template v-if="generationConfig">
-      <p class="mb-4">{{ defenseType === '正式答辩' ? '沿用当前预答辩的固定组号、学生、组长、专家和秘书；按本阶段要求补充本院专家，重新核对共同可用时间。' : '确认后生成新草稿，历史版本保留。每组仅允许 5～7 人，以 6 人为主，尽量减少 5 或 7 人组。平衡教师次数与参与学生数，再集中同日上午下午。' }}</p>
+      <p class="mb-4">{{ defenseType === '正式答辩' ? '沿用当前预答辩的学生、固定组号、秘书和组号顺序；主席与专家全部轮换，导师回避，按组号顺排正式日期及半天。' : '确认后生成新草稿，历史版本保留。每组仅允许 5～7 人，以 6 人为主。预答辩全部优化后按日期和半天确定最终组号，正式答辩沿用同组学生、组号和顺序。' }}</p>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="答辩类型">{{ defenseType }}</el-descriptions-item>
         <el-descriptions-item label="答辩日期">{{ generationConfig.startDate || '未设置' }} 至 {{ generationConfig.endDate || '未设置' }}</el-descriptions-item>
@@ -282,7 +292,7 @@
   </el-dialog>
 
   <el-dialog v-model="linkedVisible" title="联合生成预答辩与正式答辩" width="min(680px, 94vw)" :close-on-click-modal="false">
-    <p class="mb-4">预答辩每组仅允许 5～7 人，以 6 人为主，余数用少量 5 或 7 人组消化；3 位专家含组长。平衡教师出场次数和学生数，尽量安排同日上午下午。先尝试每组最多 1 位外院专家，仅在无法满足人数底线时允许必要的第 2 位外院导师。正式阶段沿用固定组号、学生和原教师，补充本院专家至 5 人，并核对共同可用时间。教室可后续补充。</p>
+    <p class="mb-4">预答辩每组 5～7 人，以 6 人为目标；专家默认 3 位、可选 5 位，含组长。平衡教师出场次数和学生数，尽量安排同日上午下午；仅必要小组允许第 2 位外院导师。正式阶段沿用组号、学生和秘书，原评审全部轮换，回避本组导师且导师不要求到场；固定 5 位专家含主席，外院至多 1 位。主席职称放宽和同日跨校区会提示；容量不足时请延长日期。教室可后续补充。</p>
     <el-form-item label="预答辩专家人数"><el-select v-model="linkedExpertCount" :disabled="linkedPreflightLoading" @change="updateLinkedExpertCount"><el-option :value="3" label="3 人（含组长）" /><el-option :value="5" label="5 人（含组长，增加 2 名本院专家）" /></el-select></el-form-item>
     <el-descriptions v-if="linkedConfigs" :column="1" border>
       <el-descriptions-item v-for="config in linkedConfigs" :key="config.defenseType" :label="config.defenseType">{{ config.startDate }} 至 {{ config.endDate }}；学生目标 {{ config.studentCount.target }} 人/组；专家 {{ config.expertCount.target }} 人（含组长）</el-descriptions-item>
@@ -444,6 +454,44 @@
     </template>
   </el-dialog>
 
+  <el-drawer
+    v-model="groupDetailsVisible"
+    :title="selectedDetailsGroup ? `${selectedDetailsGroup.groupName} · 小组详情` : '小组详情'"
+    size="min(620px, 94vw)"
+    destroy-on-close
+  >
+    <template v-if="selectedDetailsGroup">
+      <el-descriptions :column="2" border class="mb-5">
+        <el-descriptions-item label="日期">{{ selectedDetailsGroup.date || '待安排' }}</el-descriptions-item>
+        <el-descriptions-item label="时间">{{ selectedDetailsGroup.timeRange || '待安排' }}</el-descriptions-item>
+        <el-descriptions-item label="校区">{{ selectedDetailsGroup.campus }}</el-descriptions-item>
+        <el-descriptions-item label="教室">{{ selectedDetailsGroup.classroom || '待预约' }}</el-descriptions-item>
+        <el-descriptions-item :label="defenseType === '正式答辩' ? '主席' : '组长'">{{ selectedDetailsGroup.chairman || selectedDetailsGroup.leader || '待安排' }}</el-descriptions-item>
+        <el-descriptions-item label="秘书">{{ selectedDetailsGroup.secretary || '待安排' }}</el-descriptions-item>
+      </el-descriptions>
+      <section class="group-detail-section">
+        <h3>专家（{{ getScheduleExperts(selectedDetailsGroup).length }} 位）</h3>
+        <div class="flex flex-wrap gap-2">
+          <el-tag v-for="teacher in getScheduleExperts(selectedDetailsGroup)" :key="teacher.id" :style="detailsMentorStyle(teacher.name)">{{ teacher.name }} · {{ teacher.title }}</el-tag>
+        </div>
+      </section>
+      <section class="group-detail-section">
+        <h3>学生（{{ selectedDetailsGroup.students.length }} 人）</h3>
+        <el-table :data="selectedDetailsGroup.students" size="small" border>
+          <el-table-column prop="studentNo" label="学号" width="120" />
+          <el-table-column label="姓名" width="100"><template #default="{ row }"><el-tag :style="detailsMentorStyle(row.mentorName)">{{ row.name }}</el-tag></template></el-table-column>
+          <el-table-column label="导师" min-width="130"><template #default="{ row }"><el-tag :style="detailsMentorStyle(row.mentorName)">{{ row.mentorName }}</el-tag></template></el-table-column>
+          <el-table-column prop="studentType" label="学科/类型" min-width="120" />
+        </el-table>
+      </section>
+      <p v-if="selectedDetailsGroup.remark" class="group-detail-remark">备注：{{ selectedDetailsGroup.remark }}</p>
+    </template>
+    <template #footer>
+      <el-button @click="groupDetailsVisible = false">关闭</el-button>
+      <el-button v-if="canEdit && selectedDetailsGroup" type="primary" @click="editSelectedGroup">调整本组</el-button>
+    </template>
+  </el-drawer>
+
   <ScheduleAdjustDrawer
     v-model="adjustVisible"
     :defense-type="defenseType"
@@ -462,7 +510,7 @@
 
   <ExportDialog
     v-model="exportDialogVisible"
-    :options="{ defenseType: defenseType }"
+    :options="{ defenseType: defenseType, includeRemarks: result?.rules?.include_remarks ?? result?.rules?.includeRemarks ?? true }"
     :stats="exportStats"
     :version-info="exportVersionInfo"
     @confirm="handleExportConfirm"
@@ -495,7 +543,6 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Warning, CircleCloseFilled, InfoFilled, Loading } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
-import WorkflowSteps from '../../components/WorkflowSteps.vue'
 import WorkflowStatusBar from '../../components/WorkflowStatusBar.vue'
 import { useDefenseType, workflowLink } from '../../utils/useDefenseType'
 import type { RuleConfig } from '../../types/ruleConfig'
@@ -517,7 +564,8 @@ import { checkScheduleConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
 import { getGroupConflictCount, getGroupStatus } from '../../utils/conflictMock'
-import { exportScheduleExcel, exportScheduleWord, exportSchedulePdf } from '../../api/export'
+import { exportScheduleExcel, exportScheduleWord, exportScheduleConclusion, exportSchedulePdf } from '../../api/export'
+import { getScheduleExperts } from '../../domain/scheduleExperts'
 import type { ExportStatus } from '../../types/export'
 import type { OptimizationSummary } from '../../types/optimization'
 import { evaluateSoftConstraints } from '../../utils/optimization'
@@ -527,7 +575,8 @@ import { listStudents } from '../../api/student'
 import { listClassrooms } from '../../api/classroom'
 import type { Classroom } from '../../types/classroom'
 import { useScheduleContext, type ScheduleContext } from '../../composables/useScheduleContext'
-import { getScheduleExperts } from '../../domain/scheduleExperts'
+import { buildMentorColors, groupMentorColors, neutralMentorColor } from '../../domain/mentorColors'
+import { buildMentorShares } from '../../domain/mentorShares'
 import { buildScheduleRules } from '../../domain/scheduleRules'
 import { orderScheduleGroups } from '../../domain/scheduleOrder'
 import { summarizeStudentCounts } from '../../domain/studentCountSummary'
@@ -566,11 +615,15 @@ const linkedPreflightLoading = ref(false)
 const linkedPreflightPre = ref<PreflightResult | null>(null)
 const linkedPreflightFormal = ref<PreflightResult | null>(null)
 const linkedPreflightStatus = ref<'idle' | 'loading' | 'passed' | 'failed'>('idle')
-const viewMode = ref<'agenda' | 'card' | 'table'>(props.guided ? 'agenda' : 'card')
+const viewMode = ref<'agenda' | 'card' | 'table'>('table')
 const loading = ref(false)
 const loadingMessage = ref('')
 const errorMsg = ref('')
 const result = ref<ScheduleResult | null>(null)
+const mentorColors = computed(() => buildMentorColors(result.value?.groups ?? []))
+const detailsMentorStyle = (name: string) => selectedDetailsGroup.value
+  ? groupMentorColors(selectedDetailsGroup.value, mentorColors.value)[name.trim()] ?? neutralMentorColor : neutralMentorColor
+const mentorShares = computed(() => buildMentorShares(result.value?.groups ?? [], result.value?.allocationStatus === 'scheduled'))
 const studentCountSummary = computed(() => summarizeStudentCounts(result.value?.groups ?? [], result.value?.rules))
 const linkedHasWarnings = computed(() => !!(linkedPreflightPre.value?.warnings.length || linkedPreflightFormal.value?.warnings.length))
 const { canManage, requireAdmin } = useAdminGuard()
@@ -750,6 +803,8 @@ const conflictLoading = ref(false)
 const adjustVisible = ref(false)
 const adjustSaving = ref(false)
 const currentGroup = ref<ScheduleGroup | null>(null)
+const groupDetailsVisible = ref(false)
+const selectedDetailsGroup = ref<ScheduleGroup | null>(null)
 
 const currentConflict = ref<ScheduleConflict | null>(null)
 const conflictDetailVisible = ref(false)
@@ -780,6 +835,17 @@ const openAdjust = (group: ScheduleGroup) => {
   editingRevision.value = result.value?.revision
   currentGroup.value = group
   adjustVisible.value = true
+}
+
+const openGroupDetails = (group: ScheduleGroup) => {
+  selectedDetailsGroup.value = group
+  groupDetailsVisible.value = true
+}
+
+const editSelectedGroup = () => {
+  const group = selectedDetailsGroup.value
+  groupDetailsVisible.value = false
+  if (group) openAdjust(group)
 }
 
 const openConflictDetail = (c: ScheduleConflict) => {
@@ -821,7 +887,7 @@ const exportVersionInfo = computed(() => {
   }
 })
 
-const handleExportConfirm = async (format: 'excel' | 'word' | 'pdf' = 'excel') => {
+const handleExportConfirm = async (format: 'excel' | 'word' | 'conclusion' | 'pdf' = 'word', includeRemarks = true) => {
   if (conflicts.value.some(conflict => conflict.level === 'error')) {
     ElMessage.error('当前排期存在硬冲突，处理并重新复核后才能导出')
     return
@@ -831,11 +897,13 @@ const handleExportConfirm = async (format: 'excel' | 'word' | 'pdf' = 'excel') =
   exportStatus.value = 'exporting'
   try {
     if (format === 'pdf') {
-      await exportSchedulePdf(type, versionId)
+      await exportSchedulePdf(type, versionId, includeRemarks)
     } else if (format === 'word') {
-      await exportScheduleWord(type, versionId)
+      await exportScheduleWord(type, versionId, includeRemarks)
+    } else if (format === 'conclusion') {
+      await exportScheduleConclusion(type, versionId, includeRemarks)
     } else {
-      await exportScheduleExcel(type, versionId)
+      await exportScheduleExcel(type, versionId, includeRemarks)
     }
     exportStatus.value = 'success'
   } catch (error) {
@@ -1146,7 +1214,7 @@ const handleCheckConflicts = async () => {
     const checked = await checkScheduleConflicts(context.defenseType, current)
     if (!workspace.isCurrent(context, true) || requestId !== conflictRequest) return
     conflicts.value = checked
-    ElMessage.success('手动复核完成')
+    ElMessage.success('冲突检测已更新')
   } catch (error) {
     if (workspace.isCurrent(context, true) && requestId === conflictRequest) ElMessage.error(error instanceof Error ? error.message : '冲突检测失败')
   } finally { if (workspace.isCurrent(context) && requestId === conflictRequest) conflictLoading.value = false }

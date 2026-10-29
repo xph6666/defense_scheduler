@@ -1,7 +1,7 @@
 <template>
   <el-button link @click="visible = true">使用帮助</el-button>
-  <el-dialog v-model="visible" title="第一次使用？照着这 4 步做" width="min(600px, 94vw)">
-    <p class="workflow-note mb-4">推荐从工作台点击“开始一次答辩安排”，先选类型，再按下面四个环节逐步完成。熟练后可直接使用左侧完整管理功能。</p>
+  <el-dialog v-model="visible" title="按三个页面完成安排" width="min(600px, 94vw)">
+    <p class="workflow-note mb-4">先在左侧选择答辩类型，再依次查看概览、确认安排要求，并在排期方案页生成、核对和发布。</p>
     <ol class="help-steps">
       <li v-for="(item, index) in items" :key="item.title">
         <span class="step-number">{{ index + 1 }}</span>
@@ -17,9 +17,8 @@
 import { ref } from 'vue'
 const visible = ref(false)
 const items = [
-  { title: '准备好学生与教师资料', text: '在工作台核对学生名单、教师资格和可用时间。先生成时间表，再预约教室。' },
-  { title: '确认日期和人数', text: '选择答辩类型，确认日期范围、每组学生和专家人数。职称要求、人数上下限等设置可展开查看。' },
-  { title: '生成草稿，处理问题', text: '系统先生成草稿。有问题时根据提示补充资料，或点击具体分组的“调整”；换组使用“移动学生”。' },
-  { title: '确认发布，导出文件', text: '核对无误后发布，再导出 Word 或 Excel。未发布也能导出草稿，文件会标注草稿状态。' }
+  { title: '概览：看当前进度', text: '工作台展示三类答辩状态；进入某类概览可查看参排人数、分组数和系统推荐的下一步。公共资料由三类答辩共用。' },
+  { title: '安排要求：设定本次条件', text: '确认日期、每组人数、专家人数及回避规则。高级资格和软目标收在“更多要求”中。' },
+  { title: '排期方案：生成到导出', text: '生成草稿后在同一页查看分组、定位冲突和未安排学生、调整安排、校验并发布，再选择 Word、Excel 或 PDF 导出。历史版本仍可查看。' }
 ]
 </script>

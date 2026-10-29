@@ -1,26 +1,41 @@
 <template>
-  <div class="rule-config-container">
-    <div class="page-intro"><div><h1>这次答辩，怎样安排？</h1></div></div>
-    <WorkflowSteps :current="2" />
-    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon class="mb-4" />
-    <el-button v-if="loadError" @click="loadConfigs">重新读取要求</el-button>
-    <div v-loading="loading" class="workbench-panel">
-      <el-tabs v-model="activeType" :before-leave="() => !saving">
-        <el-tab-pane v-for="type in defenseTypes" :key="type" :label="type" :name="type">
-          <RuleConfigForm v-if="activeType === type && !loading && !loadError" v-model="configs[type]" :readonly="!canManage" :saving="saving" @save="handleSave" @continue="saveAndContinue" @reset="handleReset" />
-        </el-tab-pane>
-      </el-tabs>
-      <RouterLink v-if="!canManage" :to="workflowLink('/schedule-results')" class="text-link">下一步：查看答辩安排 →</RouterLink>
+  <main class="rule-config-container">
+    <header class="page-intro">
+      <div>
+        <span class="eyebrow">{{ activeType }} · 第二步</span>
+        <h1>{{ activeType }}安排要求</h1>
+        <p>只配置当前答辩类型。保存后进入排期方案生成草稿。</p>
+      </div>
+      <RouterLink :to="defenseLink('/dashboard', activeType)" class="text-link">返回{{ activeType }}概览 →</RouterLink>
+    </header>
+
+    <el-alert v-if="!canManage" title="当前账号可以查看安排要求；修改规则需要管理员操作。" type="info" :closable="false" class="mb-4" />
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon class="mb-4">
+      <template #default><el-button link type="primary" @click="loadConfigs">重新读取</el-button></template>
+    </el-alert>
+
+    <div v-loading="loading" class="rule-config-panel">
+      <RuleConfigForm
+        v-if="!loadError && !loading"
+        v-model="activeConfig"
+        :readonly="!canManage"
+        :saving="saving"
+        @save="handleSave"
+        @reset="handleReset"
+      />
     </div>
-  </div>
+
+    <div class="rule-next-step">
+      <div><strong>准备好核对排期方案了吗？</strong><p>生成后可在同一页面查看分组、处理问题、发布和导出。</p></div>
+      <RouterLink :to="defenseLink('/schedule-results', activeType)" class="text-link">前往排期方案 →</RouterLink>
+    </div>
+  </main>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import WorkflowSteps from '../components/WorkflowSteps.vue'
-import { useRouter } from 'vue-router'
-import { defenseTypes, useDefenseType, workflowLink } from '../utils/useDefenseType'
+import { useDefenseType, defenseLink } from '../utils/useDefenseType'
 import RuleConfigForm from '../components/RuleConfigForm.vue'
 import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 import { getDefaultRuleConfig } from '../utils/ruleConfigStorage'
@@ -29,32 +44,36 @@ import { getRuleConfig, saveRuleConfig } from '../api/ruleConfig'
 import { useAdminGuard } from '../utils/adminGuard'
 
 const activeType = useDefenseType()
-const router = useRouter()
+const { canManage, requireAdmin } = useAdminGuard()
 const loading = ref(true)
 const saving = ref(false)
 const loadError = ref('')
-const { canManage, requireAdmin } = useAdminGuard()
-
 const configs = reactive<Record<DefenseType, RuleConfig>>({
   '预答辩': getDefaultRuleConfig('预答辩'),
   '正式答辩': getDefaultRuleConfig('正式答辩'),
   '中期答辩': getDefaultRuleConfig('中期答辩')
 })
 
-const loadConfigs = async () => {
-  loading.value = true; loadError.value = ''
+const activeConfig = computed({
+  get: () => configs[activeType.value],
+  set: (value: RuleConfig) => { configs[activeType.value] = value }
+})
+
+async function loadConfigs() {
+  loading.value = true
+  loadError.value = ''
   try {
-    const results = await Promise.all(defenseTypes.map(type => getRuleConfig(type)))
-    defenseTypes.forEach((type, index) => { configs[type] = results[index] })
-  } catch (e) { loadError.value = e instanceof Error ? e.message : '要求读取失败，请重试' }
-  finally { loading.value = false }
-}
-const saveAndContinue = async (config: RuleConfig) => {
-  if (await handleSave(config)) await router.push(workflowLink('/schedule-results'))
+    const config = await getRuleConfig(activeType.value)
+    configs[activeType.value] = config
+  } catch (cause) {
+    loadError.value = cause instanceof Error ? cause.message : '要求读取失败，请重试。'
+  } finally {
+    loading.value = false
+  }
 }
 
-const handleSave = async (config: RuleConfig) => {
-  if (!requireAdmin() || saving.value || loading.value || loadError.value) return false
+async function handleSave(config: RuleConfig) {
+  if (!requireAdmin() || saving.value || loading.value || loadError.value) return
   saving.value = true
   try {
     configs[config.defenseType] = await saveRuleConfig(config)
@@ -67,39 +86,34 @@ const handleSave = async (config: RuleConfig) => {
     } catch {
       ElMessage.warning('配置已保存，但操作日志写入失败')
     }
-    ElMessage.success(`${config.defenseType} 要求已保存`)
-    return true
-  } catch (e) {
-    const message = e instanceof Error ? e.message : '配置保存失败，请稍后重试'
-    ElMessage.error(message)
-    return false
-  } finally { saving.value = false }
+    ElMessage.success(`${config.defenseType}要求已保存`)
+  } catch (cause) {
+    ElMessage.error(cause instanceof Error ? cause.message : '配置保存失败，请稍后重试。')
+  } finally {
+    saving.value = false
+  }
 }
 
-const handleReset = async (type: string) => {
+async function handleReset(type: string) {
   if (!requireAdmin() || saving.value || loading.value || loadError.value) return
   try {
-    await ElMessageBox.confirm(`确定要恢复 [${type}] 的默认规则吗？当前修改将丢失。`, '确认恢复')
+    await ElMessageBox.confirm(`确定要恢复${type}默认要求吗？当前修改将丢失。`, '恢复默认要求', { type: 'warning' })
     saving.value = true
     const defenseType = type as DefenseType
-    const defaultConfig = getDefaultRuleConfig(defenseType)
-    configs[defenseType] = await saveRuleConfig(defaultConfig)
+    configs[defenseType] = await saveRuleConfig(getDefaultRuleConfig(defenseType))
     try {
-      await createOperationLog({
-        type: '重置规则配置',
-        module: '规则配置',
-        description: `恢复了 [${type}] 的默认规则配置`
-      })
+      await createOperationLog({ type: '重置规则配置', module: '规则配置', description: `恢复了 [${type}] 的默认规则配置` })
     } catch {
-      ElMessage.warning('默认配置已恢复，但操作日志写入失败')
+      ElMessage.warning('默认要求已恢复，但操作日志写入失败')
     }
-    ElMessage.success(`${type} 已恢复默认配置`)
-  } catch (e) {
-    if (e instanceof Error) {
-      ElMessage.error(e.message)
-    }
-  } finally { saving.value = false }
+    ElMessage.success(`${type}默认要求已恢复`)
+  } catch (cause) {
+    if (cause instanceof Error) ElMessage.error(cause.message)
+  } finally {
+    saving.value = false
+  }
 }
 
+watch(activeType, () => { void loadConfigs() })
 onMounted(loadConfigs)
 </script>

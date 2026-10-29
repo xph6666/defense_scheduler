@@ -290,6 +290,9 @@ class CurrentSchedulingAPITests(TestCase):
         for raw in teachers():
             Teacher.objects.create(id=raw['id'], name=raw['name'], title=raw['title'],
                 roles=raw['roles'], is_external=raw.get('is_external', False), availability_confirmed=True)
+        # Rotation requires a disjoint pool beyond the original reviewers.
+        for i in range(8, 14):
+            Teacher.objects.create(id=i, name=f'轮换教师{i}', title='教授', roles=['普通专家'], availability_confirmed=True)
         for raw in students(6):
             Student.objects.create(id=raw['id'], name=raw['name'], mentor_id=1, mentor_name='教师1',
                 defense_types=['预答辩', '正式答辩'])
@@ -301,7 +304,7 @@ class CurrentSchedulingAPITests(TestCase):
             self.assertEqual(response.data[stage]['allocationStatus'], 'scheduled')
             self.assertEqual(response.data[stage]['unassignedStudents'], [])
             self.assertEqual(len(response.data[stage]['groups']), 1)
-            self.assertEqual(response.data[stage]['rules']['expert_count'], 3)
+            self.assertEqual(response.data[stage]['rules']['expert_count'], 5 if stage == 'formal' else 3)
         retry = self.client.post('/api/schedule/generate-linked/', {'pre_rules': rules(), 'formal_rules': rules('formal'), 'request_key': 'policy-three'}, format='json')
         self.assertEqual(retry.status_code, 200, retry.data)
         self.assertEqual(retry.data['pre']['versionId'], response.data['pre']['versionId'])
@@ -448,16 +451,16 @@ class ClarifiedRequirementsTests(SimpleTestCase):
 class ClarifiedLinkedTests(TestCase):
     setUp = CurrentSchedulingAPITests.setUp
 
-    def test_formal_does_not_silently_replace_an_unavailable_core_teacher(self):
+    def test_formal_rotates_an_unavailable_original_reviewer(self):
         Teacher.objects.filter(pk=1).update(unavailable_times='2026-11-03 00:00-23:59')
         response = self.client.post('/api/schedule/generate-linked/', {
             'pre_rules': rules(), 'formal_rules': rules('formal', 5)}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(len(response.data['pre']['groups']), 1)
-        self.assertEqual(response.data['formal']['groups'], [])
-        self.assertEqual(len(response.data['formal']['unassignedStudents']), 6)
+        self.assertEqual(len(response.data['formal']['groups']), 1)
+        self.assertEqual(response.data['formal']['unassignedStudents'], [])
 
-    def test_translation_retains_associate_chair_and_passes_fresh_validation(self):
+    def test_rotation_passes_fresh_validation_and_publish(self):
         Teacher.objects.filter(pk=1).update(title='副教授')
         response = self.client.post('/api/schedule/generate-linked/', {
             'pre_rules': rules(), 'formal_rules': rules('formal', 5)}, format='json')
@@ -471,11 +474,14 @@ class ClarifiedLinkedTests(TestCase):
         self.assertEqual(published.status_code, 200, published.data)
 
     def test_client_cannot_inject_translation_exceptions(self):
-        raw = {**rules('formal'), 'linked_translation': True, 'source_chair_title': '讲师'}
+        raw = {**rules('formal'), 'linked_translation': True, 'formal_rotation': True, 'formal_group_order': False, 'source_chair_title': '讲师'}
         normalized = normalize_schedule_rules(raw)
         self.assertNotIn('linked_translation', normalized)
         self.assertNotIn('source_chair_title', normalized)
-    def test_formal_keeps_pre_members_and_adds_two_internal_experts(self):
+        self.assertNotIn('formal_rotation', normalized)
+        self.assertNotIn('formal_group_order', normalized)
+
+    def test_formal_retains_students_secretary_and_rotates_all_reviewers(self):
         response = self.client.post('/api/schedule/generate-linked/', {
             'pre_rules': rules(), 'formal_rules': rules('formal', 5), 'request_key': 'translate'}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
@@ -486,13 +492,13 @@ class ClarifiedLinkedTests(TestCase):
         left = ScheduleVersion.objects.get(pk=pre['versionId']).groups.get()
         right = ScheduleVersion.objects.get(pk=formal['versionId']).groups.get()
         self.assertEqual(set(left.students.values_list('id', flat=True)), set(right.students.values_list('id', flat=True)))
-        self.assertEqual(left.chair_id, right.chair_id)
         self.assertEqual(left.secretary_id, right.secretary_id)
         core = {left.chair_id, *left.experts.values_list('id', flat=True)}
         expanded = {right.chair_id, *right.experts.values_list('id', flat=True)}
-        self.assertTrue(core <= expanded)
-        self.assertEqual(len(expanded - core), 2)
-        self.assertFalse(Teacher.objects.filter(pk__in=expanded-core, is_external=True).exists())
+        self.assertFalse(core & expanded)
+        self.assertNotIn(1, expanded)
+        self.assertEqual(len(expanded), 5)
+        self.assertLessEqual(Teacher.objects.filter(pk__in=expanded, is_external=True).count(), 1)
         retry = self.client.post('/api/schedule/generate-linked/', {
             'pre_rules': rules(), 'formal_rules': rules('formal', 5), 'request_key': 'translate'}, format='json')
         self.assertEqual(retry.status_code, 200, retry.data)

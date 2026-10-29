@@ -33,6 +33,14 @@ class PreDefenseQualityTests(SimpleTestCase):
         for counts in ((2, 2, 2), (2, 2, 1), (3, 2, 2)):
             self.assertFalse(any(c['type'] == 'mentor_student_imbalance' for c in self.check_shares(counts)))
 
+    def test_single_student_mentor_explains_three_two_one_without_hiding_other_skew(self):
+        notices = self.check_shares((3, 2, 1))
+        exceptions = [c for c in notices if c['type'] == 'mentor_share_exception']
+        self.assertEqual(len(exceptions), 1)
+        self.assertIn('仅有 1 名学生', exceptions[0]['description'])
+        self.assertFalse(any(c['type'] == 'mentor_student_imbalance' for c in notices))
+        self.assertTrue(any(c['type'] == 'mentor_student_imbalance' for c in self.check_shares((4, 1, 1))))
+
     def test_share_warning_is_a_warning_not_a_hidden_normal_or_hard_conflict(self):
         from api.schedule_views import ScheduleViewSet
         self.assertEqual(ScheduleViewSet.CONFLICT_TYPE_LABELS['mentor_student_imbalance'][1], 'warning')

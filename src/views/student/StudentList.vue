@@ -106,10 +106,12 @@
       </el-checkbox-group>
       <template #footer><el-button :disabled="participationSaving" @click="participationVisible = false">取消</el-button><el-button type="primary" :loading="participationSaving" :disabled="!participationTypes.length" @click="saveParticipation">确认补充</el-button></template>
     </el-dialog>
-    <el-dialog
+    <el-drawer
       v-model="dialogVisible"
       :title="isEdit ? '编辑学生' : '新增学生'"
-      width="500px"
+      size="min(520px, 96vw)"
+      direction="rtl"
+      class="entity-form-drawer"
       destroy-on-close
     >
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
@@ -175,7 +177,7 @@
           <el-button type="primary" @click="submitForm" :loading="submitLoading">确定</el-button>
         </span>
       </template>
-    </el-dialog>
+    </el-drawer>
 
     <ImportDialog v-if="canManage" v-model="importVisible" type="student" @success="fetchData" />
     <CohortImportDialog v-if="canManage" v-model="cohortImportVisible" @success="fetchData" />

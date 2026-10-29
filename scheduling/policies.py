@@ -48,6 +48,43 @@ def pre_chair_is_qualified(teacher, rules):
     return meets_chair_requirement(teacher, {**rules, 'chair_title': rules.get('chair_title') or '副教授'})
 
 
+# 正式答辩（policy 3）固定 5 位专家，含主席
+FORMAL_EXPERT_COUNT = 5
+
+
+def formal_rotation_rules(source_chair_title=None):
+    """正式答辩专家轮换的服务端派生规则，客户端不能注入。
+
+    沿用预答辩的学生和秘书，主席与专家全部重新分配；导师回避且不要求到场；
+    每组 5 位专家（含主席），至多 1 位外院；主席优先教授，不足时放宽到预答辩组长职称。
+    """
+    return {'formal_rotation': True, 'formal_group_order': True, 'avoid_supervisor': True, 'supervisor_policy': 'avoid',
+            'external_expert_max': 1, 'expert_count': FORMAL_EXPERT_COUNT, 'expert_min': FORMAL_EXPERT_COUNT,
+            'source_chair_title': source_chair_title or '副教授'}
+
+
+def formal_chair_level(teacher, rules):
+    """正式答辩专家轮换的主席资格等级。
+
+    返回 0 表示达到正式答辩主席职称要求（chair_title，默认教授）；1 表示人数不足时
+    按放宽要求担任（source_chair_title，即预答辩组长职称）；None 表示不能担任主席。
+    主席按职称判断，不要求额外勾选主席角色；仍须在用、可担任评审且未限定为仅任专家。
+    生成与校验共用此规则，避免两处口径不一致。
+    """
+    from algorithm import title_rank
+    raw = _teacher_raw(teacher)
+    if _boolean(_value(raw, 'expert_only', 'expertOnly', default=False)):
+        return None
+    if not (teacher_can_role(raw, 'expert') or teacher_can_role(raw, 'chair')):
+        return None
+    preferred = title_rank(rules.get('chair_title') or '教授')
+    floor = min(preferred, title_rank(rules.get('source_chair_title') or rules.get('chair_title') or '教授'))
+    rank = title_rank(raw.get('title'))
+    if rank >= preferred:
+        return 0
+    return 1 if rank >= floor else None
+
+
 def scenario_policy(defense_type: str) -> dict[str, Any]:
     """Return an independent copy of a Chinese- or code-named scenario."""
     key = _DEFENSE_TYPES.get(str(defense_type).strip().lower())

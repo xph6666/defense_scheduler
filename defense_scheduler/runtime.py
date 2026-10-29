@@ -53,6 +53,7 @@ def configure_local_runtime(app_root: Path | None = None, bundle_root: Path | No
     os.environ.setdefault('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
     os.environ.setdefault('DJANGO_DB_PATH', str(app_data_dir / 'db.sqlite3'))
     os.environ.setdefault('FRONTEND_DIST_DIR', str(resolved_bundle_root / 'dist'))
+    os.environ.setdefault('PRE_PLAN_CACHE_DIR', str(app_data_dir / 'pre-plan-cache'))
 
     return LocalRuntimeConfig(
         app_root=resolved_app_root,

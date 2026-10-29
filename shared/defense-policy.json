@@ -1,5 +1,5 @@
 {
-  "policyVersion": 2,
+  "policyVersion": 3,
   "scenarios": {
     "pre": {
       "defenseType": "预答辩",
@@ -10,8 +10,17 @@
       "avoidHoliday": true,
       "mentorAvoidance": false,
       "formalMentorSameSession": false,
-      "studentCount": { "target": 6, "min": 4, "max": 8 },
-      "expertCount": { "target": 4, "min": 4, "max": null, "includesChair": true },
+      "studentCount": {
+        "target": 6,
+        "min": 5,
+        "max": 7
+      },
+      "expertCount": {
+        "target": 3,
+        "min": 3,
+        "max": 3,
+        "includesChair": true
+      },
       "expertCountIncludesChair": true,
       "secretaryCount": 1,
       "roleQualification": {
@@ -21,7 +30,7 @@
         "preferSeniorTitle": true
       },
       "courseHalfDayBlocking": true,
-      "formalSoftwareMin": 3,
+      "formalSoftwareMin": 0,
       "softwareTeacherMin": 0,
       "includeRemarks": true,
       "preservePreDefenseGroups": true,
@@ -40,10 +49,19 @@
       "enabled": true,
       "avoidWeekend": true,
       "avoidHoliday": true,
-      "mentorAvoidance": true,
-      "formalMentorSameSession": true,
-      "studentCount": { "target": 6, "min": 4, "max": 8 },
-      "expertCount": { "target": 5, "min": 5, "max": null, "includesChair": true },
+      "mentorAvoidance": false,
+      "formalMentorSameSession": false,
+      "studentCount": {
+        "target": 6,
+        "min": 5,
+        "max": 7
+      },
+      "expertCount": {
+        "target": 5,
+        "min": 5,
+        "max": 5,
+        "includesChair": true
+      },
       "expertCountIncludesChair": true,
       "secretaryCount": 1,
       "roleQualification": {
@@ -53,8 +71,8 @@
         "preferSeniorTitle": true
       },
       "courseHalfDayBlocking": true,
-      "formalSoftwareMin": 3,
-      "softwareTeacherMin": 3,
+      "formalSoftwareMin": 0,
+      "softwareTeacherMin": 0,
       "includeRemarks": true,
       "preservePreDefenseGroups": true,
       "softWeights": {
@@ -74,8 +92,17 @@
       "avoidHoliday": true,
       "mentorAvoidance": false,
       "formalMentorSameSession": false,
-      "studentCount": { "target": 12, "min": 10, "max": 12 },
-      "expertCount": { "target": 5, "min": 5, "max": null, "includesChair": true },
+      "studentCount": {
+        "target": 12,
+        "min": 10,
+        "max": 12
+      },
+      "expertCount": {
+        "target": 5,
+        "min": 5,
+        "max": null,
+        "includesChair": true
+      },
       "expertCountIncludesChair": true,
       "secretaryCount": 1,
       "roleQualification": {

@@ -20,6 +20,7 @@ from .runtime import get_app_root, _load_or_create_secret
 from django.core.exceptions import ImproperlyConfigured
 
 load_env(get_app_root() / '.env')
+PRE_PLAN_CACHE_DIR = os.environ.get('PRE_PLAN_CACHE_DIR', '')
 PRODUCTION = os.environ.get('DJANGO_ENV', 'local') == 'production'
 
 
@@ -139,6 +140,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'api.authentication.LocalPasswordlessAuthentication',
         'api.authentication.ExpiringTokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [

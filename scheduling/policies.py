@@ -42,6 +42,12 @@ _TITLE_RANKS = {
 _MISSING = object()
 
 
+def pre_chair_is_qualified(teacher, rules):
+    """Pre-defense chairs qualify by title, without a separate role checkbox."""
+    from algorithm import meets_chair_requirement
+    return meets_chair_requirement(teacher, {**rules, 'chair_title': rules.get('chair_title') or '副教授'})
+
+
 def scenario_policy(defense_type: str) -> dict[str, Any]:
     """Return an independent copy of a Chinese- or code-named scenario."""
     key = _DEFENSE_TYPES.get(str(defense_type).strip().lower())
@@ -195,6 +201,8 @@ def committee_member_target(rules: Mapping[str, Any]) -> int:
 
 def pre_mentor_committee(rules: Mapping[str, Any]) -> bool:
     """Current pre-defense contract, with an explicit legacy boundary."""
+    if rules.get('policy_version') == 3:
+        return False
     defense = _DEFENSE_TYPES.get(str(_value(rules, 'defense_type', 'defenseType', default='')))
     return defense == 'pre' and (_includes_chair(rules) or rules.get('policy_version', 1) >= 2)
 
@@ -236,6 +244,9 @@ def committee_violations(draft: Any, teachers: Any, rules: Mapping[str, Any]) ->
     included = _includes_chair(rules)
     defense = _DEFENSE_TYPES.get(str(_value(rules, "defense_type", "defenseType", default="")).strip().lower())
     policy = scenario_policy(defense) if defense is not None else {}
+    if defense in ('pre', 'formal') and rules.get('policy_version') != 3:
+        count = 4 if defense == 'pre' else 5
+        policy['expertCount'] = {'target': count, 'min': count, 'max': None}
     qualifications = rules.get("roleQualification") or {}
     defaults = policy.get("roleQualification", {}) if included else {}
     chair_key = "chairmanMinTitle" if defense == "formal" else "leaderMinTitle"

@@ -8,7 +8,7 @@
     :row-class-name="rowClassName"
     row-key="id"
   >
-    <el-table-column prop="groupName" label="组名" width="140" fixed="left" />
+    <el-table-column prop="groupName" label="固定组号" width="140" fixed="left" />
     <el-table-column label="状态" width="90">
       <template #default="{ row }">
         <ConflictTag :status="getStatus(row.id)" />

@@ -59,13 +59,15 @@
     <el-card shadow="never" class="mb-4">
       <template #header><strong>每组安排多少人</strong></template>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <el-form-item label="每组学生人数">
-          <el-input-number v-model="form.studentCount.target" :min="1" controls-position="right" class="w-full" />
+        <el-form-item label="每组学生总人数目标">
+          <el-input-number v-model="form.studentCount.target" :min="form.defenseType === '中期答辩' ? 10 : 5" :max="form.defenseType === '中期答辩' ? 12 : 7" controls-position="right" class="w-full" />
         </el-form-item>
-        <el-form-item :label="form.defenseType === '预答辩' ? '评审人数下限' : '专家目标人数'">
-          <el-input-number :model-value="expertCountInput" @change="handleExpertCountChange" :min="form.defenseType === '预答辩' ? expertMinimum : Math.max(expertMinimum, form.expertCount.min)" controls-position="right" class="w-full" />
+        <el-form-item label="专家人数（含组长）">
+          <el-select v-if="form.defenseType !== '中期答辩'" :model-value="expertCountInput" @change="handleExpertCountChange"><el-option :value="3" label="3 人" /><el-option :value="5" label="5 人" /></el-select>
+          <el-input-number v-else :model-value="expertCountInput" @change="handleExpertCountChange" :min="expertMinimum" controls-position="right" class="w-full" />
         </el-form-item>
       </div>
+      <p v-if="form.defenseType !== '中期答辩'" class="text-sm text-gray-600 mb-3">每组仅允许 5～7 人，以 6 人为主，少量 5 或 7 人组消化余数。允许同导师多名学生同组；仅在无法满足人数底线时，必要的小组可安排第 2 位外院导师。先平衡教师出场次数和参与学生数，再尽量集中在同日上午、下午。预答辩固定组号，正式阶段沿用分组和原教师，按人数要求补充本院专家。</p>
       <p class="text-sm text-gray-600 mb-3">{{ expertGuidance }}；主席/组长计入专家总数，秘书单独 1 人。</p>
       <el-popover placement="top" trigger="click" width="280"><template #reference><el-button link type="primary" size="small">查看人数范围</el-button></template><p>学生 {{ form.studentCount.min }}–{{ form.studentCount.max }} 人；{{ expertGuidance }}；秘书 1 人。</p></el-popover>
     </el-card>
@@ -85,7 +87,7 @@
                 <el-switch v-model="form.enabled" />
               </el-form-item>
             </el-col>
-            <el-col :xs="24" :sm="12" :lg="8" v-if="form.defenseType === '正式答辩'">
+            <el-col :xs="24" :sm="12" :lg="8" v-if="form.defenseType === '正式答辩' && form.policyVersion !== 3">
               <el-form-item label="启用导师回避">
                 <el-switch v-model="form.mentorAvoidance" />
                 <el-popover placement="top" trigger="click" width="260"><template #reference><button type="button" class="form-help-trigger" aria-label="导师回避说明">?</button></template><p>开启后导师不进入其学生所在组</p></el-popover>
@@ -111,13 +113,9 @@
             <el-switch v-model="form.courseHalfDayBlocking" />
             <span class="text-xs text-gray-500 ml-2">上午或下午有课时，该半天不安排答辩。</span>
           </el-form-item>
-          <el-form-item v-if="form.defenseType === '正式答辩'" label="软件学院专家至少">
-            <el-input-number v-model="form.formalSoftwareMin" :min="3" :max="form.expertCount.target" />
-            <span class="text-xs text-gray-500 ml-2">本次目标 {{ form.expertCount.target }} 位专家中，至少 {{ form.formalSoftwareMin }} 位来自软件学院。</span>
-          </el-form-item>
           <el-form-item v-if="form.defenseType === '正式答辩'" label="沿用预答辩分组">
             <el-switch v-model="form.preservePreDefenseGroups" />
-            <span class="text-xs text-gray-500 ml-2">沿用学生组号与秘书关系，人工调整后重新校验。</span>
+            <span class="text-xs text-gray-500 ml-2">优先沿用学生任务单元；时间不可行时局部补排。</span>
           </el-form-item>
           <el-form-item label="导出包含备注"><el-switch v-model="form.includeRemarks" /></el-form-item>
         </el-card>
@@ -131,13 +129,13 @@
           </template>
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8">
             <el-form-item label="学生最少人数">
-              <el-input-number v-model="form.studentCount.min" :min="1" controls-position="right" class="w-full" />
+              <el-input-number v-model="form.studentCount.min" :min="form.defenseType === '中期答辩' ? 10 : 5" :max="form.studentCount.target" controls-position="right" class="w-full" />
             </el-form-item>
             <el-form-item label="学生最多人数">
-              <el-input-number v-model="form.studentCount.max" :min="1" controls-position="right" class="w-full" />
+              <el-input-number v-model="form.studentCount.max" :min="form.studentCount.target" :max="form.defenseType === '中期答辩' ? 12 : 7" controls-position="right" class="w-full" />
             </el-form-item>
 
-            <el-form-item v-if="form.defenseType !== '预答辩'" label="专家最少人数">
+            <el-form-item v-if="form.defenseType === '中期答辩'" label="专家最少人数">
               <el-input-number v-model="form.expertCount.min" :min="expertMinimum" :max="form.expertCount.target" controls-position="right" class="w-full" />
             </el-form-item>
             <el-form-item label="秘书人数">
@@ -222,7 +220,7 @@
             <WeightSlider
               v-model="form.softWeights.externalMentorConcentration"
               label="外院导师集中"
-              description="由导师聚类分组自动保证：同一导师的学生分在同一组、同一时段"
+              description="以每组 6 人为主（至少 5 人、最多 7 人）并平衡教师工作量；时间和专家资格必须满足"
               disabled
             />
             <WeightSlider
@@ -264,19 +262,17 @@ const emit = defineEmits<{
 }>()
 
 const form = ref<RuleConfig>(normalizeRuleConfig(JSON.parse(JSON.stringify(props.modelValue))))
-const expertMinimum = computed(() => form.value.defenseType === '预答辩' ? 4 : 5)
-const expertCountInput = computed(() => form.value.defenseType === '预答辩' ? form.value.expertCount.min : form.value.expertCount.target)
+const expertMinimum = computed(() => form.value.defenseType === '中期答辩' ? 5 : 3)
+const expertCountInput = computed(() => form.value.expertCount.target)
 const handleExpertCountChange = (value: number | null | undefined) => {
   if (value == null) return
-  if (form.value.defenseType === '预答辩') form.value.expertCount = { target: value, min: value }
+  if (form.value.defenseType !== '中期答辩') form.value.expertCount = { target: value, min: value }
   else form.value.expertCount.target = value
   if (form.value.defenseType === '正式答辩' && (form.value.formalSoftwareMin || 0) > value) form.value.formalSoftwareMin = value
 }
-const expertGuidance = computed(() => form.value.defenseType === '正式答辩'
-  ? `正式答辩默认 5 位专家，可向上调整；本次目标 ${form.value.expertCount.target} 位，至少 ${form.value.expertCount.min} 位`
-  : form.value.defenseType === '预答辩'
-    ? `预答辩默认至少 4 位专家，可向上调整；本次至少 ${form.value.expertCount.min} 位（含组长），按本组导师人数安排；每位评审都须有本组学生`
-    : `中期答辩至少 ${form.value.expertCount.min} 位专家`)
+const expertGuidance = computed(() => form.value.defenseType === '中期答辩'
+  ? `中期答辩至少 ${form.value.expertCount.min} 位专家`
+  : `本阶段使用 ${form.value.expertCount.target} 位专家：优先 2 名本院、1 名外院；5 人时增加 2 名本院专家。无可用外院专家时用本院补足`)
 
 const disableEndDate = (date: Date) => {
   if (!form.value.startDate) return false

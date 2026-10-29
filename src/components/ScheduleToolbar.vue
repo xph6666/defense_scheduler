@@ -25,8 +25,9 @@
 
     <div class="flex flex-wrap items-center gap-2">
       <el-button v-if="canManage" type="primary" :loading="loading" @click="emit('generate')">
-        {{ hasResult ? '生成新草稿' : '生成排期草稿' }}
+        {{ defenseType === '正式答辩' ? '沿用预答辩生成正式答辩' : defenseType === '预答辩' ? '生成预答辩草稿' : (hasResult ? '生成新草稿' : '生成排期草稿') }}
       </el-button>
+      <el-button v-if="canManage && defenseType !== '中期答辩'" :disabled="loading" @click="emit('generate-linked')">联合生成两阶段</el-button>
       <el-dropdown trigger="click" :disabled="loading" @command="command => emit('refresh')">
         <el-button :disabled="loading">更多操作 ▾</el-button>
         <template #dropdown>
@@ -60,6 +61,7 @@ const emit = defineEmits<{
   (e: 'update:defenseType', v: DefenseType): void
   (e: 'update:viewMode', v: 'agenda' | 'card' | 'table'): void
   (e: 'generate'): void
+  (e: 'generate-linked'): void
   (e: 'refresh'): void
   (e: 'export'): void
 }>()

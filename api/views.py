@@ -60,6 +60,8 @@ IMPORT_HEADER_ALIASES = {
     '角色': 'roles',
     '校区偏好': 'campusPreference',
     '不可用时间': 'unavailableTimes',
+    '可用时间已确认': 'availabilityConfirmed',
+    '允许同组多名指导学生': 'allowMultipleStudents',
     '不宜同组名单': 'avoidTeacherNames',
     '学生类型': 'studentType',
     '学科': 'studentType',
@@ -88,6 +90,7 @@ IMPORT_KNOWN_FIELDS = {
     'mentorId', 'secretaryId', 'expertOnly', 'expert_only',
     'availableTypes', 'available_types', 'campusPreference', 'campus_preference',
     'unavailableTimes', 'unavailable_times', 'avoidTeacherNames', 'avoid_teacher_names',
+    'availabilityConfirmed', 'availability_confirmed', 'allowMultipleStudents', 'allow_multiple_students',
     'remark', 'studentType', 'student_type', 'mentorName', 'mentor_name', 'campus',
     'studentNo', 'student_no', 'gender',
     'defenseTypes', 'defense_types', 'secretaryName', 'secretary_name', 'capacity',
@@ -463,7 +466,8 @@ class ImportMixin:
                                 processed_row[field] = split_import_list_text(val)
                     
                     bool_fields = ['isExternal', 'is_external', 'isActive', 'is_active',
-                        'memberEligible', 'member_eligible', 'isSoftwareTeacher', 'is_software_teacher', 'expertOnly', 'expert_only']
+                        'memberEligible', 'member_eligible', 'isSoftwareTeacher', 'is_software_teacher', 'expertOnly', 'expert_only',
+                        'availabilityConfirmed', 'availability_confirmed', 'allowMultipleStudents', 'allow_multiple_students']
                     for field in bool_fields:
                         if field in processed_row and isinstance(processed_row[field], str):
                             processed_row[field] = processed_row[field].lower() in ['true', '1', '是', 'yes']
@@ -482,6 +486,8 @@ class ImportMixin:
                     row_errors = {}
                     time_field = 'availableTimes' if isinstance(self, RoomViewSet) else 'unavailableTimes'
                     raw_time = supply_explicit_year(processed_row.get(time_field, ''), import_year)
+                    if isinstance(self, TeacherViewSet) and str(raw_time).strip():
+                        processed_row.setdefault('availabilityConfirmed', True)
                     unrecognized = find_unrecognized_time_entries(raw_time)
                     if unrecognized:
                         row_errors[time_field] = [
@@ -620,6 +626,8 @@ class TeacherViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
         ]
 
     def prepare_import_row(self, processed_row, filename):
+        from .services.reference_data import correct_imported_affiliation
+        correct_imported_affiliation(processed_row)
         role_value = processed_row.get('roles')
         if not role_value:
             for key, value in processed_row.items():

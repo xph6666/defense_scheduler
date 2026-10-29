@@ -28,7 +28,7 @@ export interface SoftConstraintWeightConfig {
 }
 
 export interface RuleConfig {
-  policyVersion?: 2
+  policyVersion?: 2 | 3
   expertCountIncludesChair?: boolean
   courseHalfDayBlocking?: boolean
   formalSoftwareMin?: number

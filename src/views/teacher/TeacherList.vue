@@ -68,6 +68,9 @@
       </el-table-column>
       <el-table-column prop="campusPreference" label="校区偏好" width="100" />
       <el-table-column prop="unavailableTimes" label="不可用时间" min-width="120" show-overflow-tooltip />
+      <el-table-column prop="availableTimes" label="可用时间" min-width="120" show-overflow-tooltip />
+      <el-table-column label="时间确认" width="110"><template #default="{ row }"><el-tag :type="row.availabilityConfirmed || row.availableTimes || row.unavailableTimes ? 'success' : 'warning'">{{ row.availabilityConfirmed || row.availableTimes || row.unavailableTimes ? '已维护' : '待确认' }}</el-tag></template></el-table-column>
+      <el-table-column label="同组多名学生" width="120"><template #default="{ row }">{{ row.allowMultipleStudents ? '已明确允许' : '按组人数均衡安排' }}</template></el-table-column>
       <el-table-column prop="avoidTeacherNames" label="不宜同组" min-width="120" show-overflow-tooltip />
       <el-table-column v-if="canManage" label="操作" width="150" fixed="right">
         <template #default="{ row }">
@@ -149,6 +152,17 @@
         </el-form-item>
         <el-form-item label="不可用时间" prop="unavailableTimes">
           <el-input v-model="form.unavailableTimes" placeholder="请输入不可用时间，如: 周二上午" />
+        </el-form-item>
+        <el-form-item label="可用时间">
+          <el-input v-model="form.availableTimes" placeholder="如：周一至周五全天；与不可用时间共同生效" />
+        </el-form-item>
+        <el-form-item label="可用时间已确认">
+          <el-switch v-model="form.availabilityConfirmed" />
+          <span class="text-xs text-gray-500 ml-2">未填写限制时可按无额外限制生成草稿，并保留待核对提醒；确认后表示无额外时间限制。已有课表仍生效。</span>
+        </el-form-item>
+        <el-form-item label="同组多名指导学生">
+          <el-switch v-model="form.allowMultipleStudents" />
+          <span class="text-xs text-gray-500 ml-2">预答辩已允许多名同导师学生同组，按组人数均衡安排；此项保留明确备注。</span>
         </el-form-item>
         <el-form-item label="不宜同组专家" prop="avoidTeacherNames">
           <el-input v-model="form.avoidTeacherNames" placeholder="请输入不宜同组的专家姓名" />
@@ -252,7 +266,10 @@ const defaultForm: Omit<Teacher, 'id'> = {
   roles: [],
   availableTypes: [],
   campusPreference: '不限',
-  unavailableTimes: '无',
+  unavailableTimes: '',
+  availableTimes: '',
+  availabilityConfirmed: false,
+  allowMultipleStudents: false,
   avoidTeacherNames: '',
   remark: ''
 }

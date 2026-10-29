@@ -41,11 +41,13 @@ export interface ScheduleGroup {
   id: number
   defenseType: DefenseType
   groupName: string
+  displayOrder?: number
   campus: '创新港' | '兴庆'
   classroom: string
   date: string
   timeRange: string
   chairTitle?: string
+  chairIsExternal?: boolean
   chairId?: number
   secretaryId?: number
   leader?: string
@@ -66,8 +68,16 @@ export interface ScheduleResult {
   defenseType: DefenseType
   generatedAt: string
   groups: ScheduleGroup[]
+  unassignedStudents?: { id: number; name: string; reason: string }[]
+  teacherWorkloads?: { id: number; name: string; supervisedStudents: number; groupCount: number; studentCount: number; sessions: string[] }[]
+  allocationStatus?: 'partial' | 'scheduled'
+  totalStudents?: number
   // [TASK-P12 新增] 历史版本导出按该版本规则快照处理备注。
   rules?: {
+    policy_version?: number
+    expert_count?: number
+    start_date?: string
+    end_date?: string
     include_remarks?: boolean
     includeRemarks?: boolean
     group_size?: number

@@ -12,6 +12,20 @@ from .tests import make_xlsx_upload
 
 
 class CohortImportTests(TestCase):
+    def test_confirmed_wang_fei_affiliations_match_preview_and_students(self):
+        self.teachers[1][0] = '王飞'
+        self.students[1][2] = '王飞'
+        self.students[2][2] = '王飞（软）'
+        self.students[3][2] = '王飞（软）'
+        preview = self.post(preview=True)
+        self.assertEqual(preview.status_code, 200, preview.data)
+        staff = {t['name']: t for t in preview.data['teachers']}
+        self.assertTrue(staff['王飞']['isExternal'])
+        self.assertFalse(staff['王飞（软）']['isExternal'])
+        self.assertEqual(preview.data['stats']['externalMentors'], 1)
+        for student in preview.data['students']:
+            self.assertEqual(student['externalMentor'], student['mentorName'] == '王飞')
+
     def test_legacy_chair_read_exposes_eligibility_without_rewriting_roles(self):
         teacher=Teacher.objects.create(name='旧名单组长',title='教授',roles=['主席'])
         response=self.client.get(f'/api/teachers/{teacher.pk}/')

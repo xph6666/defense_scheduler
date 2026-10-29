@@ -19,6 +19,24 @@ class ScheduleApplication:
     def _normalize_rules(self, rules):
         return normalize_schedule_rules(rules)
 
+    def prepare_generation_rules(self, rules):
+        rules = dict(rules)
+        if (rules.get('policy_version') == 3 and rules['defense_type'] == 'formal'
+                and rules.get('preserve_pre_defense_groups', True)):
+            source = ScheduleVersion.objects.filter(defense_type='pre', is_current=True).first()
+            if not source or (not source.groups.exists() and not rules.get('linked_translation')):
+                raise ValueError('请先生成并核对预答辩分组，再平移到正式答辩')
+            if rules['start_date'] <= source.rules_snapshot.get('end_date', ''):
+                raise ValueError('正式答辩开始日期必须晚于预答辩结束日期')
+            if rules['expert_count'] < source.rules_snapshot.get('expert_count', 3):
+                raise ValueError('平移后专家人数不能少于预答辩')
+            rules.update(linked_translation=True,
+                         external_expert_max=max(rules.get('external_expert_max', 1),
+                                                source.rules_snapshot.get('external_expert_max', 1)),
+                         source_chair_title=source.rules_snapshot.get('chair_title', '副教授'),
+                         avoid_supervisor=False, supervisor_policy='same_group')
+        return rules
+
     def preflight_check(self, rules, *, check_inherited_groups=True):
         """生成排期前的资料预检，返回可生成状态、错误、警告和统计信息。"""
         rules = self._normalize_rules(rules)
@@ -42,8 +60,8 @@ class ScheduleApplication:
             )
 
         # 阻断生成的错误类型
-        ERROR_TYPES = {'mentor_missing'}
-        if rules.get('policy_version', 1) >= 2:
+        ERROR_TYPES = set() if rules.get('policy_version') == 3 else {'mentor_missing'}
+        if rules.get('policy_version', 1) == 2:
             ERROR_TYPES.update({'mentor_not_found', 'mentor_unavailable_for_defense'})
 
         # 按类型聚合 notices
@@ -102,6 +120,16 @@ class ScheduleApplication:
                 'suggestion': '检查教师或教室的时间格式是否正确',
                 'has_students': False,
             },
+            'availability_pending': {
+                'description': '部分教师未提供额外时间限制，草稿暂按无额外限制计算，到场时间仍需核对',
+                'suggestion': '已有课表及时间限制仍生效；请在教师资料核对额外限制，确认后可消除此提醒',
+                'has_students': False,
+            },
+            'remark_confirmation': {
+                'description': '部分教师备注需要确认，暂未转换为排班规则',
+                'suggestion': '核对教师备注，使用可用时间及同组多名学生等结构化配置',
+                'has_students': False,
+            },
         }
 
         def _build_item(notice_type, agg, level):
@@ -156,9 +184,9 @@ class ScheduleApplication:
 
         # 没有可参加的教师
         if not payload['teachers']:
-            errors.append({
+            (warnings if rules.get('policy_version') == 3 else errors).append({
                 'type': 'no_teachers',
-                'level': 'error',
+                'level': 'warning' if rules.get('policy_version') == 3 else 'error',
                 'description': f'没有可参加【{defense_label}】的教师',
                 'studentNames': [],
                 'count': 0,
@@ -170,7 +198,8 @@ class ScheduleApplication:
         errors.extend(external_mentor_capacity_issues(payload, rules))
         if check_inherited_groups:
             errors.extend(inherited_group_size_issues(payload, rules))
-        warnings.extend(resource_availability_issues(payload, rules))
+        if rules.get('policy_version') != 3:
+            warnings.extend(resource_availability_issues(payload, rules))
         can_generate = len(errors) == 0
 
         return {
@@ -186,7 +215,7 @@ class ScheduleApplication:
 
     def generate_version(self, rules, request_key=None):
         """Compute and persist a draft. Caller holds the schedule write transaction."""
-        rules = dict(rules)  # 防御性拷贝，避免修改调用者传入的字典
+        rules = self.prepare_generation_rules(rules)
         from algorithm import SchedulingError, generate_schedule
         preflight = self.preflight_check(rules)
         if not preflight['canGenerate']:
@@ -201,10 +230,24 @@ class ScheduleApplication:
         label = DEFENSE_TYPE_LABELS[rules['defense_type']]
         if not payload['students']:
             raise ValueError(f'没有学生参加【{label}】，请检查学生数据中的"参加答辩类型"设置')
-        if not payload['teachers']:
+        if not payload['teachers'] and rules.get('policy_version') != 3:
             raise ValueError(f'没有可参加【{label}】的教师，请检查教师数据中的"可参加答辩类型"设置')
         try:
-            result = generate_schedule(**payload, rules=rules)
+            if rules.get('linked_translation') and source_pre:
+                from algorithm import GroupDraft, parse_teacher, parse_student, parse_time_range
+                from scheduling.translation import translate_panels
+                source = [GroupDraft(g.group_id, g.campus, list(g.students.values_list('pk', flat=True)),
+                    parse_time_range(g.time), None, g.chair_id, list(g.experts.values_list('pk', flat=True)), g.secretary_id)
+                    for g in source_pre.groups.prefetch_related('students', 'experts')]
+                result = translate_panels(source, [parse_teacher(t) for t in payload['teachers']],
+                    [parse_student(s) for s in payload['students']], rules)
+            else:
+                from .pre_plan_cache import read_pre_plan, remember_pre_plan
+                result = read_pre_plan(payload, rules) if rules['defense_type'] == 'pre' else None
+                if result is None:
+                    result = generate_schedule(**payload, rules=rules)
+                if rules['defense_type'] == 'pre':
+                    remember_pre_plan(payload, rules, result)
         except (SchedulingError, ValueError, TypeError) as exc:
             raise ValueError(f'排期参数错误: {exc}')
         # 将使用的随机种子持久化到规则快照，便于复现
@@ -308,4 +351,6 @@ class ScheduleApplication:
             [parse_teacher(t) for t in payload['teachers']], [parse_room(r) for r in payload['rooms']], rules)
         for conflict in conflicts:
             conflict['group_db_ids'] = [group_map[g] for g in conflict.get('related_ids', []) if isinstance(g, str) and g in group_map]
+        if rules.get('policy_version') == 3 and any(c['type'] == 'missing_student' for c in conflicts):
+            notices.extend(c for c in schedule_version.conflicts_snapshot if c.get('type') == 'search_limit')
         return deduplicate_conflicts(notices + conflicts)

@@ -26,6 +26,7 @@ hiddenimports = project_modules + [
     'openpyxl.cell.rich_text',
     'rest_framework.authtoken',
     'xlrd',
+    'scipy.optimize._highspy._core',
 ]
 
 excludes = [
@@ -37,7 +38,6 @@ excludes = [
     'numba',
     'pytest',
     '_pytest',
-    'scipy',
     'selenium',
     'sqlalchemy',
     'sympy',

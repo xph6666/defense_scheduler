@@ -20,10 +20,16 @@ DEFENSE_TYPE_VALUES = {value: key for key, value in DEFENSE_TYPE_LABELS.items()}
 DATE_FORMAT = '%Y-%m-%d'
 
 
-def default_rule_config(defense_type='pre'):
+def default_rule_config(defense_type='pre', policy_version=3):
     config = scenario_policy(defense_type)
+    if policy_version == 2 and defense_type in ('pre', 'formal'):
+        count = 4 if defense_type == 'pre' else 5
+        config.update(studentCount={'target': 6, 'min': 4, 'max': 8},
+                      expertCount={'target': count, 'min': count, 'max': None, 'includesChair': True},
+                      mentorAvoidance=defense_type == 'formal',
+                      formalSoftwareMin=3, formalMentorSameSession=defense_type == 'formal')
     today = timezone.localdate()
-    config.update(policyVersion=2, startDate=today.isoformat(),
+    config.update(policyVersion=2 if defense_type == 'mid' else policy_version, startDate=today.isoformat(),
                   endDate=(today + timedelta(days=10)).isoformat(), excludeDates=[])
     return config
 
@@ -110,10 +116,16 @@ def validate_rule_config(config):
     experts = config['expertCount']
     target = parse_non_negative_int(experts['target'], 'expertCount.target')
     minimum = parse_non_negative_int(experts['min'], 'expertCount.min')
-    floor = 4 if defense_type == 'pre' else 5
+    current = config.get('policyVersion') == 3 and defense_type != 'mid'
+    if current and not (5 <= int(config['studentCount']['min'])
+            <= int(config['studentCount']['target']) <= int(config['studentCount']['max']) <= 7):
+        raise serializers.ValidationError({'studentCount': ['预答辩及正式答辩每组至少 5 人、最多 7 人，建议 6 人']})
+    floor = 3 if current else 4 if defense_type == 'pre' else 5
+    if current and (target not in (3, 5) or minimum != target):
+        raise serializers.ValidationError({'expertCount': ['专家人数只能为 3 或 5 人，必须与下限一致，含组长']})
     if minimum < floor:
         raise serializers.ValidationError({'expertCount': [f'专家人数含主席/组长，至少需要 {floor} 人']})
-    if defense_type == 'pre' and experts.get('max') is not None:
+    if defense_type == 'pre' and not current and experts.get('max') is not None:
         raise serializers.ValidationError({'expertCount': ['预答辩由本组学生的全部导师评审，不设置固定专家人数上限']})
     if experts.get('max') is not None and target > parse_non_negative_int(experts['max'], 'expertCount.max'):
         raise serializers.ValidationError({'expertCount': ['目标值不能大于最大值']})
@@ -127,7 +139,7 @@ def validate_rule_config(config):
         raise serializers.ValidationError({'courseHalfDayBlocking': ['有课的半天不能安排答辩']})
     if parse_non_negative_int(config.get('secretaryCount'), 'secretaryCount') != 1:
         raise serializers.ValidationError({'secretaryCount': ['每组必须配备 1 名秘书']})
-    if defense_type == 'formal' and not 3 <= parse_non_negative_int(config.get('formalSoftwareMin'), 'formalSoftwareMin') <= target:
+    if defense_type == 'formal' and not current and not 3 <= parse_non_negative_int(config.get('formalSoftwareMin'), 'formalSoftwareMin') <= target:
         raise serializers.ValidationError({'formalSoftwareMin': ['软件学院导师人数至少为 3 人，不能超过专家目标人数']})
     for key in ('enabled', 'avoidWeekend', 'avoidHoliday', 'mentorAvoidance', 'expertCountIncludesChair',
                 'courseHalfDayBlocking', 'includeRemarks', 'preservePreDefenseGroups', 'formalMentorSameSession'):
@@ -154,6 +166,9 @@ class TeacherSerializer(serializers.ModelSerializer):
     availableTypes = serializers.JSONField(source='available_types', default=list, required=False)
     campusPreference = serializers.CharField(source='campus_preference', allow_blank=True, required=False)
     unavailableTimes = serializers.CharField(source='unavailable_times', allow_blank=True, required=False)
+    availableTimes = serializers.CharField(source='available_times', allow_blank=True, required=False)
+    availabilityConfirmed = serializers.BooleanField(source='availability_confirmed', required=False)
+    allowMultipleStudents = serializers.BooleanField(source='allow_multiple_students', required=False)
     avoidTeacherNames = serializers.CharField(source='avoid_teacher_names', allow_blank=True, required=False)
     remark = serializers.CharField(allow_blank=True, required=False)
 
@@ -161,7 +176,7 @@ class TeacherSerializer(serializers.ModelSerializer):
         model = Teacher
         fields = [
             'id', 'name', 'college', 'isExternal', 'isActive', 'memberEligible', 'expertOnly', 'isSoftwareTeacher', 'title', 'roles',
-            'availableTypes', 'campusPreference', 'unavailableTimes',
+            'availableTypes', 'campusPreference', 'unavailableTimes', 'availableTimes', 'availabilityConfirmed', 'allowMultipleStudents',
             'avoidTeacherNames', 'remark'
         ]
 
@@ -361,7 +376,10 @@ class RuleConfigSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'defense_type': '缺少答辩类型'})
         if defense_type not in DEFENSE_TYPE_LABELS:
             raise serializers.ValidationError({'defense_type': ['不支持的答辩类型']})
-        config = default_rule_config(defense_type)
+        version = payload.get('policyVersion', self.instance.config.get('policyVersion', 3) if self.instance else 3)
+        if version not in (2, 3) or isinstance(version, bool):
+            raise serializers.ValidationError({'policyVersion': ['不支持的规则版本']})
+        config = default_rule_config(defense_type, version)
         if self.instance and self.instance.defense_type == defense_type:
             config = merge_rule_config(config, self.instance.config)
         config = merge_rule_config(config, payload)
@@ -371,7 +389,9 @@ class RuleConfigSerializer(serializers.ModelSerializer):
             config['expertCount']['max'] = None
         config['defenseType'] = DEFENSE_TYPE_LABELS.get(defense_type, config.get('defenseType', defense_type))
         config.pop('updatedAt', None)
-        config['policyVersion'] = 2
+        config['policyVersion'] = 2 if defense_type == 'mid' else config.get('policyVersion', 3)
+        if config['policyVersion'] == 3 and defense_type != 'mid' and isinstance(config.get('expertCount'), dict):
+            config['expertCount']['max'] = config['expertCount'].get('target')
         config['softwareTeacherMin'] = config['formalSoftwareMin'] if defense_type == 'formal' else 0
         validate_rule_config(config)
         return {

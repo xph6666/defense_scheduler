@@ -172,9 +172,9 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.data['defenseType'], '预答辩')
         self.assertIn('studentCount', response.data)
         self.assertEqual(response.data['endDate'], (timezone.localdate() + timedelta(days=10)).isoformat())
-        self.assertEqual(response.data['expertCount']['target'], 4)
-        self.assertIsNone(response.data['expertCount']['max'])
-        self.assertEqual(response.data['policyVersion'], 2)
+        self.assertEqual(response.data['expertCount']['target'], 3)
+        self.assertEqual(response.data['expertCount']['max'], 3)
+        self.assertEqual(response.data['policyVersion'], 3)
         self.assertFalse(response.data['mentorAvoidance'])
 
         response = self.client.post(
@@ -184,7 +184,7 @@ class IntegrationContractTests(TestCase):
                 'defenseType': '预答辩',
                 'startDate': '2025-05-10',
                 'endDate': '2025-05-12',
-                'studentCount': {'target': 6, 'min': 3, 'max': 8},
+                'studentCount': {'target': 6, 'min': 4, 'max': 7},
             },
             format='json',
         )

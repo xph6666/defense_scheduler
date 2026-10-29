@@ -49,6 +49,40 @@ API 使用服务端 Token 认证，默认有效期为 12 小时（可由配置�
 | 导出 | `GET /schedule/export-excel/`、`GET /schedule/export_word/` |
 | 日志 | `/operation-logs/`，查询、上报及受权限限制的清空 |
 
+## 当前联合排期与教师时间字段（2026-10-29）
+
+预／正式新方案使用 `policyVersion: 3`（保存规则）和 `policy_version: 3`（生成规则）。前端只提供一个“联合生成预答辩与正式答辩”入口；`generate/` 保留中期与旧集成兼容。旧 policy 1/2 的历史语义不变。
+
+教师资源新增：`availableTimes`（可用窗口文本）、`availabilityConfirmed`（空白窗口时明确确认无时间限制）、`allowMultipleStudents`（允许同组超过默认每次 2 名指导学生）。与原 `unavailableTimes` 同时生效；窗口外、不可用时间内或解析无效者不分配。旧资料未填写额外限制时，草稿按无额外限制计算并保留待核对提醒，确认字段不被改为 True。不可用时间明确填写“无”“不限”等受支持的无限制值也视为已维护，具体识别以时间适配器为准。`remark` 中未识别或否定语句不静默执行，返回确认提示。
+
+`POST /schedule/generate-linked/`：
+
+```json
+{
+  "pre_rules": {"policy_version": 3, "start_date": "2026-11-02", "end_date": "2026-11-06", "expert_count": 3, "expert_min": 3},
+  "formal_rules": {"policy_version": 3, "start_date": "2026-11-09", "end_date": "2026-11-13", "expert_count": 5, "expert_min": 5},
+  "request_key": "example-linked-plan"
+}
+```
+
+界面默认预答辩 3 位、正式 5 位专家，均含组长，秘书单独计。接口兼容 3→3、3→5、5→5，拒绝减少原专家；正式阶段保留本轮预答辩学生组、组长、原专家及秘书，仅补本院专家，并重新核对正式日期时间。平移沿用预答辩导师同组和组长资格，不启用导师回避。`linked_translation` 及 `source_chair_title` 为服务端派生字段，外部请求不能注入。
+
+默认整组学生目标 6、最少 1、最多 6；每位导师通常每场 2 人，奇数尾生可补入（5→2+3）。明确允许多人同组时仍受整组人数上限约束。先全部组长、再全部教师、最后具体学生，并进行集中到场与任务量公平的有限局部调整。每组最多 1 位外院专家。教室不参与此版排期。请求键保持原幂等规则。
+
+返回 `pre`、`formal` 两份版本结果；每份增加：
+
+| 字段 | 含义 |
+| --- | --- |
+| `unassignedStudents` | `[{id,name,reason}]`，没有安排的参排学生及原因，已尝试局部补排 |
+| `allocationStatus` | `scheduled` 全部学生已安排；`partial` 存在未安排 |
+| `totalStudents` | 本版本输入的参排学生数 |
+| `teacherWorkloads` | `[{id,name,supervisedStudents,groupCount,studentCount,sessions}]`，指导量、参与量及到场分布 |
+| `groups[].chairIsExternal` | 组长／主席外院标记，专家名单、导师标记均读取可信字段 |
+
+无教室时 `classroom` 展示“待预约”，不妨碍人员时间表生成、编辑与发布。仍有硬冲突或未安排学生时不能通过发布校验。
+
+候选或回溯触及保护上限且有学生未安排时，冲突列表返回“排期搜索范围提示”（原始类型 `search_limit`，warning）。刷新和重验保留该生成提示，补齐全部学生后清除；未安排不代表已证明无解。纯算法返回的 `diagnostics` 用于专项基准，不属于当前 HTTP 响应契约。实现与边界见[三阶段算法说明](../architecture/三阶段排期算法与优化.md)。
+
 ## 基础资料导入与预览
 
 教师、学生、教室的 `POST /api/{teachers|students|rooms}/import_data/` 使用管理员认证和 `multipart/form-data`。课表导入仍走独立的 `import_timetable/`，不要混用两类参数。

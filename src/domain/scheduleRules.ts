@@ -4,22 +4,30 @@ import { getDefensePolicy, policyVersion, toBackendDefenseType, type DefenseType
 export function normalizeRuleConfig(config: RuleConfig): RuleConfig {
   const policy = getDefensePolicy(config.defenseType)
   const oldWeights = Object.values(config.softWeights || {})
-  const legacyWeights = config.policyVersion !== 2 && oldWeights.length > 0 && oldWeights.every(weight => weight >= 0 && weight <= 10)
+  const legacyWeights = !config.policyVersion && oldWeights.length > 0 && oldWeights.every(weight => weight >= 0 && weight <= 10)
   const softWeights = { ...policy.softWeights, ...config.softWeights }
   if (legacyWeights) for (const key of Object.keys(config.softWeights) as (keyof typeof softWeights)[]) softWeights[key] *= 10
-  const expertCount = {
+  const current = config.defenseType !== '中期答辩'
+  const expertCount = current ? {
+    target: config.policyVersion === 3 && config.expertCount?.target === 5 ? 5 : 3,
+    min: config.policyVersion === 3 && config.expertCount?.target === 5 ? 5 : 3
+  } : {
     target: Math.max(policy.expertCount.min, config.expertCount?.target || policy.expertCount.target),
     min: Math.max(policy.expertCount.min, config.expertCount?.min || policy.expertCount.min)
   }
   expertCount.target = Math.max(expertCount.target, expertCount.min)
   return {
     ...config,
-    policyVersion,
+    policyVersion: current ? policyVersion : 2,
     expertCountIncludesChair: true,
     expertCount,
+    studentCount: current ? {
+      target: config.studentCount?.target >= 5 && config.studentCount.target <= 7 ? config.studentCount.target : 6,
+      min: 5, max: 7
+    } : config.studentCount,
     secretaryCount: 1,
     courseHalfDayBlocking: config.courseHalfDayBlocking ?? true,
-    formalSoftwareMin: config.defenseType === '正式答辩' ? Math.max(3, Math.min(expertCount.target, config.formalSoftwareMin ?? policy.softwareTeacherMin)) : 0,
+    formalSoftwareMin: 0,
     includeRemarks: config.includeRemarks ?? true,
     preservePreDefenseGroups: config.preservePreDefenseGroups ?? true,
     campusStartDates: { ...config.campusStartDates },
@@ -31,7 +39,7 @@ export function normalizeRuleConfig(config: RuleConfig): RuleConfig {
 export function buildScheduleRules(defenseType: DefenseType, input: RuleConfig) {
   const config = normalizeRuleConfig({ ...input, defenseType })
   return {
-    policy_version: policyVersion,
+    policy_version: config.policyVersion,
     defense_type: toBackendDefenseType(defenseType),
     start_date: config.startDate,
     end_date: config.endDate,

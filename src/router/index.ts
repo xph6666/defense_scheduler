@@ -1,9 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useUserStore } from '../stores/user'
 import { enableDemoTools } from '../config/features'
 
 const MainLayout = () => import('../layout/MainLayout.vue')
-const Login = () => import('../views/Login.vue')
 const Dashboard = () => import('../views/Dashboard.vue')
 const ScheduleWizard = () => import('../views/ScheduleWizard.vue')
 const TeacherList = () => import('../views/teacher/TeacherList.vue')
@@ -39,7 +37,7 @@ const router = createRouter({
     {
       path: '/login',
       name: 'Login',
-      component: Login
+      redirect: '/dashboard'
     },
     {
       path: '/',
@@ -104,16 +102,6 @@ const router = createRouter({
       ]
     }
   ]
-})
-
-router.beforeEach((to) => {
-  const userStore = useUserStore()
-  if (to.path !== '/login' && !userStore.isLoggedIn) {
-    return { path: '/login', query: { redirect: to.fullPath } }
-  }
-  if (to.path === '/login' && userStore.isLoggedIn) {
-    return { path: '/dashboard' }
-  }
 })
 
 export default router

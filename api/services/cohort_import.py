@@ -160,12 +160,13 @@ def import_cohort(request):
             key, refs, raw = internal[name]
             payload = {field: raw[field] for field in (
                 'name', 'college', 'title', 'roles', 'isActive', 'memberEligible',
-                'unavailableTimes', 'avoidTeacherNames', 'campusPreference', 'remark')
+                'unavailableTimes', 'availableTimes', 'availabilityConfirmed', 'allowMultipleStudents', 'avoidTeacherNames', 'campusPreference', 'remark')
                 if raw.get(field) is not None and raw.get(field) != ''}
             for field in ('isActive', 'memberEligible'):
                 if isinstance(payload.get(field), str):
                     payload[field] = payload[field].strip().lower() in ('true', '1', '是', 'yes')
             if payload.get('unavailableTimes'):
+                payload.setdefault('availabilityConfirmed', True)
                 from .time_data import parse_time_entries, find_unrecognized_time_entries
                 valid_times, invalid_times = parse_time_entries(payload['unavailableTimes'])
                 if find_unrecognized_time_entries(payload['unavailableTimes']):
@@ -192,6 +193,8 @@ def import_cohort(request):
             payload['availableTypes'] = list(dict.fromkeys([*(existing.available_types if existing else []), *types]))
         if existing and not existing.is_active:
             warnings.append(f'{name} 原先已停用，本次不会自动启用，请在教师资料核对')
+        from .reference_data import correct_imported_affiliation
+        correct_imported_affiliation(payload)
         serializer = TeacherSerializer(existing, data=payload, partial=bool(existing))
         with translation.override('zh-hans'):
             valid = serializer.is_valid()
@@ -202,6 +205,7 @@ def import_cohort(request):
         teachers.append({'key': key, 'sources': refs, **payload, 'action': action,
                          'studentCount': len(mentors.get(name, [])), '_serializer': serializer})
 
+    teacher_affiliations = {item['name']: item.get('isExternal', False) for item in teachers}
     student_rows, excluded_rows = [], []
     for item in students.values():
         values, existing = item['values'], item['instance']
@@ -214,11 +218,11 @@ def import_cohort(request):
         action = 'create' if not existing else 'update' if any(current.get(k) != v for k, v in values.items()) else 'keep'
         target_rows = excluded_rows if item['excluded'] else student_rows
         target_rows.append({'key': item['key'], 'sources': item['sources'], **values, 'action': action,
-                             'externalMentor': values['mentorName'] not in internal})
+                             'externalMentor': teacher_affiliations.get(values['mentorName'], False)})
 
     stats = {'students': len(student_rows), 'totalStudents': len(students), 'excludedStudents': len(excluded_rows),
-             'teachers': len(teachers), 'softwareTeachers': len(internal),
-             'externalMentors': len(set(mentors) - set(internal)),
+             'teachers': len(teachers), 'softwareTeachers': sum(not item.get('isExternal', False) for item in teachers),
+             'externalMentors': sum(teacher_affiliations.get(name, False) for name in mentors),
              'newTeachers': sum(item['action'] == 'create' for item in teachers),
              'newStudents': sum(item['action'] == 'create' for item in student_rows),
              'duplicateStudentRows': len(raw_students) - len(students)}

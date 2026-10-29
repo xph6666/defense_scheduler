@@ -35,6 +35,14 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
             'teacher_unavailable': '人员不可用', 'role_conflict': '人员角色冲突',
             'room_capacity': '教室容量不足',
         }.items()},
+        'half_day_coverage': ('上午下午覆盖提示', 'warning'),
+        'external_distribution': ('外院专家分布提示', 'warning'),
+        'student_group_exception': ('学生分组人数提示', 'warning'),
+        'mentor_student_imbalance': ('组内导师学生数不均衡', 'warning'),
+        'pre_group_capacity': ('预答辩人数与组长资格冲突', 'warning'),
+        'remark_confirmation': ('教师备注待确认', 'warning'),
+        'availability_pending': ('教师可用时间待确认', 'warning'),
+        'search_limit': ('排期搜索范围提示', 'warning'),
         'time_conflict': ('时间冲突', 'error'),
         'teacher_time_conflict': ('时间冲突', 'error'),
         'room_conflict': ('教室冲突', 'error'),
@@ -77,7 +85,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
 
     # 比较规则快照时忽略的内部字段（运行时生成，不影响业务规则一致性）
     _RULES_COMPARE_IGNORE = {'random_seed', '_source_pre_version_id',
-                             'reserve_formal_resources', 'refresh_secretary_bindings'}
+                             'reserve_formal_resources', 'refresh_secretary_bindings',
+                             'linked_translation', 'source_chair_title'}
 
     @classmethod
     def _rules_equivalent(cls, a, b):
@@ -179,6 +188,10 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     @schedule_write
     def generate(self, request):
         rules = self._normalize_rules(request.data.get('rules', {}))
+        try:
+            rules = self.prepare_generation_rules(rules)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=400)
         request_key = request.data.get('request_key')
         if request_key and (not isinstance(request_key, str) or len(request_key) > 64):
             return Response({'error': '请求标识格式不正确'}, status=400)
@@ -201,10 +214,15 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         pre_raw, formal_raw = request.data.get('pre_rules', {}), request.data.get('formal_rules', {})
         if not isinstance(pre_raw, dict) or not isinstance(formal_raw, dict):
             return Response({'error': '两阶段规则必须是对象'}, status=400)
-        pre_rules = self._normalize_rules({**pre_raw, 'defense_type': 'pre', 'policy_version': 2})
+        pre_rules = self._normalize_rules({**pre_raw, 'defense_type': 'pre', 'policy_version': pre_raw.get('policy_version', 3)})
         pre_rules.update(reserve_formal_resources=True, refresh_secretary_bindings=True)
-        formal_rules = self._normalize_rules({**formal_raw, 'defense_type': 'formal', 'policy_version': 2,
+        formal_rules = self._normalize_rules({**formal_raw, 'defense_type': 'formal', 'policy_version': formal_raw.get('policy_version', 3),
             'preserve_pre_defense_groups': True, 'formal_mentor_same_session': True})
+        if pre_rules['policy_version'] == 3:
+            if formal_rules['expert_count'] < pre_rules['expert_count']:
+                return Response({'error': '平移后专家人数不能少于预答辩；支持 3→3、3→5 或 5→5'}, status=400)
+            formal_rules.update(linked_translation=True, source_chair_title=pre_rules['chair_title'],
+                                avoid_supervisor=False, supervisor_policy='same_group')
         if formal_rules['start_date'] <= pre_rules['end_date']:
             return Response({'error': '正式答辩开始日期必须晚于预答辩结束日期'}, status=400)
         key = request.data.get('request_key')
@@ -285,12 +303,13 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 'defenseType': schedule_version.get_defense_type_display(),
                 'groupName': group.group_id,
                 'campus': group.campus,
-                'classroom': group.room.name if group.room else '未分配',
+                'classroom': group.room.name if group.room else '待预约',
                 'date': date,
                 'timeRange': time_range,
                 'chairman': group.chair.name if group.chair else None,
                 'secretary': group.secretary.name if group.secretary else '未分配',
                 'chairTitle': group.chair.title if group.chair else '',
+                'chairIsExternal': group.chair.is_external if group.chair else None,
                 'chairId': group.chair_id,
                 'secretaryId': group.secretary_id,
                 'teachers': [
@@ -301,6 +320,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                              for s in group.students.all()]
             })
 
+        raw_conflicts = self._check_conflicts(schedule_version)
         return {
             'isCurrent': schedule_version.is_current,
             'versionId': schedule_version.id,
@@ -311,9 +331,24 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
             'rules': schedule_version.rules_snapshot,
             'defenseType': schedule_version.get_defense_type_display(),
             'generatedAt': timezone.localtime(schedule_version.created_at).strftime('%Y-%m-%d %H:%M'),
-            'groups': formatted_groups,
-            'conflicts': self._format_conflicts(schedule_version, self._check_conflicts(schedule_version))
+            'groups': sorted(formatted_groups, key=lambda g: (g['date'] or '9999', g['timeRange'], g['groupName'])),
+            **self._allocation_summary(schedule_version, formatted_groups, raw_conflicts),
+            'conflicts': self._format_conflicts(schedule_version, raw_conflicts)
         }
+
+    def _allocation_summary(self, version, groups, conflicts):
+        if version.rules_snapshot.get('policy_version') != 3:
+            return {}
+        scheduled = {s['id'] for group in groups for s in group['students']}
+        reasons = {c.get('student_id'): c['description'] for c in [*conflicts, *version.conflicts_snapshot] if c.get('type') == 'missing_student'}
+        students = version.input_snapshot.get('students', [])
+        unassigned = [{'id': s['id'], 'name': s['name'], 'reason': reasons.get(s['id'], '未找到满足教师时间与专家资格的安排，已尝试局部补排')} for s in students if s['id'] not in scheduled]
+        work = []
+        for teacher in version.input_snapshot.get('teachers', []):
+            tid = teacher['id']
+            tasks = [g for g in groups if tid in {g.get('chairId'), g.get('secretaryId'), *[t['id'] for t in g['teachers']], *[s.get('mentorId') for s in g['students']]}]
+            work.append({'id': tid, 'name': teacher['name'], 'supervisedStudents': sum(s.get('supervisor_id') == tid for s in students), 'groupCount': len(tasks), 'studentCount': sum(len(g['students']) for g in tasks), 'sessions': sorted({g['date'] + ' ' + g['timeRange'] for g in tasks})})
+        return {'unassignedStudents': unassigned, 'teacherWorkloads': work, 'allocationStatus': 'partial' if unassigned else 'scheduled', 'totalStudents': len(students)}
 
     @staticmethod
     def _student_schedule_payload(student, teacher_external_by_id, teacher_external_by_name):
@@ -360,6 +395,10 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         next_group_id = group_data.get('groupName') or group.group_id
         if not isinstance(next_group_id, str) or len(next_group_id) > 20:
             return Response({'error': '组名必须为不超过 20 个字符的文本'}, status=400)
+        if (group.schedule_version.rules_snapshot.get('policy_version') == 3
+                and group.schedule_version.defense_type in ('pre', 'formal')
+                and next_group_id != group.group_id):
+            return Response({'error': '预答辩组号确定后固定，正式答辩沿用同一组号'}, status=400)
         date = group_data.get('date')
         time_range = group_data.get('timeRange')
         next_time = group.time
@@ -372,6 +411,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
 
         room = None
         room_name = group_data.get('classroom')
+        if group.schedule_version.rules_snapshot.get('policy_version') == 3 and room_name in ('待预约', '未分配'):
+            room_name = None
         if room_name:
             room = Room.objects.filter(name=room_name, campus=next_campus).first()
             if not room:

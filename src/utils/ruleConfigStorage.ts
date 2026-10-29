@@ -1,4 +1,4 @@
-import { getDefensePolicy } from '../domain/defense'
+import { getDefensePolicy, policyVersion } from '../domain/defense'
 import { normalizeRuleConfig } from '../domain/scheduleRules'
 import type { DefenseType, RuleConfig } from '../types/ruleConfig'
 
@@ -18,6 +18,7 @@ export function getDefaultRuleConfig(defenseType: DefenseType): RuleConfig {
   const policy = getDefensePolicy(defenseType)
   return normalizeRuleConfig({
     ...policy,
+    policyVersion: defenseType === '中期答辩' ? 2 : policyVersion,
     defenseType,
     startDate,
     endDate: addDays(startDate, 10),

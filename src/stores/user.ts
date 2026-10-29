@@ -3,9 +3,9 @@ import { ref } from 'vue'
 import { login as loginApi, logout as logoutApi } from '../api/auth'
 
 export const useUserStore = defineStore('user', () => {
-  const username = ref(localStorage.getItem('username') || '')
-  const isAdmin = ref(localStorage.getItem('isAdmin') === 'true')
-  const isLoggedIn = ref(!!localStorage.getItem('authToken'))
+  const username = ref('本机管理员')
+  const isAdmin = ref(true)
+  const isLoggedIn = ref(true)
 
   const login = async (name: string, password: string) => {
     const result = await loginApi(name, password)

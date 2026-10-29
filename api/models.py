@@ -13,6 +13,9 @@ class Teacher(models.Model):
     available_types = models.JSONField(default=list, verbose_name="可参加答辩类型")
     campus_preference = models.CharField(max_length=20, blank=True, verbose_name="校区偏好")
     unavailable_times = models.TextField(blank=True, verbose_name="不可用时间")
+    available_times = models.TextField(blank=True, verbose_name="可用时间")
+    availability_confirmed = models.BooleanField(default=False, verbose_name="可用时间已确认")
+    allow_multiple_students = models.BooleanField(default=False, verbose_name="允许同组多名指导学生")
     avoid_teacher_names = models.TextField(blank=True, verbose_name="不宜同组名单")
     remark = models.TextField(blank=True, verbose_name="备注")
 

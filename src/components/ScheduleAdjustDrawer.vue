@@ -24,8 +24,8 @@
       </div>
     </template>
     <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" :disabled="readonly">
-      <el-form-item label="组名" prop="groupName">
-        <el-input v-model="form.groupName" />
+      <el-form-item label="固定组号" prop="groupName">
+        <el-input v-model="form.groupName" :disabled="defenseType !== '中期答辩'" />
       </el-form-item>
 
       <el-form-item label="日期" prop="date">
@@ -45,8 +45,8 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="教室" prop="classroom">
-        <el-select v-model="form.classroom" style="width: 100%">
+      <el-form-item label="教室（后续预约）" prop="classroom">
+        <el-select v-model="form.classroom" clearable placeholder="时间表确定后预约" style="width: 100%">
           <el-option v-for="c in filteredClassrooms" :key="c" :label="c" :value="c" />
         </el-select>
       </el-form-item>
@@ -103,6 +103,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { isPreDefenseChairEligible } from '../domain/scheduleExperts'
 import type { FormInstance, FormRules } from 'element-plus'
 import type { ScheduleGroup, ScheduleTeacher, ScheduleStudent, DefenseType } from '../types/schedule'
 
@@ -160,6 +161,7 @@ watch(
 )
 
 const chairOptions = computed(() => props.teachers.filter(teacher => {
+  if (props.defenseType === '预答辩') return isPreDefenseChairEligible(teacher.title)
   const qualified = props.defenseType === '正式答辩' ? teacher.title === '教授' : ['教授', '副教授'].includes(teacher.title)
   return qualified && (teacher.roles.includes(props.defenseType === '正式答辩' ? '主席' : '组长') || teacher.id === form.chairId)
 }))
@@ -223,7 +225,6 @@ const rules = reactive<FormRules>({
   date: [{ required: true, message: '请选择日期', trigger: 'change' }],
   timeRange: [{ required: true, message: '请选择时间段', trigger: 'change' }],
   campus: [{ required: true, message: '请选择校区', trigger: 'change' }],
-  classroom: [{ required: true, message: '请选择教室', trigger: 'change' }],
   secretary: [{ required: true, message: '请选择秘书', trigger: 'change' }],
   teachers: [{ required: true, type: 'array', message: '请选择专家列表', trigger: 'change' }],
   students: [{ required: true, type: 'array', message: '请选择学生列表', trigger: 'change' }]

@@ -11,5 +11,5 @@ const backendTypes: Record<DefenseType, BackendDefenseType> = {
 }
 export const toBackendDefenseType = (type: DefenseType): BackendDefenseType => backendTypes[type]
 export const isDefenseType = (value: unknown): value is DefenseType => defenseTypes.includes(value as DefenseType)
-export const policyVersion = sharedPolicy.policyVersion as 2
+export const policyVersion = sharedPolicy.policyVersion as 3
 export const getDefensePolicy = (type: DefenseType) => sharedPolicy.scenarios[toBackendDefenseType(type)]

@@ -1,6 +1,6 @@
 # 架构入口
 
-详细当前实现见 [V2 架构升级说明](架构升级说明.md)，开发边界见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+当前预答辩与正式答辩使用 policy 3，见[三阶段排期算法与优化](三阶段排期算法与优化.md)。[V2 架构升级说明](架构升级说明.md)保留旧版本边界和历史验证。开发边界见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 ```mermaid
 flowchart TD
@@ -16,7 +16,7 @@ flowchart TD
     DRF --> Integrity[写一致性 revision 冻结 审计]
 ```
 
-新增复杂业务优先放入 `api/services/`；算法领域保持独立于 ORM。当前主求解流程仍主要位于 `algorithm.py`，HTTP 层仍有部分既有编排，细化时按用例小步迁移。
+新增复杂业务优先放入 `api/services/`；算法领域保持独立于 ORM。`algorithm.py` 按规则版本分流，policy 3 三阶段流程位于 `scheduling/personnel_first.py`，硬约束校验位于 `scheduling/current.py`。旧 policy 1/2 继续使用原路径。
 
 全局写锁与同步生成是现有一致性取舍；吞吐、任务队列和数据库切换需要依据容量测试另作决策。
 

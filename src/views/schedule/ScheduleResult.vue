@@ -27,11 +27,11 @@
           :has-result="!!result?.groups.length"
           :can-manage="canManage"
           :guided="guided"
-          @generate="prepareGeneration"
+          @generate="prepareGeneration()"
+          @generate-linked="prepareLinkedGeneration()"
           @refresh="handleRefresh"
           @export="handleExportClick"
         />
-        <el-button v-if="canManage && defenseType !== '中期答辩' && (!guided || guidedStage === 'review')" class="mt-3" :disabled="loading || publishing || moving" @click="prepareLinkedGeneration">联合生成预答辩与正式答辩</el-button>
       </div>
     </div>
 
@@ -79,21 +79,13 @@
         <div><span class="text-gray-500">总组数：</span>{{ meta.groupCount }}</div>
         <div><span class="text-gray-500">总学生数：</span>{{ meta.studentCount }}</div>
         <div><span class="text-gray-500">总专家数：</span>{{ meta.teacherCount }}</div>
-        <div><span class="text-gray-500">冲突数量：</span>{{ meta.conflictCount }}</div>
+        <div><span class="text-gray-500">错误：</span>{{ exportStats.errorCount }}</div>
+        <div><span class="text-gray-500">提醒：</span>{{ meta.conflictCount - exportStats.errorCount }}</div>
+        <div v-if="result?.rules?.expert_count">本次专家：{{ result.rules.expert_count }} 人（含组长）</div>
+        <div v-if="result?.rules?.start_date">排班范围：{{ result.rules.start_date }} 至 {{ result.rules.end_date }}</div>
+        <div v-if="result?.allocationStatus">分配状态：{{ result.allocationStatus === 'partial' ? '部分安排，待处理剩余学生' : '全部学生已安排' }}</div>
         <div v-if="showRandomSeed" class="random-seed-row">
           <span class="text-gray-400 text-xs">种子：{{ result?.randomSeed }}</span>
-          <el-tooltip v-if="canRegenerateWithSeed" content="换一组（使用新种子重新生成）" placement="top">
-            <el-button
-              link
-              type="primary"
-              size="small"
-              class="regenerate-btn"
-              :disabled="loading || publishing || moving"
-              @click="handleRegenerateWithNewSeed"
-            >
-              <el-icon><RefreshRight /></el-icon>
-            </el-button>
-          </el-tooltip>
         </div>
       </div>
       <section v-if="!loading && result?.groups.length" class="student-count-summary" aria-label="学生人数分布">
@@ -101,7 +93,7 @@
           <strong>学生人数分布</strong>
           <span v-if="studentCountSummary.target !== null">本版本目标 {{ studentCountSummary.target }} 人/组</span>
           <span v-else>该版本未记录目标人数</span>
-          <span v-if="studentCountSummary.targetGroupCount !== null" class="student-count-match">达到目标 {{ studentCountSummary.targetGroupCount }} / {{ studentCountSummary.groupCount }} 组</span>
+          <span v-if="studentCountSummary.preferredGroupCount !== null" class="student-count-match">{{ studentCountSummary.preferredMinimum === studentCountSummary.target ? '达到目标' : `${studentCountSummary.preferredMinimum}～${studentCountSummary.preferredMaximum} 人均衡区间` }} {{ studentCountSummary.preferredGroupCount }} / {{ studentCountSummary.groupCount }} 组</span>
         </div>
         <div class="student-count-buckets">
           <span v-for="bucket in studentCountSummary.buckets" :key="bucket.size" class="student-count-bucket" :class="{ 'is-target': bucket.isTarget }">
@@ -121,6 +113,14 @@
       <p v-if="onlyProblems" class="section-tip w-full">全局问题（如未分组学生）仍显示在冲突检测中，不一定属于某个分组。</p>
     </div>
 
+    <el-card v-if="result?.unassignedStudents?.length" shadow="never">
+      <template #header><strong>未安排学生（{{ result.unassignedStudents.length }} 人，已尝试局部补排）</strong></template>
+      <el-table :data="result.unassignedStudents" row-key="id"><el-table-column prop="name" label="学生" width="140" /><el-table-column prop="reason" label="未安排原因" /></el-table>
+    </el-card>
+    <details v-if="result?.teacherWorkloads?.length" class="bg-white p-4 rounded-lg shadow-sm">
+      <summary>教师工作量与任务分布</summary>
+      <el-table :data="result.teacherWorkloads" row-key="id"><el-table-column prop="name" label="教师" /><el-table-column prop="supervisedStudents" label="指导学生数" /><el-table-column prop="studentCount" label="参与学生数" /><el-table-column prop="groupCount" label="参与组数" /><el-table-column label="到场时段" min-width="240"><template #default="{ row }">{{ row.sessions.join('；') || '未安排' }}</template></el-table-column></el-table>
+    </details>
     <div v-if="loading" class="bg-white p-6 rounded-lg shadow-sm">
       <p v-if="loadingMessage" class="mb-4 text-sm text-gray-600" role="status">{{ loadingMessage }}</p>
       <el-skeleton :rows="6" animated />
@@ -187,7 +187,7 @@
 
   <el-dialog v-model="generationVisible" title="生成前，确认这次安排" width="min(560px, 94vw)" :close-on-click-modal="false">
     <template v-if="generationConfig">
-      <p class="mb-4">确认后生成新草稿，历史版本保留。</p>
+      <p class="mb-4">{{ defenseType === '正式答辩' ? '沿用当前预答辩的固定组号、学生、组长、专家和秘书；按本阶段要求补充本院专家，重新核对共同可用时间。' : '确认后生成新草稿，历史版本保留。每组仅允许 5～7 人，以 6 人为主，尽量减少 5 或 7 人组。平衡教师次数与参与学生数，再集中同日上午下午。' }}</p>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="答辩类型">{{ defenseType }}</el-descriptions-item>
         <el-descriptions-item label="答辩日期">{{ generationConfig.startDate || '未设置' }} 至 {{ generationConfig.endDate || '未设置' }}</el-descriptions-item>
@@ -281,10 +281,11 @@
     </template>
   </el-dialog>
 
-  <el-dialog v-model="linkedVisible" title="联合生成两阶段答辩安排" width="min(680px, 94vw)" :close-on-click-modal="false">
-    <p class="mb-4">会创建两份新草稿，并为本轮重新分配秘书；正式答辩沿用本轮预答辩的学生分组和秘书。历史版本保留。</p>
+  <el-dialog v-model="linkedVisible" title="联合生成预答辩与正式答辩" width="min(680px, 94vw)" :close-on-click-modal="false">
+    <p class="mb-4">预答辩每组仅允许 5～7 人，以 6 人为主，余数用少量 5 或 7 人组消化；3 位专家含组长。平衡教师出场次数和学生数，尽量安排同日上午下午。先尝试每组最多 1 位外院专家，仅在无法满足人数底线时允许必要的第 2 位外院导师。正式阶段沿用固定组号、学生和原教师，补充本院专家至 5 人，并核对共同可用时间。教室可后续补充。</p>
+    <el-form-item label="预答辩专家人数"><el-select v-model="linkedExpertCount" :disabled="linkedPreflightLoading" @change="updateLinkedExpertCount"><el-option :value="3" label="3 人（含组长）" /><el-option :value="5" label="5 人（含组长，增加 2 名本院专家）" /></el-select></el-form-item>
     <el-descriptions v-if="linkedConfigs" :column="1" border>
-      <el-descriptions-item v-for="config in linkedConfigs" :key="config.defenseType" :label="config.defenseType">{{ config.startDate }} 至 {{ config.endDate }}；学生 {{ config.studentCount.target }} 人/组；专家{{ config.defenseType === '预答辩' ? '至少' : '目标' }} {{ config.defenseType === '预答辩' ? config.expertCount.min : config.expertCount.target }} 人<span v-if="config.defenseType !== '预答辩'">（至少 {{ config.expertCount.min }} 人）</span>，含主席/组长{{ config.defenseType === '预答辩' ? '，每位评审都须有本组学生' : '' }}</el-descriptions-item>
+      <el-descriptions-item v-for="config in linkedConfigs" :key="config.defenseType" :label="config.defenseType">{{ config.startDate }} 至 {{ config.endDate }}；学生目标 {{ config.studentCount.target }} 人/组；专家 {{ config.expertCount.target }} 人（含组长）</el-descriptions-item>
     </el-descriptions>
     <el-alert v-if="linkedError" class="mt-4" :title="linkedError" type="warning" :closable="false" show-icon />
     <div v-if="linkedPreflightStatus === 'failed'" class="mt-4 space-y-3" role="alert">
@@ -492,7 +493,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document, Warning, CircleCloseFilled, InfoFilled, Loading, RefreshRight } from '@element-plus/icons-vue'
+import { Document, Warning, CircleCloseFilled, InfoFilled, Loading } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import WorkflowSteps from '../../components/WorkflowSteps.vue'
 import WorkflowStatusBar from '../../components/WorkflowStatusBar.vue'
@@ -511,7 +512,7 @@ import ExportProgress from '../../components/ExportProgress.vue'
 import SoftConstraintPanel from '../../components/SoftConstraintPanel.vue'
 import OperationLogTable from '../../components/OperationLogTable.vue'
 import type { ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher, ScheduleWorkflowState } from '../../types/schedule'
-import { generateSchedule, regenerateScheduleWithNewSeed, generateLinkedSchedule, getScheduleResults, listScheduleVersions, publishSchedule, moveScheduleStudent, preflightSchedule, type ScheduleVersionOption, type PreflightResult } from '../../api/schedule'
+import { generateSchedule, generateLinkedSchedule, getScheduleResults, listScheduleVersions, publishSchedule, moveScheduleStudent, preflightSchedule, type ScheduleVersionOption, type PreflightResult } from '../../api/schedule'
 import { checkScheduleConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
@@ -528,6 +529,7 @@ import type { Classroom } from '../../types/classroom'
 import { useScheduleContext, type ScheduleContext } from '../../composables/useScheduleContext'
 import { getScheduleExperts } from '../../domain/scheduleExperts'
 import { buildScheduleRules } from '../../domain/scheduleRules'
+import { orderScheduleGroups } from '../../domain/scheduleOrder'
 import { summarizeStudentCounts } from '../../domain/studentCountSummary'
 import { validateWizardRules } from '../../utils/wizardValidation'
 import { useAdminGuard } from '../../utils/adminGuard'
@@ -545,6 +547,13 @@ const publishBar = ref<HTMLElement>()
 const generationVisible = ref(false)
 const linkedVisible = ref(false)
 const linkedConfigs = ref<[RuleConfig, RuleConfig] | null>(null)
+const linkedExpertCount = ref(3)
+const updateLinkedExpertCount = () => {
+  if (linkedConfigs.value) linkedConfigs.value = linkedConfigs.value.map((config, index) => ({ ...config, mentorAvoidance: false, expertCount: { target: index === 0 ? linkedExpertCount.value : 5, min: index === 0 ? linkedExpertCount.value : 5 } })) as [RuleConfig, RuleConfig]
+  linkedPreflightStatus.value = 'idle'
+  linkedPreflightPre.value = null
+  linkedPreflightFormal.value = null
+}
 const linkedError = ref('')
 const generationConfig = ref<RuleConfig | null>(null)
 const generationStudentCount = ref(0)
@@ -575,11 +584,6 @@ const canEdit = computed(() => canManage.value && result.value?.status !== 'publ
 // 随机种子展示：仅正式答辩且种子存在时显示
 const showRandomSeed = computed(() => {
   return defenseType.value === '正式答辩' && result.value?.randomSeed !== undefined && result.value?.randomSeed !== null && result.value.randomSeed !== ''
-})
-
-// 能否换一组：正式答辩 + 管理员 + 草稿状态 + 当前版本
-const canRegenerateWithSeed = computed(() => {
-  return showRandomSeed.value && canManage.value && result.value?.status !== 'published' && result.value?.isCurrent !== false
 })
 
 const publishing = ref(false)
@@ -926,7 +930,10 @@ const prepareGeneration = async () => {
       getRuleConfig(context.defenseType), listStudents(context.defenseType)
     ])
     if (!workspace.isCurrent(context)) return
-    generationConfig.value = config
+    generationConfig.value = context.defenseType === '预答辩'
+      ? { ...config, expertCount: { target: 3, min: 3 } }
+      : context.defenseType === '正式答辩'
+        ? { ...config, preservePreDefenseGroups: true, mentorAvoidance: false } : config
     generationStudentCount.value = students.filter(student => student.defenseTypes.includes(context.defenseType)).length
     // 重置预检状态
     preflightStatus.value = 'idle'
@@ -947,7 +954,10 @@ const prepareLinkedGeneration = async () => {
     ])
     if (!workspace.isCurrent(context)) return
     linkedConfigs.value = [pre, { ...formal, preservePreDefenseGroups: true }]
+    linkedExpertCount.value = pre.expertCount.target
+    updateLinkedExpertCount()
     const errors = [...validateWizardRules(pre), ...validateWizardRules(formal)]
+    if (formal.startDate <= pre.endDate) errors.push('正式答辩开始日期必须晚于预答辩结束日期，请修改两阶段日期。')
     if (!students.some(student => student.defenseTypes.includes('预答辩') && student.defenseTypes.includes('正式答辩'))) errors.push('请先为联合安排的学生勾选预答辩与正式答辩两个参与环节。')
     linkedError.value = errors.join(' ')
     // 重置联合预检状态
@@ -1082,74 +1092,6 @@ const doGenerate = async (config: RuleConfig) => {
     currentConflict.value = null
     ElMessage.error(`${errorMsg.value}。若请求超时，可重试获取同一生成结果。`)
   } finally { if (workspace.isCurrent(context)) loading.value = false }
-}
-
-// 换一组：使用新种子重新生成排期（正式答辩专用）
-const handleRegenerateWithNewSeed = async () => {
-  if (!requireAdmin() || !canRegenerateWithSeed.value || loading.value) return
-  const context = workspace.begin()
-  const previousResult = result.value
-  loading.value = true
-  loadingMessage.value = '正在使用新的随机种子重新计算正式答辩安排。计算期间请勿重复点击；若请求超时，重新进入页面可查看已保存的最新版本。'
-  errorMsg.value = ''
-  conflicts.value = []
-  currentConflict.value = null
-  try {
-    const config = await getRuleConfig(context.defenseType)
-    if (!workspace.isCurrent(context)) return
-    const scheduleResult = await regenerateScheduleWithNewSeed(
-      context.defenseType,
-      config,
-      previousResult?.randomSeed
-    )
-    if (!workspace.isCurrent(context)) return
-    result.value = scheduleResult
-    const options = await listScheduleVersions(context.defenseType)
-    if (!workspace.isCurrent(context)) return
-    versions.value = options
-    selectedVersion.value = undefined
-    if (previousResult && sameScheduleAssignments(previousResult, scheduleResult)) {
-      ElMessage.warning('新种子已生效，但当前约束下可选安排有限，本次结果与上一版相同')
-    } else {
-      ElMessage.success('已使用新种子重新生成，请核对冲突后发布')
-    }
-    if (!applyConflictsFromResult(scheduleResult)) {
-      const checked = await checkScheduleConflicts(context.defenseType, scheduleResult)
-      if (!workspace.isCurrent(context)) return
-      conflicts.value = checked
-    }
-    await loadOptions(context)
-    if (!workspace.isCurrent(context)) return
-    await updateOptimizationScore(scheduleResult, context)
-  } catch (error) {
-    if (!workspace.isCurrent(context)) return
-    errorMsg.value = error instanceof Error ? error.message : '重新生成失败'
-    conflicts.value = []
-    currentConflict.value = null
-    ElMessage.error(`${errorMsg.value}。若请求超时，服务器可能仍在计算；重新进入页面可查看已保存的最新版本。`)
-  } finally {
-    if (workspace.isCurrent(context)) {
-      loading.value = false
-      loadingMessage.value = ''
-    }
-  }
-}
-
-const sameScheduleAssignments = (left: ScheduleResult, right: ScheduleResult) => {
-  const assignments = (schedule: ScheduleResult) => schedule.groups
-    .map(group => ({
-      groupName: group.groupName,
-      campus: group.campus,
-      classroom: group.classroom,
-      date: group.date,
-      timeRange: group.timeRange,
-      chairId: group.chairId ?? null,
-      secretaryId: group.secretaryId ?? null,
-      teacherIds: group.teachers.map(teacher => teacher.id).sort((a, b) => a - b),
-      studentIds: group.students.map(student => student.id).sort((a, b) => a - b)
-    }))
-    .sort((a, b) => a.groupName.localeCompare(b.groupName))
-  return JSON.stringify(assignments(left)) === JSON.stringify(assignments(right))
 }
 
 // 根据错误类型跳转到对应的数据补齐页面
@@ -1309,7 +1251,7 @@ const dateFilter = ref('')
 const campusFilter = ref('')
 const onlyProblems = ref(false)
 const availableDates = computed(() => [...new Set(result.value?.groups.map(group => group.date) || [])].sort())
-const filteredGroups = computed(() => (result.value?.groups || []).filter(group =>
+const filteredGroups = computed(() => orderScheduleGroups(result.value?.groups || []).filter(group =>
   (!dateFilter.value || group.date === dateFilter.value)
   && (!campusFilter.value || group.campus === campusFilter.value)
   && (!onlyProblems.value || groupConflictCountMap.value[group.id] > 0)))
@@ -1328,7 +1270,7 @@ watch(() => ({
 
 const emptyResultDescription = computed(() => {
   return canManage.value
-    ? '还没有分组。资料和要求确认后，点击上方"生成排期草稿"。'
+    ? `还没有分组。资料和要求确认后，点击上方“${defenseType.value === '中期答辩' ? '生成排期草稿' : defenseType.value === '预答辩' ? '生成预答辩草稿' : '沿用预答辩生成正式答辩'}”。`
     : '当前暂无排期结果，请联系管理员生成排期。'
 })
 

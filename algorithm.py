@@ -101,6 +101,11 @@ def generate_schedule(
     parsed_students = [parse_student(s) for s in students]
     parsed_rooms = [parse_room(r) for r in rooms]
 
+    from scheduling.current import enabled, generate
+    if enabled(rules):
+        validate_inputs(parsed_teachers, parsed_students, [], rules)
+        return generate(parsed_teachers, parsed_students, rules)
+
     # Keep generated randomness reproducible by returning and persisting its seed.
     # 仅正式答辩生成随机种子；预答辩用固定种子 0 确保确定性，也避免保存无用种子。
     # 使用 32 位种子，确保前后端（JS Number 53 位安全整数范围内）精度一致。
@@ -331,7 +336,7 @@ def validate_inputs(
 ) -> None:
     if not students:
         raise SchedulingError("没有可参加排期的学生数据，请先导入学生")
-    if not teachers:
+    if not teachers and rules.get('policy_version') != 3:
         raise SchedulingError("没有可参加排期的教师数据，请先导入教师")
 
     required_rule_fields = ["start_date", "end_date", "group_size", "expert_count"]
@@ -1174,6 +1179,9 @@ def detect_global_conflicts(
     rooms: Sequence[Room],
     rules: Dict[str, Any],
 ) -> List[dict]:
+    from scheduling.current import enabled, validate
+    if enabled(rules):
+        return validate(drafts, students, teachers, rules)
     conflicts: List[dict] = []
     teacher_map = {t.id: t for t in teachers}
     student_map = {s.id: s for s in students}

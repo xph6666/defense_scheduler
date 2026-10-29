@@ -15,6 +15,9 @@ export interface Teacher {
   availableTypes: string[]
   campusPreference: '创新港' | '兴庆' | '不限'
   unavailableTimes: string
+  availableTimes?: string
+  availabilityConfirmed?: boolean
+  allowMultipleStudents?: boolean
   avoidTeacherNames: string
   remark?: string
 }

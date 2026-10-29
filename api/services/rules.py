@@ -7,7 +7,8 @@ def normalize_schedule_rules(raw):
     if not isinstance(raw, dict):
         raise ValidationError('排期规则必须是对象')
     rules = dict(raw)
-    for internal_key in ('_source_pre_version_id', 'reserve_formal_resources', 'refresh_secretary_bindings'):
+    for internal_key in ('_source_pre_version_id', 'reserve_formal_resources', 'refresh_secretary_bindings',
+                         'linked_translation', 'source_chair_title'):
         rules.pop(internal_key, None)
     defense_type = rules.setdefault('defense_type', 'pre')
     if defense_type not in ('pre', 'formal', 'mid'):
@@ -15,13 +16,14 @@ def normalize_schedule_rules(raw):
     if 'mentor_avoidance' in rules and 'avoid_supervisor' not in rules:
         rules['avoid_supervisor'] = rules['mentor_avoidance']
     # Historical integrations supplied low-level counts without a schema version.
-    # Keep those contracts readable; all new UI configurations use schema 2.
+    # Keep historical contracts readable; current linked UI uses policy 3.
     version = rules.setdefault('policy_version', 1 if 'expert_count' in raw else 2)
-    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2):
+    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2, 3):
         raise ValidationError('不支持的规则版本')
     if version == 1:
         return rules
-    config = default_rule_config(defense_type)
+    config = default_rule_config(defense_type, version)
+    current = version == 3 and defense_type != 'mid'
     defaults = {
         'start_date': config['startDate'], 'end_date': config['endDate'],
         'group_size': config['studentCount']['target'],
@@ -82,13 +84,13 @@ def normalize_schedule_rules(raw):
         raise ValidationError('秘书职称必须为讲师及以上')
     if rules['course_half_day_blocking'] is not True:
         raise ValidationError('有课的半天不能安排答辩')
-    if defense_type == 'formal' and rules['formal_mentor_same_session'] is not True:
+    if defense_type == 'formal' and not current and rules['formal_mentor_same_session'] is not True:
         raise ValidationError('正式答辩导师必须与自己的学生同场到场')
     avoidance = bool(rules.get('avoid_supervisor', defense_type == 'formal'))
     rules['avoid_supervisor'] = defense_type == 'formal' and avoidance
     rules['supervisor_policy'] = ('avoid' if avoidance else 'none') if defense_type == 'formal' else 'same_group'
     # [TASK-P04 修改] 后端规则归一化与界面人数口径保持一致。
-    floor = 4 if defense_type == 'pre' else 5
+    floor = 3 if current else 4 if defense_type == 'pre' else 5
     try:
         if any(isinstance(rules[k], bool) or not isinstance(rules[k], int) for k in (
             'expert_count', 'expert_min', 'group_min', 'group_size', 'group_max', 'formal_software_min')):
@@ -99,8 +101,18 @@ def normalize_schedule_rules(raw):
             raise ValueError
         if defense_type == 'mid' and not 10 <= rules['group_min'] <= rules['group_size'] <= rules['group_max'] <= 12:
             raise ValueError
-        if defense_type == 'formal' and not 3 <= rules['formal_software_min'] <= rules['expert_count']:
+        if current and (rules['expert_count'] not in (3, 5) or rules['expert_min'] != rules['expert_count']):
+            raise ValueError
+        if defense_type == 'formal' and not current and not 3 <= rules['formal_software_min'] <= rules['expert_count']:
             raise ValueError
     except (TypeError, ValueError):
         raise ValidationError('人数规则不符合本类答辩的资格要求')
+    if current:
+        if not 5 <= rules['group_size'] <= 7:
+            raise ValidationError('预答辩及正式答辩学生目标人数必须在 5～7 人之间，建议 6 人')
+        rules.update(group_min=max(5, rules['group_min']), group_max=7,
+                     formal_software_min=0, formal_mentor_same_session=False, room_constraints=False)
+        cap = rules.setdefault('external_expert_max', 2)
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap not in (1, 2):
+            raise ValidationError('外院专家上限只能为 1 或 2；第二位仅用于必要的导师组合')
     return rules

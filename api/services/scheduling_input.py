@@ -3,6 +3,8 @@ from ..models import Room, ScheduleVersion, Student, Teacher
 from ..serializers import DEFENSE_TYPE_LABELS
 from .time_data import parse_time_entries, split_time_text
 from .student_participation import nonparticipation_reason
+from ..recurring_time import is_no_limit_entry
+from scheduling.remarks import teacher_remark_rules
 
 def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretary_bindings=None):
     """按答辩类型过滤参与者并转换为算法输入结构。
@@ -47,12 +49,20 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
 
     teacher_payload = []
     for teacher in teachers:
+        allow_multiple, unknown_remarks = teacher_remark_rules(teacher.remark)
+        if rules.get('policy_version') == 3:
+            if unknown_remarks:
+                data_notices.append({'type': 'remark_confirmation', 'description': f'教师 {teacher.name} 的备注尚未转换为排班规则，请核对结构化配置：{"；".join(unknown_remarks)}', 'related_ids': [teacher.id]})
+            if not teacher.availability_confirmed and not (teacher.unavailable_times.strip() or teacher.available_times.strip()):
+                data_notices.append({'type': 'availability_pending', 'description': f'教师 {teacher.name} 尚未提供额外时间限制，草稿暂按无额外限制计算；实际到场时间仍需核对，未标记为已确认', 'related_ids': [teacher.id]})
         forbidden_with = [
             teacher_by_name[name].id
             for name in [item.strip() for item in teacher.avoid_teacher_names.replace('，', ',').split(',') if item.strip()]
             if name in teacher_by_name
         ]
         unavailable_times, invalid_times = parse_time_entries(teacher.unavailable_times, date_range)
+        available_windows, invalid_windows = parse_time_entries(teacher.available_times, date_range)
+        invalid_times = [*invalid_times, *invalid_windows]
         if rules.get('course_half_day_blocking'):
             unavailable_times = expand_busy_half_days(unavailable_times)
         if invalid_times:
@@ -78,6 +88,13 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
             'is_software_teacher': teacher.is_software_teacher or (not teacher.is_external and '软件' in teacher.college),
             'available_time': unavailable_times,
             'availability_invalid': bool(invalid_times),
+            'available_windows': available_windows,
+            'availability_restricted': bool(teacher.available_times.strip()) and not all(
+                is_no_limit_entry(entry) for entry in split_time_text(teacher.available_times)),
+            'availability_confirmed': teacher.availability_confirmed or bool(teacher.unavailable_times.strip() or teacher.available_times.strip()),
+            'availability_assumed': not teacher.availability_confirmed and not (
+                teacher.unavailable_times.strip() or teacher.available_times.strip()),
+            'allow_multiple_students': teacher.allow_multiple_students or allow_multiple,
             'campus_preference': teacher.campus_preference,
             'forbidden_with': forbidden_with,
         })
@@ -207,6 +224,8 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         ),
     )
 
+    if rules.get('policy_version') == 3:
+        return {'teachers': teacher_payload, 'students': student_payload, 'rooms': []}, data_notices
     room_payload = []
     for room in rooms:
         available_times, invalid_times = parse_time_entries(room.available_times, date_range)
@@ -221,8 +240,6 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
                 'related_ids': [room.id],
             })
         elif not available_times:
-            from ..recurring_time import is_no_limit_entry
-
             room_entries = split_time_text(room.available_times)
             if room_entries and not all(is_no_limit_entry(item) for item in room_entries):
                 # 例如可用时间只写了"周末全天"而排期范围全在工作日：
@@ -235,7 +252,6 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
                     ),
                     'related_ids': [room.id],
                 })
-        from ..recurring_time import is_no_limit_entry
         restricted = any(not is_no_limit_entry(item) for item in split_time_text(room.available_times))
         room_payload.append({
             'id': room.id,

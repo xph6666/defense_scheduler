@@ -144,13 +144,13 @@ class RuleDefaultsV2Tests(TestCase):
     def test_each_scenario_matches_documented_counts_and_today(self):
         today = date(2026, 10, 2)
         with patch('api.serializers.timezone.localdate', return_value=today):
-            for kind, target, minimum, maximum, expert in (('pre', 6, 4, 8, 4), ('formal', 6, 4, 8, 5), ('mid', 12, 10, 12, 5)):
+            for kind, target, minimum, maximum, expert in (('pre', 6, 5, 7, 3), ('formal', 6, 5, 7, 5), ('mid', 12, 10, 12, 5)):
                 config = default_rule_config(kind)
                 self.assertEqual(config['studentCount'], {'target': target, 'min': minimum, 'max': maximum})
                 self.assertEqual(config['expertCount']['target'], expert)
                 self.assertEqual(config['startDate'], today.isoformat())
                 self.assertEqual(config['endDate'], (today + timedelta(days=10)).isoformat())
-                self.assertEqual(config['mentorAvoidance'], kind == 'formal')
+                self.assertFalse(config['mentorAvoidance'])
                 serializer = RuleConfigSerializer(data={'defense_type': kind})
                 self.assertTrue(serializer.is_valid(), serializer.errors)
 
@@ -169,7 +169,7 @@ class RuleDefaultsV2Tests(TestCase):
             normalize_schedule_rules({'defense_type': 'mid', 'policy_version': 2, 'group_max': 13})
 
     def test_partial_rule_update_preserves_custom_dates_and_bounds(self):
-        rules = RuleConfig.objects.create(defense_type='pre', config={**default_rule_config('pre'), 'endDate': '2030-01-01'})
+        rules = RuleConfig.objects.create(defense_type='pre', config={**default_rule_config('pre', 2), 'endDate': '2030-01-01'})
         serializer = RuleConfigSerializer(rules, data={'studentCount': {'target': 7}}, partial=True)
         self.assertTrue(serializer.is_valid(), serializer.errors)
         updated = serializer.save()
@@ -179,13 +179,13 @@ class RuleDefaultsV2Tests(TestCase):
     def test_expert_bounds_cannot_bypass_documented_headcounts(self):
         for kind, count in (('pre', {'target': 3, 'min': 3}), ('pre', {'target': 4, 'min': 4, 'max': 5}), ('mid', {'target': 4, 'min': 4}),
                             ('formal', {'target': 5, 'min': 4}), ('formal', {'target': 4, 'min': 4})):
-            serializer = RuleConfigSerializer(data={'defense_type': kind, 'expertCount': count})
+            serializer = RuleConfigSerializer(data={'defense_type': kind, 'policyVersion': 2, 'expertCount': count})
             self.assertFalse(serializer.is_valid())
             self.assertIn('expertCount', serializer.errors)
 
     def test_pre_allows_minimum_four_and_more_mentors_without_a_fixed_maximum(self):
         for count in (4, 5, 6):
-            serializer = RuleConfigSerializer(data={'defense_type': 'pre', 'expertCount': {'target': count, 'min': 4}})
+            serializer = RuleConfigSerializer(data={'defense_type': 'pre', 'policyVersion': 2, 'expertCount': {'target': count, 'min': 4}})
             self.assertTrue(serializer.is_valid(), serializer.errors)
             self.assertIsNone(serializer.validated_data['config']['expertCount']['max'])
 
@@ -195,7 +195,7 @@ class RuleDefaultsV2Tests(TestCase):
         client = APIClient()
         client.force_authenticate(User.objects.create_user('adjustable-count', is_staff=True))
         for kind, count in [('pre', {'target': 6, 'min': 6}), ('formal', {'target': 7, 'min': 6})]:
-            response = client.post('/api/rule-config/', {'defense_type': kind, 'expertCount': count}, format='json')
+            response = client.post('/api/rule-config/', {'defense_type': kind, 'policyVersion': 2, 'expertCount': count}, format='json')
             self.assertEqual(response.status_code, 200, response.data)
             fetched = client.get('/api/rule-config/', {'defense_type': kind})
             self.assertEqual(fetched.data['expertCount']['target'], count['target'])
@@ -203,7 +203,7 @@ class RuleDefaultsV2Tests(TestCase):
 
     def test_explicit_count_edit_releases_legacy_formal_maximum(self):
         row = RuleConfig.objects.create(defense_type='formal', config={
-            **default_rule_config('formal'), 'expertCount': {'target': 5, 'min': 5, 'max': 5}})
+            **default_rule_config('formal', 2), 'expertCount': {'target': 5, 'min': 5, 'max': 5}})
         serializer = RuleConfigSerializer(row, data={'expertCount': {'target': 6, 'min': 5}}, partial=True)
         self.assertTrue(serializer.is_valid(), serializer.errors)
         updated = serializer.save()

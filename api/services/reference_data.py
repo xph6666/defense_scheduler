@@ -24,6 +24,21 @@ REFERENCE_FIELDS = (
 )
 
 
+def correct_imported_affiliation(payload):
+    """Explicit corrections from the confirmed source roster, only at import.
+
+    Scheduling and presentation continue to read the stored affiliation fields.
+    This is an exact source-data correction, not a general name classifier.
+    """
+    if payload.get('name') in ('王飞（软）', '王飞(软)'):
+        payload.update(isExternal=False, isSoftwareTeacher=True, college='软件学院')
+    elif payload.get('name') == '王飞':
+        payload.update(isExternal=True, isSoftwareTeacher=False)
+        if payload.get('college') == '软件学院':
+            payload['college'] = '外院（学院待确认）'
+    return payload
+
+
 def sync_student_references(attrs, instance=None):
     """Return validated model attributes for an ID or legacy-name update.
 

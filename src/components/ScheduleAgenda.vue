@@ -39,7 +39,7 @@ defineEmits<{ (event: 'adjust', group: ScheduleGroup): void; (event: 'problem', 
 const highlightedGroupIds = computed(() => props.highlightedGroupIds || [])
 
 const days = computed(() => {
-  const sorted = [...props.groups].sort((a, b) => a.date.localeCompare(b.date) || a.timeRange.localeCompare(b.timeRange) || a.classroom.localeCompare(b.classroom))
+  const sorted = props.groups
   const dates = [...new Set(sorted.map(group => group.date))]
   return dates.map(date => ({ date, groups: sorted.filter(group => group.date === date) }))
 })

@@ -24,7 +24,7 @@
       </section>
 
       <section v-else-if="step === 2" class="workbench-panel" v-loading="loading">
-        <div class="section-heading"><h2>核对三份资料</h2><el-button :loading="loading" @click="loadInputs">重新检查资料</el-button></div>
+        <div class="section-heading"><h2>核对排班资料</h2><el-button :loading="loading" @click="loadInputs">重新检查资料</el-button></div>
         <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" class="mb-4" show-icon />
         <div class="wizard-materials">
           <article v-for="item in materials" :key="item.kind" class="wizard-material">
@@ -39,7 +39,7 @@
           <div class="participation-links"><el-button v-for="type in participation.availableTypes" :key="type" link type="primary" @click="selectType(type)">切换到{{ type }}</el-button></div>
         </div>
         <div v-if="!loading && !loadError" class="workflow-note mt-4" aria-live="polite">
-          <strong>{{ missingMaterials.length ? `还需核对本次资料：${missingMaterials.map(item => item.kind === 'student' && participation.total ? '学生参与环节' : item.title).join('、')}` : '三份资料均有记录，可以继续确认安排要求。' }}</strong>
+          <strong>{{ missingMaterials.length ? `还需核对本次资料：${missingMaterials.map(item => item.kind === 'student' && participation.total ? '学生参与环节' : item.title).join('、')}` : '所需排班资料已有记录，可以继续确认安排要求。' }}</strong>
         </div>
         <div v-if="mentorWarnings.length && !loading && !loadError" class="wizard-attention">
           <strong>建议先核对导师信息</strong><p>{{ mentorWarnings.slice(0, 5).join('；') }}{{ mentorWarnings.length > 5 ? `；另有 ${mentorWarnings.length - 5} 项` : '' }}</p>
@@ -105,7 +105,7 @@ const { canManage, requireAdmin } = useAdminGuard()
 const step = computed(() => Math.min(5, Math.max(1, Math.trunc(Number(route.query.step)) || 1)))
 const steps = [
   { label: '选择类型', title: '先选本次答辩类型', description: '跟着向导逐步完成安排，完整管理功能仍可从左侧进入。' },
-  { label: '准备资料', title: '准备好学生、教师和教室', description: '已有资料直接核对；缺少哪份，就在这里导入或补充。' },
+  { label: '准备资料', title: '准备好学生和教师资料', description: '核对教师可用时间与学生名单；教室在时间表确定后预约。' },
   { label: '确认要求', title: '确认日期和每组人数', description: '先看常用设置，其他要求按需展开。保存成功后进入下一步。' },
   { label: '生成与核对', title: '生成草稿，核对分组安排', description: '按日期查看安排，查看问题提示；需要时可直接调整具体分组。' },
   { label: '发布与导出', title: '确认发布，下载安排表', description: '发布后锁定本版本；以后需要修改，可以再生成一份新草稿。' }
@@ -134,9 +134,9 @@ const participation = computed(() => summarizeParticipation(students.value, defe
 const materials = computed(() => [
   { kind: 'student' as const, title: '学生名单', shortTitle: '学生', path: '/students', count: participants.value.length, unit: '人', hint: `参加${defenseType.value}的学生。请核对学号、导师和参与环节。` },
   { kind: 'teacher' as const, title: '教师与专家', shortTitle: '教师', path: '/teachers', count: teachers.value.filter(t => t.isActive !== false && (!t.availableTypes.length || t.availableTypes.includes(defenseType.value))).length, unit: '人', hint: '核对职称、可担任角色、不可用时间。课表可在教师管理中导入。' },
-  { kind: 'classroom' as const, title: '教室资料', shortTitle: '教室', path: '/classrooms', count: rooms.value.length, unit: '间', hint: '核对校区、容量，以及实际可使用的日期和时段。' }
+  { kind: 'classroom' as const, title: '教室资料（后续预约）', shortTitle: '教室', path: '/classrooms', count: rooms.value.length, unit: '间', hint: '预答辩与正式答辩不依赖教室，先生成最终时间表再预约。' }
 ])
-const missingMaterials = computed(() => materials.value.filter(item => !item.count))
+const missingMaterials = computed(() => materials.value.filter(item => !item.count && (defenseType.value === '中期答辩' || item.kind !== 'classroom')))
 const mentorWarnings = computed(() => participants.value.flatMap(student => !student.mentorName ? [`${student.name}尚未填写导师`] : !teachers.value.some(t => t.isActive !== false && (student.mentorId ? t.id === student.mentorId : t.name === student.mentorName)) ? [`${student.name}的导师“${student.mentorName}”未在在用教师名单中`] : []))
 const busy = computed(() => loading.value || saving.value || (step.value >= 4 && resultState.value.busy))
 const canContinue = computed(() => !busy.value && (step.value === 1 || (step.value === 2 ? !loadError.value && !missingMaterials.value.length : step.value === 3 ? !!config.value && !loadError.value : resultState.value.hasResult)))

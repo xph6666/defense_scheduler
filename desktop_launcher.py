@@ -3,7 +3,7 @@ import socket
 import threading
 import webbrowser
 
-from defense_scheduler.runtime import configure_local_runtime, ensure_initial_admin
+from defense_scheduler.runtime import configure_local_runtime
 
 
 DEFAULT_HOST = '127.0.0.1'
@@ -56,16 +56,12 @@ def main() -> None:
         if executor.migration_plan(executor.loader.graph.leaf_nodes()):
             backup_sqlite(database_path, runtime_config.app_data_dir / 'backups')
     call_command('migrate', interactive=False, verbosity=1)
-    credentials = ensure_initial_admin(runtime_config.app_data_dir)
 
     host = os.environ.get('DEFENSE_SCHEDULER_HOST', DEFAULT_HOST)
     port = select_listen_port(host, get_preferred_port())
     url = f'http://{host}:{port}'
     print(f'智能答辩分组编排系统已启动: {url}')
     print(f'数据目录: {runtime_config.app_data_dir}')
-    if credentials:
-        print(f'首次管理员账号: {credentials.username}')
-        print(f'首次管理员密码已写入: {credentials.credentials_file}')
 
     if should_open_browser():
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()

@@ -158,17 +158,7 @@ export interface LinkedScheduleResult { pre: ScheduleResult; formal: ScheduleRes
 
 export async function generateLinkedSchedule(preConfig: RuleConfig, formalConfig: RuleConfig): Promise<LinkedScheduleResult> {
   if (USE_MOCK) {
-    const pre = mockDraft('预答辩')
-    const formal = mockDraft('正式答辩')
-    formal.groups = formal.groups.map((group, index) => ({
-      ...group,
-      students: pre.groups[index]?.students.map(student => ({ ...student })) || group.students,
-      secretary: pre.groups[index]?.secretary || group.secretary,
-      secretaryId: pre.groups[index]?.secretaryId || group.secretaryId
-    }))
-    formal.conflicts = checkConflictsMock(formal)
-    saveScheduleResult(formal)
-    return { pre, formal }
+    throw new Error('联合排班需要连接真实排班服务；当前为演示模式，请切换到实际排期模式后生成。')
   }
   const payload = {
     pre_rules: buildScheduleRules('预答辩', preConfig),

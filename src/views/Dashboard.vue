@@ -93,7 +93,7 @@ const conflictOverview = computed(() => summarizeConflictOverview(Object.values(
 const materials = computed(() => [
   { title: '学生名单', path: '/students', count: students.value?.filter(s => s.defenseTypes.includes(defenseType.value)).length ?? null, unit: '人', hint: `参加${defenseType.value}的学生。请核对学号、导师与参与环节。` },
   { title: '教师与专家', path: '/teachers', count: teachers.value?.filter(t => t.isActive !== false && (!t.availableTypes?.length || t.availableTypes.includes(defenseType.value))).length ?? null, unit: '人', hint: '可参加本次答辩的教师。请补充职称和不可用时间。' },
-  { title: '教室与时间', path: '/classrooms', count: classrooms.value?.length ?? null, unit: '间', hint: '核对教室校区、容量，以及实际可以使用的日期和时间。' }
+  { title: '教室预约资料', path: '/classrooms', count: classrooms.value?.length ?? null, unit: '间', hint: '预答辩与正式答辩先确定人员和时间，再据此预约教室。' }
 ])
 const nextAction = computed(() => {
   if (loading.value) return { title: '正在查看已有资料…', description: '稍等片刻，读取后会告诉您可以从哪里继续。', button: '读取中', path: '/dashboard' }

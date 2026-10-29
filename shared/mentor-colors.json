@@ -1,5 +1,6 @@
 {
   "version": 3,
+  "collisionStep": 17,
   "description": [
     "导师配色的唯一数据源。前端（网页标签底色）与后端（Word/Excel 导出字体色）都只读这一份，",
     "完整排期按同组关系为导师分配 distinctPalette，优先保证组内色差及跨组一致；旧单姓名接口保留 jsHash 槽位。",

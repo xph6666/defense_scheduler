@@ -27,6 +27,10 @@ hiddenimports = project_modules + [
     'rest_framework.authtoken',
     'xlrd',
     'scipy.optimize._highspy._core',
+    # The exact-cover scheduler imports these lazily; PyInstaller's SciPy hooks
+    # collect the HiGHS solver and its native-library dependencies.
+    'scipy.optimize',
+    'scipy.sparse',
 ]
 
 excludes = [

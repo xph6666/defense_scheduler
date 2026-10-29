@@ -128,8 +128,8 @@ python manage.py check --deploy
 V2 Windows 64 位发行版见 [v2026.10.02 Release](https://github.com/xph6666/defense_scheduler/releases/tag/v2026.10.02)，升级旧版前请备份整个 `app-data` 文件夹。具体变更与实现范围见 [本次发布说明](docs/releases/发布说明-v2026.10.02.md)。
 
 ```powershell
-.\scripts\build-exe.ps1
-.\release\DefenseScheduler.exe
+.\scripts\build-exe.ps1 -ReleaseName v2026.10.26-local
+.\release\v2026.10.26-local\DefenseScheduler.exe
 ```
 
 可执行程序会在 `release\app-data` 下保存运行数据：
@@ -143,7 +143,7 @@ V2 Windows 64 位发行版见 [v2026.10.02 Release](https://github.com/xph6666/d
 $env:DEFENSE_SCHEDULER_PORT = "8080"
 $env:DEFENSE_SCHEDULER_HOST = "127.0.0.1"
 $env:DEFENSE_SCHEDULER_OPEN_BROWSER = "false"
-.\release\DefenseScheduler.exe
+.\release\v2026.10.26-local\DefenseScheduler.exe
 ```
 
 这个 exe 面向本机单用户或小范围离线使用。若要作为多人局域网/公网服务部署，建议改用标准 Django 部署方式，配置独立数据库、HTTPS、反向代理和生产级 WSGI 服务。

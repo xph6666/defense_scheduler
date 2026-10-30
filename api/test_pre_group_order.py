@@ -62,7 +62,8 @@ class LinkedGroupNumberTests(TestCase):
     def test_both_stages_use_same_groups_and_ascending_dates(self):
         from api.models import Student
         for i in range(7, 13):
-            Student.objects.create(id=i, name=f'学生{i}', mentor_id=1, mentor_name='教师1',
+            mentor = 3 if i < 10 else 4
+            Student.objects.create(id=i, name=f'学生{i}', mentor_id=mentor, mentor_name=f'教师{mentor}',
                                    defense_types=['预答辩', '正式答辩'])
         response = self.client.post('/api/schedule/generate-linked/',
                                     {'pre_rules': rules(), 'formal_rules': rules('formal')}, format='json')

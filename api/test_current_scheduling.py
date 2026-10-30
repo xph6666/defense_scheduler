@@ -25,7 +25,10 @@ def teachers():
 
 
 def students(count=5):
-    return [{'id': i, 'name': f'学生{i}', 'supervisor_id': 1, 'campus': '创新港'} for i in range(1, count + 1)]
+    # 同一导师在同一组最多占 3 个名额：夹具按 3 人一组分给轮换的导师，
+    # 大样本（如 25 人）也能保持每组不超过 3 位导师。
+    return [{'id': i, 'name': f'学生{i}', 'supervisor_id': ((i - 1) // 3) % 6 + 1,
+             'campus': '创新港'} for i in range(1, count + 1)]
 
 
 class CurrentEngineTests(SimpleTestCase):
@@ -294,7 +297,8 @@ class CurrentSchedulingAPITests(TestCase):
         for i in range(8, 14):
             Teacher.objects.create(id=i, name=f'轮换教师{i}', title='教授', roles=['普通专家'], availability_confirmed=True)
         for raw in students(6):
-            Student.objects.create(id=raw['id'], name=raw['name'], mentor_id=1, mentor_name='教师1',
+            Student.objects.create(id=raw['id'], name=raw['name'], mentor_id=raw['supervisor_id'],
+                mentor_name=f"教师{raw['supervisor_id']}",
                 defense_types=['预答辩', '正式答辩'])
 
     def test_linked_generation_without_classrooms(self):

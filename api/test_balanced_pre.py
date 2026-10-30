@@ -151,7 +151,8 @@ class BalancedPreTests(SimpleTestCase):
         staff[1]['is_external'] = True
         cohort = students(12)
         for index, student in enumerate(cohort):
-            student['supervisor_id'] = 2 if index < 2 else 3 if index < 4 else 1
+            # 每位导师最多 3 人，两组各由 1 位外院导师 + 2 位本院导师组成
+            student['supervisor_id'] = [2, 3, 1, 4][index % 4]
         result = generate_schedule(staff, cohort, [], rules())
         self.assertEqual(result['unassigned_students'], [])
         self.assertEqual([len(g['student_ids']) for g in result['groups']], [6, 6])

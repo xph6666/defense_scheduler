@@ -84,7 +84,8 @@ export const importTeachers = async (file: File) => {
     return request.post('/teachers/import_data/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
-      }
+      },
+      timeout: 3 * 60 * 1000
     })
   }
   teachersData = repository.read()
@@ -113,7 +114,8 @@ export const importTimetable = async (file: File, semesterFirstMonday: string) =
     return request.post('/teachers/import_timetable/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
-      }
+      },
+      timeout: 3 * 60 * 1000
     }) as Promise<TimetableImportResult>
   }
   teachersData = repository.read()

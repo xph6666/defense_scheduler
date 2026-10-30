@@ -7,9 +7,27 @@ from random import Random
 from math import ceil
 from .fairness import mentor_share_excess, panel_cost
 
+# Bounded solver budget in seconds for each packing phase. Every phase keeps
+# its best feasible incumbent when the budget runs out, so a smaller budget
+# trades a little balance quality for a much faster full-cohort generation.
+# Coverage is still protected by the extra constraint added before refinement,
+# and the greedy cover is kept as the initial incumbent.
+INITIAL_TIME_LIMIT = 15.0
+FULL_COVER_TIME_LIMIT = 15.0
+COVERAGE_TIME_LIMIT = 30.0
+IMPROVEMENT_TIME_LIMIT = 10.0
+REFINEMENT_TIME_LIMIT = 12.0
+
+# 大校区（导师数超过 SMALL_PANEL_MENTORS）不再枚举全部两人组合，而是每位导师
+# 每个（人数、外院数）组合只保留 SHORTLIST_SIZE 个候选列。300 人规模时两人组合
+# 就有上万列，去重后覆盖搜索才能在时限内收敛。
+SMALL_PANEL_MENTORS = 30
+SHORTLIST_SIZE = 24
+
 
 def pack_counts(counts, target, minimum, maximum, experts, external_max,
-                teacher_map, chair_ids, feasible, seeds=(), max_groups=None):
+                teacher_map, chair_ids, feasible, seeds=(), max_groups=None,
+                mentor_cap=None):
     """Jointly balance group size, mentor shares and mentor appearances.
 
     Columns describe mentor seat quotas, never student IDs. Uncovered seats
@@ -18,6 +36,8 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
 
     max_groups：排期日期内本校区最多可同时开设的组数（由秘书、组长和评审人数估算）；
     为 None 时不限制。受限时宁可明确留下未覆盖学生，也不生成之后排不进时段的小组。
+
+    mentor_cap：单个导师在同一组内最多占用的学生名额；为 None 时不限制。
     """
     import numpy as np
     from scipy.sparse import csc_matrix
@@ -71,11 +91,12 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                 continue
             if not feasible(Counter({t: 1 for t in members})):
                 continue
-            for seats in product(*(range(1, min(counts[t], maximum - length + 1) + 1) for t in members)):
+            for seats in product(*(range(1, min(counts[t], maximum - length + 1,
+                                                mentor_cap or counts[t]) + 1) for t in members)):
                 size = sum(seats)
                 if not minimum <= size <= maximum:
                     continue
-                if (len(mentors) <= 30 and length <= 3) or length < 3:
+                if len(mentors) <= SMALL_PANEL_MENTORS and length <= 3:
                     complete_candidates.add((members, seats))
                     continue
                 # Keep alternatives for EVERY mentor, size and affiliation
@@ -86,18 +107,20 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                     if length == 3:
                         legacy = legacy_shortlists[tid, size, external]
                         legacy_item = (-mix, members, seats)
-                        if len(legacy) < 64:
+                        if len(legacy) < SHORTLIST_SIZE:
                             heappush(legacy, legacy_item)
                         else:
                             heappushpop(legacy, legacy_item)
                     heap = shortlists[tid, size, external]
-                    if len(heap) < 64:
+                    if len(heap) < SHORTLIST_SIZE:
                         heappush(heap, item)
                     else:
                         heappushpop(heap, item)
     seed_keys = []
     for seed in seeds:
-        if minimum <= sum(seed.values()) <= maximum and feasible(seed):
+        if (minimum <= sum(seed.values()) <= maximum
+                and (not mentor_cap or all(n <= mentor_cap for n in seed.values()))
+                and feasible(seed)):
             members = tuple(sorted(seed, key=str))
             seed_keys.append((members, tuple(seed[t] for t in members)))
     selected = sorted({(members, seats) for heap in shortlists.values() for _, _, members, seats in heap}
@@ -172,7 +195,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
     lp.integrality_ = [highs_core.HighsVarType.kInteger] * len(costs)
     solver = highs_core._Highs()
     solver.setOptionValue('output_flag', False)
-    solver.setOptionValue('time_limit', 45.0)
+    solver.setOptionValue('time_limit', INITIAL_TIME_LIMIT)
     solver.setOptionValue('threads', 1)
     solver.setOptionValue('random_seed', 0)
     solver.setOptionValue('mip_rel_gap', .01)
@@ -207,7 +230,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
         if preferred_groups is not None:
             solver.addRow(preferred_groups, preferred_groups, count, np.arange(count, dtype=np.int32), np.ones(count))
             group_row = True
-        solver.setOptionValue('time_limit', 15.0)
+        solver.setOptionValue('time_limit', FULL_COVER_TIME_LIMIT)
         solver.run()
         full_cover_status = str(solver.getModelStatus())
         full = solver.getSolution()
@@ -238,16 +261,21 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
             coverage_bounds[count:count + len(mentors)] = [0] * len(mentors)
         solver.changeColsBounds(len(costs), all_columns, np.zeros(len(costs)), np.array(coverage_bounds, dtype=float))
         solver.changeColsCost(len(costs), all_columns, costs)
-        solver.setOptionValue('time_limit', 45.0)
+        solver.setOptionValue('time_limit', COVERAGE_TIME_LIMIT)
     solver.setSolution(len(costs), all_columns, incumbent)
     solver.run()
     solved = solver.getSolution()
     candidate = np.array(solved.col_value) if solved.value_valid else incumbent
     if len(candidate) != len(costs) or np.dot(costs, candidate) > np.dot(costs, incumbent):
         candidate = incumbent
-    if solver.getModelStatus() != highs_core.HighsModelStatus.kOptimal and count > 100:
+    # The retry only helps when coverage is still incomplete: with zero uncovered
+    # seats the coverage objective is already at its optimum, so a new seed cannot
+    # improve it and the whole budget would be wasted.
+    coverage_gap = int(round(sum(candidate[count:count + len(mentors)])))
+    if (solver.getModelStatus() != highs_core.HighsModelStatus.kOptimal and count > 100
+            and coverage_gap > 0):
         solver.clearSolver()
-        solver.setOptionValue('time_limit', 25.0)
+        solver.setOptionValue('time_limit', IMPROVEMENT_TIME_LIMIT)
         solver.setOptionValue('random_seed', 1)
         solver.setSolution(len(costs), np.arange(len(costs), dtype=np.int32), candidate)
         solver.run()
@@ -271,7 +299,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
         if np.dot(majority, candidate[:count]) >= 0:
             solver.addRow(0, np.inf, count, np.arange(count, dtype=np.int32), majority)
         solver.changeColsCost(len(costs), np.arange(len(costs), dtype=np.int32), refinement_costs)
-        solver.setOptionValue('time_limit', 25.0)
+        solver.setOptionValue('time_limit', REFINEMENT_TIME_LIMIT)
         solver.setOptionValue('mip_rel_gap', 0.0)
         solver.setOptionValue('random_seed', 2)
         solver.setSolution(len(costs), np.arange(len(costs), dtype=np.int32), candidate)

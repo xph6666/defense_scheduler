@@ -54,6 +54,8 @@ class CrossGroupRepair:
                 continue
             if len(a) > experts or len(b) > experts:
                 continue
+            if any(n > self.p.mentor_limit(tid) for c in (a, b) for tid, n in c.items()):
+                continue
             if any(sum(self.p.teacher_map[t].is_external for t in c) > external_max for c in (a, b)):
                 continue
             if a == old_left and b == old_right:

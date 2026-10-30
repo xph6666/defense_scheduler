@@ -15,6 +15,11 @@ if TYPE_CHECKING:
     from algorithm import GroupDraft
 
 
+# 同一组内，一位导师（及其学生）最多占用的学生名额。低于组容量，避免一组
+# 6 人却由同一位导师带 4 人，评审构成失去意义。
+MENTOR_SEAT_LIMIT = 3
+
+
 @dataclass
 class Demand:
     campus: str | None
@@ -174,9 +179,39 @@ class PersonnelPlanner:
         return packed
 
     def mentor_limit(self, tid):
-        # The confirmed policy prioritizes balanced panels over two seats per
-        # mentor. A mentor may bring any number up to the panel capacity.
-        return self.rules['group_max']
+        # 平衡优先：单个导师在一组内的学生数不得超过 MENTOR_SEAT_LIMIT，
+        # 否则一组内会出现 4 人同导师、其余导师各 1 人的失衡构成。
+        return min(self.rules['group_max'], MENTOR_SEAT_LIMIT)
+
+    def attach_leftovers(self, packed, counts, campus, feasible):
+        """把没排进分组的导师学生补进尚有余量的小组。
+
+        一组最多 expert_count 位导师，贪心很容易留下两个 4 人组：既不到每组
+        minimum 人，合并又超过 group_max，于是整批学生被判为未安排。这里按导师
+        逐人补进仍能容纳、且可行性不变的组，避免尾部小组合并失败而丢学生。
+        """
+        packed = [Counter(group) for group in packed]
+        left = Counter(counts) - sum(packed, Counter())
+        for tid in sorted(left, key=lambda t: (-left[t], str(t))):
+            while left[tid]:
+                options = []
+                for index, group in enumerate(packed):
+                    if group[tid] >= self.mentor_limit(tid):
+                        continue
+                    if tid not in group and len(group) >= self.rules['expert_count']:
+                        continue
+                    if sum(group.values()) >= self.rules['group_max']:
+                        continue
+                    if not feasible(campus, group + Counter({tid: 1})):
+                        continue
+                    # 优先补进本导师已在场、人数较多的小组：不新增导师席位，也少开新组
+                    options.append((tid not in group, -sum(group.values()), index))
+                if not options:
+                    break
+                _, _, index = min(options)
+                packed[index][tid] += 1
+                left[tid] -= 1
+        return packed
 
     def build_balanced_pre_demands(self):
         """Pack counts into near-full feasible panels, then balance their tails."""
@@ -190,6 +225,8 @@ class PersonnelPlanner:
 
         def feasible(campus, counts, external_limit=None):
             external_limit = external_max if external_limit is None else external_limit
+            if any(n > self.mentor_limit(tid) for tid, n in counts.items()):
+                return False
             mentors = frozenset(counts)
             key = (mentors, external_limit)
             if key not in feasible_cache:
@@ -225,14 +262,14 @@ class PersonnelPlanner:
             for tid in order:
                 count = remaining[tid]
                 for demand in packed:
-                    take = min(count, target - demand.size)
+                    take = min(count, target - demand.size, self.mentor_limit(tid) - demand.mentors[tid])
                     if take and feasible(campus, demand.mentors + Counter({tid: take}), 1):
                         demand.mentors[tid] += take
                         count -= take
                     if not count:
                         break
                 while count:
-                    take = min(target, count)
+                    take = min(target, count, self.mentor_limit(tid))
                     packed.append(Demand(campus, Counter({tid: take})))
                     count -= take
             # Meet the hard floor before optimizing equal sizes. Relax the
@@ -244,7 +281,9 @@ class PersonnelPlanner:
                         continue
                     for other in packed[index + 1:]:
                         counts = small.mentors + other.mentors
-                        if sum(counts.values()) <= self.rules['group_max'] and feasible(campus, counts):
+                        if (sum(counts.values()) <= self.rules['group_max']
+                                and all(n <= self.mentor_limit(t) for t, n in counts.items())
+                                and feasible(campus, counts)):
                             choices.append((sum(counts.values()) < minimum,
                                 sum(self.teacher_map[t].is_external for t in counts),
                                 abs(target - sum(counts.values())), index, packed.index(other), counts))
@@ -264,7 +303,8 @@ class PersonnelPlanner:
                         for tid in sorted(large.mentors, key=str):
                             left = large.mentors - Counter({tid: 1})
                             right = small.mentors + Counter({tid: 1})
-                            if feasible(campus, left) and feasible(campus, right):
+                            if (right[tid] <= self.mentor_limit(tid)
+                                    and feasible(campus, left) and feasible(campus, right)):
                                 large.mentors, small.mentors = left, right
                                 changed = True
                                 break
@@ -291,16 +331,21 @@ class PersonnelPlanner:
                 if warm_valid and self.refine_seed_only:
                     optimized, diagnostics = seed_counts, {'status': 'complete_seed'}
                 else:
+                    seed_counts = self.attach_leftovers(seed_counts, remaining, campus, feasible)
                     optimized, diagnostics = pack_counts(remaining, target, minimum, self.rules['group_max'],
                         self.rules['expert_count'], external_max, self.teacher_map, self.chair_ids,
-                        lambda counts: feasible(campus, counts), seed_counts, max_groups=cap)
+                        lambda counts: feasible(campus, counts), seed_counts, max_groups=cap,
+                        mentor_cap=self.mentor_limit(None))
                 if target == 6 and self.rules['group_max'] == 7:
                     from .compact_counts import repack_sixes
                     # 七人组改六人组会增加组数，容量受限时不得超过本校区可开设的组数
                     optimized, blocks = repack_sixes(optimized, self.rules['expert_count'], external_max,
                         self.teacher_map, self.chair_ids, lambda counts: feasible(campus, counts),
-                        limit=None if cap is None else max(0, cap - len(optimized)))
+                        limit=None if cap is None else max(0, cap - len(optimized)),
+                        mentor_cap=self.mentor_limit(None))
                     diagnostics['six_seat_repack_blocks'] = blocks
+                optimized = self.attach_leftovers(optimized, remaining, campus, feasible)
+                diagnostics['uncovered'] = int(sum((remaining - sum(optimized, Counter())).values()))
                 diagnostics['group_cap'] = cap
                 self.packing_diagnostics.append({'campus': campus, **diagnostics})
                 self.search_limited |= diagnostics['status'] in ('bounded', 'search_limit')
@@ -309,7 +354,11 @@ class PersonnelPlanner:
                     reason = (f'排期日期内可同时开设的小组数不足（{campus or "本校区"}最多约 {cap} 组，'
                               f'受 {len(self.secretary_ids)} 位秘书和评审人数限制）；请延长日期范围或补充秘书')
                 else:
-                    reason = f'在本次搜索范围内，未找到满足每组至少 {minimum} 人、导师评审、时间及专家资格的组合'
+                    externals = sum(1 for tid in remaining
+                                    if tid in self.teacher_map and self.teacher_map[tid].is_external)
+                    reason = (f'在本次搜索范围内，未找到满足每组至少 {minimum} 人、导师评审、时间及专家资格的组合'
+                              f'（本校区 {externals} 位外院导师、每组最多 {external_max} 位，'
+                              f'同一导师每组最多带 {MENTOR_SEAT_LIMIT} 人）')
                 for tid, count in (remaining - covered).items():
                     self.failed_demands.append((Demand(campus, Counter({tid: count})), reason))
                 packed = [Demand(campus, counts) for counts in optimized]

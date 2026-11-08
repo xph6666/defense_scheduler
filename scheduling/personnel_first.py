@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .policies import teacher_can_role, secretary_is_qualified, pre_chair_is_qualified
+from .policies import teacher_can_role, secretary_is_qualified, pre_chair_is_qualified, committee_size
 from .current import available, participants, validate
 
 if TYPE_CHECKING:
@@ -49,7 +49,7 @@ class PersonnelPlanner:
         self.available_ids = {slot: {t.id for t in teachers if available(t, slot)} for slot in self.slots}
         self.capacity = {t.id: max(1, sum(t.id in ids for ids in self.available_ids.values())) for t in teachers}
         self.chair_ids = {t.id for t in teachers if (
-            pre_chair_is_qualified(t, rules) if rules['defense_type'] == 'pre' and rules.get('policy_version') == 3
+            pre_chair_is_qualified(t, rules) if rules['defense_type'] == 'pre' and rules.get('policy_version', 1) >= 3
             else teacher_can_role(t, 'chair') and meets_chair_requirement(t, rules))}
         self.expert_ids = {t.id for t in teachers if teacher_can_role(t, 'expert')}
         self.secretary_ids = {t.id for t in teachers if secretary_is_qualified(t, rules.get('secretary_title', '讲师'))}
@@ -101,6 +101,9 @@ class PersonnelPlanner:
 
     def required_reviewers(self, demand):
         return set(demand.mentors) if self.rules['defense_type'] == 'pre' else set()
+
+    def panel_size(self, campus):
+        return committee_size(self.rules, campus)
 
     def build_demands(self):
         """Estimate seats from counts; no concrete student is assigned a group."""
@@ -191,9 +194,10 @@ class PersonnelPlanner:
         def feasible(campus, counts, external_limit=None):
             external_limit = external_max if external_limit is None else external_limit
             mentors = frozenset(counts)
-            key = (mentors, external_limit)
+            experts = self.panel_size(campus)
+            key = (mentors, external_limit, experts)
             if key not in feasible_cache:
-                if len(mentors) == self.rules['expert_count'] and mentors <= self.teacher_map.keys():
+                if len(mentors) == experts and mentors <= self.teacher_map.keys():
                     chairs = mentors & self.chair_ids
                     valid = (None not in mentors
                         and sum(self.teacher_map[t].is_external for t in mentors) <= external_limit
@@ -204,7 +208,7 @@ class PersonnelPlanner:
                         for ids in self.available_ids.values())
                     return feasible_cache[key]
                 feasible_cache[key] = (bool(mentors) and None not in mentors and mentors <= self.teacher_map.keys()
-                    and len(mentors) <= self.rules['expert_count']
+                    and len(mentors) <= experts
                     and sum(self.teacher_map[t].is_external for t in mentors) <= external_limit
                     and any(mentors <= ids and any(self.panel_for_chair(
                         Demand(campus, counts), slot, chair, ids)
@@ -214,6 +218,9 @@ class PersonnelPlanner:
 
         result = []
         caps = self.campus_group_caps(cohorts)
+        from .pre_capacity import pre_capacity_notices
+        capacity_reasons = {notice['campus']: notice['description']
+                            for notice in pre_capacity_notices(self.students, self.teachers, self.rules)}
         for campus, remaining in sorted(cohorts.items(), key=lambda item: str(item[0])):
             packed = []
             cap = caps.get(campus)
@@ -292,12 +299,13 @@ class PersonnelPlanner:
                     optimized, diagnostics = seed_counts, {'status': 'complete_seed'}
                 else:
                     optimized, diagnostics = pack_counts(remaining, target, minimum, self.rules['group_max'],
-                        self.rules['expert_count'], external_max, self.teacher_map, self.chair_ids,
-                        lambda counts: feasible(campus, counts), seed_counts, max_groups=cap)
+                        self.panel_size(campus), external_max, self.teacher_map, self.chair_ids,
+                        lambda counts: feasible(campus, counts), seed_counts, max_groups=cap,
+                        prioritize_shares=self.rules.get('policy_version', 1) >= 4)
                 if target == 6 and self.rules['group_max'] == 7:
                     from .compact_counts import repack_sixes
                     # 七人组改六人组会增加组数，容量受限时不得超过本校区可开设的组数
-                    optimized, blocks = repack_sixes(optimized, self.rules['expert_count'], external_max,
+                    optimized, blocks = repack_sixes(optimized, self.panel_size(campus), external_max,
                         self.teacher_map, self.chair_ids, lambda counts: feasible(campus, counts),
                         limit=None if cap is None else max(0, cap - len(optimized)))
                     diagnostics['six_seat_repack_blocks'] = blocks
@@ -305,7 +313,9 @@ class PersonnelPlanner:
                 self.packing_diagnostics.append({'campus': campus, **diagnostics})
                 self.search_limited |= diagnostics['status'] in ('bounded', 'search_limit')
                 covered = sum(optimized, Counter())
-                if cap is not None and len(optimized) >= cap:
+                if campus in capacity_reasons:
+                    reason = capacity_reasons[campus]
+                elif cap is not None and len(optimized) >= cap:
                     reason = (f'排期日期内可同时开设的小组数不足（{campus or "本校区"}最多约 {cap} 组，'
                               f'受 {len(self.secretary_ids)} 位秘书和评审人数限制）；请延长日期范围或补充秘书')
                 else:
@@ -320,7 +330,8 @@ class PersonnelPlanner:
 
     def slot_group_capacity(self):
         """各半天可同时开设组数的上界之和：秘书、合格组长和到场人数取最小值。"""
-        size = self.rules['expert_count'] + 1
+        campuses = {s.campus for s in self.students}
+        size = min((self.panel_size(campus) for campus in campuses), default=self.rules['expert_count']) + 1
         return sum(min(len(ids & self.secretary_ids), len(ids & self.chair_ids), len(ids) // size)
                    for ids in self.available_ids.values())
 
@@ -387,13 +398,14 @@ class PersonnelPlanner:
         fixed = {chair, *required}
         if any(self.conflicts_with(tid, fixed - {tid}) for tid in fixed):
             return
-        seats = self.rules['expert_count'] - len(fixed)
+        panel_size = self.panel_size(demand.campus)
+        seats = panel_size - len(fixed)
         if seats < 0:
             return
         key = lambda tid: self.rank(tid, slot)
         secretaries = sorted((eligible & self.secretary_ids) - mentors - fixed,
             key=lambda tid: (tid in self.expert_ids or tid in self.chair_ids,
-                             not self.teacher_map[tid].is_external if (self.rules['expert_count'] == 5
+                             not self.teacher_map[tid].is_external if (panel_size == 5
                                  or any(self.teacher_map[t].is_external for t in fixed)) else False,
                              key(tid)))
         seen = set()
@@ -410,7 +422,9 @@ class PersonnelPlanner:
                 if self.conflicts_with(secretary, fixed | mentors):
                     continue
                 candidates = sorted((eligible & self.expert_ids) - fixed - {secretary},
-                                    key=lambda tid: (not self.teacher_map[tid].is_external, key(tid)))
+                                    key=lambda tid: (self.teacher_map[tid].is_external if (
+                                        self.rules['defense_type'] == 'pre' and self.rules.get('policy_version', 1) >= 4)
+                                        else not self.teacher_map[tid].is_external, key(tid)))
                 candidates = [tid for tid in candidates if not self.conflicts_with(tid, fixed | {secretary})]
                 def fill(start, picked, external):
                     if self.combination_nodes >= self.MAX_COMBINATION_NODES:
@@ -462,7 +476,7 @@ class PersonnelPlanner:
             if not (reviewers - {leader}) <= self.expert_ids:
                 return False
             external = sum(self.teacher_map[tid].is_external for tid in reviewers)
-            if external > self.rules.get('external_expert_max', 1) or len(reviewers) > self.rules['expert_count']:
+            if external > self.rules.get('external_expert_max', 1) or len(reviewers) > self.panel_size(item.campus):
                 return False
             if external > 1 and any(self.teacher_map[tid].is_external
                                     for tid in reviewers - self.required_reviewers(item)):
@@ -470,7 +484,7 @@ class PersonnelPlanner:
             free = {tid for tid in self.available_ids[when] - reserved
                     if not self.occupied(tid, when, gid) and not self.conflicts_with(tid, people)}
             domains.append(free & self.secretary_ids)
-            extra = self.rules['expert_count'] - len(reviewers)
+            extra = self.panel_size(item.campus) - len(reviewers)
             experts = free & self.expert_ids
             internal = {tid for tid in experts if not self.teacher_map[tid].is_external}
             # At most one optional seat may use an external teacher.
@@ -507,12 +521,14 @@ class PersonnelPlanner:
             for slot in self.slots:
                 overlapping = [plan for plan in self.plans if slot.overlaps(plan.group.time_slot)]
                 attendance = [plan.demand for plan in overlapping] + [demand]
-                headcount = sum(self.rules['expert_count'] + 1 + (
+                headcount = sum(self.panel_size(item.campus) + 1 + (
                     len(item.mentors) if self.rules.get('avoid_supervisor') else 0) for item in attendance)
                 if headcount > len(self.available_ids[slot]):
                     causes.add('capacity' if mentors <= self.available_ids[slot] else 'mentor_time')
                     continue
-                if self.rules['expert_count'] == 5 and 4 * len(attendance) > sum(
+                internal_need = sum(max(1, self.panel_size(item.campus) - self.rules.get('external_expert_max', 1))
+                                    for item in attendance)
+                if internal_need > sum(
                         not self.teacher_map[tid].is_external for tid in self.available_ids[slot]):
                     causes.add('capacity' if mentors <= self.available_ids[slot] else 'mentor_time')
                     continue

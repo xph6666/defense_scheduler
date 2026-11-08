@@ -174,7 +174,7 @@ class IntegrationContractTests(TestCase):
         self.assertEqual(response.data['endDate'], (timezone.localdate() + timedelta(days=10)).isoformat())
         self.assertEqual(response.data['expertCount']['target'], 3)
         self.assertEqual(response.data['expertCount']['max'], 3)
-        self.assertEqual(response.data['policyVersion'], 3)
+        self.assertEqual(response.data['policyVersion'], 4)
         self.assertFalse(response.data['mentorAvoidance'])
 
         response = self.client.post(

@@ -306,14 +306,27 @@ def parse_roster_grid(grid: Sequence[Sequence[Any]], warnings: List[str]) -> Lis
         raise TimetableParseError('未识别到行式课表的"主讲教师/时间地点"表头')
 
     sessions: List[ClassSession] = []
-    for row in grid[header_index + 1:]:
+    for row_number, row in enumerate(grid[header_index + 1:], start=header_index + 2):
+        if not any(_cell_text(value) for value in row):
+            continue
         if teacher_col >= len(row) or time_col >= len(row):
+            warnings.append(f'第 {row_number} 行缺少主讲教师或时间地点')
             continue
         names = _extract_names(_cell_text(row[teacher_col]), warnings)
         time_text = _cell_text(row[time_col])
-        if not names or not time_text:
+        if names == ['主讲教师'] and time_text == '时间地点':
+            # Printed/exported rosters repeat their header between pages.
             continue
-        for weeks, parity, weekday, (period_start, period_end) in parse_time_location_text(time_text):
+        if not names or not time_text:
+            warnings.append(f'第 {row_number} 行缺少主讲教师或时间地点')
+            continue
+        segments = parse_time_location_text(time_text)
+        if not segments:
+            warnings.append(f'第 {row_number} 行时间无法解析：{time_text}')
+        for weeks, parity, weekday, (period_start, period_end) in segments:
+            if not 1 <= weeks[0] <= weeks[1] <= 53 or not 1 <= period_start <= period_end <= 12:
+                warnings.append(f'第 {row_number} 行周次或节次超出范围：{time_text}')
+                continue
             sessions.append(ClassSession(
                 teacher_names=names,
                 week_start=weeks[0],
@@ -339,10 +352,15 @@ def sessions_to_time_entries(
     sessions: Sequence[ClassSession],
     first_monday: date,
     warnings: List[str],
+    duplicate_counts: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Set[str]]:
     """按学期第一周周一，把周期性上课占用展开为具体日期的不可用时间条目。"""
     entries: Dict[str, Set[str]] = {}
+    duplicates = duplicate_counts if duplicate_counts is not None else {}
     for session in sessions:
+        if not 1 <= session.week_start <= session.week_end <= 53:
+            warnings.append(f'周次范围无效，已跳过：{session.teacher_names}（{session.week_start}-{session.week_end}周）')
+            continue
         time_range = period_pair_time(session.period_start, session.period_end)
         if not time_range:
             warnings.append(
@@ -355,6 +373,8 @@ def sessions_to_time_entries(
             day = first_monday + timedelta(days=(week - 1) * 7 + (session.weekday - 1))
             entry = f'{day.isoformat()} {time_range}'
             for name in session.teacher_names:
+                if entry in entries.get(name, set()):
+                    duplicates[name] = duplicates.get(name, 0) + 1
                 entries.setdefault(name, set()).add(entry)
     return entries
 
@@ -363,6 +383,7 @@ def extract_timetable_unavailable_times(
     grid: Sequence[Sequence[Any]],
     first_monday: date,
     known_teacher_names: Optional[Sequence[str]] = None,
+    duplicate_counts: Optional[Dict[str, int]] = None,
 ) -> Tuple[Dict[str, List[str]], List[str]]:
     """课表导入主入口：网格 → {教师姓名: 排序后的不可用时间条目}，附解析告警。
 
@@ -371,5 +392,5 @@ def extract_timetable_unavailable_times(
     warnings: List[str] = []
     sessions = parse_timetable_grid(grid, warnings)
     _resolve_session_names(sessions, known_teacher_names, warnings)
-    entries = sessions_to_time_entries(sessions, first_monday, warnings)
+    entries = sessions_to_time_entries(sessions, first_monday, warnings, duplicate_counts)
     return {name: sorted(values) for name, values in entries.items()}, warnings

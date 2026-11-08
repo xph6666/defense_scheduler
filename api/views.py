@@ -699,14 +699,73 @@ class TeacherViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
             return Response({'error': f'解析文件失败: {exc}'}, status=status.HTTP_400_BAD_REQUEST)
 
         grid = raw.where(raw.notnull(), None).values.tolist()
+        # 系统教师编号优先。旧课表仅有姓名时使用教师表的唯一姓名约束。
+        id_warnings = []
+        teachers_by_id = {str(t.pk): t for t in Teacher.objects.all()}
+        for header_index, header in enumerate(grid[:5]):
+            labels = [str(value or '').strip() for value in header]
+            if '教师编号' not in labels or '主讲教师' not in labels:
+                continue
+            id_col, name_col = labels.index('教师编号'), labels.index('主讲教师')
+            for number, row in enumerate(grid[header_index + 1:], start=header_index + 2):
+                identifier = str(row[id_col] or '').strip() if id_col < len(row) else ''
+                if identifier.endswith('.0'):
+                    identifier = identifier[:-2]
+                if not identifier:
+                    continue
+                teacher = teachers_by_id.get(identifier)
+                name = str(row[name_col] or '').strip() if name_col < len(row) else ''
+                if not teacher or (name and name != teacher.name):
+                    id_warnings.append(f'第 {number} 行教师编号 {identifier} 不存在或与姓名“{name}”不符，已跳过')
+                    row[:] = [None] * len(row)
+                else:
+                    while len(row) <= name_col:
+                        row.append(None)
+                    row[name_col] = teacher.name
+            break
         try:
+            file_duplicates = {}
             entries_by_name, warnings = extract_timetable_unavailable_times(
                 grid,
                 first_monday,
                 known_teacher_names=list(Teacher.objects.values_list('name', flat=True)),
+                duplicate_counts=file_duplicates,
             )
         except TimetableParseError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        warnings = id_warnings + warnings
+        teachers_by_name = {t.name: t for t in teachers_by_id.values()}
+        rows = []
+        for name, entries in sorted(entries_by_name.items()):
+            teacher = teachers_by_name.get(name)
+            existing = set(split_time_text(teacher.unavailable_times)) if teacher else set()
+            rows.append({'teacherId': teacher.pk if teacher else None, 'teacherName': name,
+                         'matched': teacher is not None, 'entries': entries,
+                         'newEntries': [entry for entry in entries if entry not in existing],
+                         'duplicateCount': sum(entry in existing for entry in entries) + file_duplicates.get(name, 0)})
+        import hashlib
+        import json
+        file.seek(0)
+        fingerprint = hashlib.sha256(file.read() + json.dumps([
+            first_monday.isoformat(), [(t.pk, t.name, t.unavailable_times) for t in teachers_by_id.values()]
+        ], ensure_ascii=False).encode()).hexdigest()
+        preview = str(request.data.get('preview', '')).lower() == 'true'
+        summary = {
+            'preview': preview, 'previewToken': fingerprint, 'rows': rows,
+            'canImport': any(row['matched'] for row in rows),
+            'matchedTeachers': sum(row['matched'] for row in rows),
+            'unknownTeachers': sum(not row['matched'] for row in rows),
+            'unknownTeacherNames': [row['teacherName'] for row in rows if not row['matched']],
+            'warnings': warnings, 'entryCount': sum(len(row['entries']) for row in rows),
+            'duplicateCount': sum(row['duplicateCount'] for row in rows),
+        }
+        if preview:
+            return Response({**summary, 'updatedTeachers': 0, 'message': '请核对有效记录与异常明细后确认导入'})
+        if request.data.get('previewToken') and request.data['previewToken'] != fingerprint:
+            return Response({'error': '课表、学期或教师资料已变化，请重新预览后导入'}, status=409)
+        if not summary['canImport']:
+            return Response({**summary, 'error': '未解析到可匹配教师的有效课程，请检查表头、教师及时间明细'}, status=400)
 
         updated_count = 0
         matched_names = []
@@ -729,15 +788,44 @@ class TeacherViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):
                     updated_count += 1
 
         return Response({
+            **summary,
             'message': f'课表导入完成：更新 {updated_count} 位教师的不可用时间'
                        f'（课表中另有 {len(unknown_names)} 位教师不在系统中，已跳过）',
             'updatedTeachers': updated_count,
             'matchedTeachers': len(matched_names),
             'unknownTeachers': len(unknown_names),
-            'unknownTeacherNames': unknown_names[:30],
-            'warnings': warnings[:30],
+            'unknownTeacherNames': unknown_names,
+            'warnings': warnings,
             'entryCount': sum(len(entries) for entries in entries_by_name.values()),
         }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='timetable-template')
+    def timetable_template(self, request):
+        import io
+        from openpyxl import Workbook
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = '课表'
+        sheet.append(['教师编号', '主讲教师', '时间地点'])
+        guide = workbook.create_sheet('填写说明')
+        guide.append(['字段', '填写要求'])
+        guide.append(['教师编号', '可从教师编号目录复制；填写时优先校验编号与姓名，不按姓名猜测编号'])
+        guide.append(['主讲教师', '无编号时按系统中唯一教师姓名匹配'])
+        guide.append(['时间地点', '例如：第1-16周 单周 星期三 上1,上2；星期五 下5,下6。支持连续周、单周、双周'])
+        guide.append(['学期', '在导入窗口选择第一教学周的周一；支持 .xlsx / .xls / UTF-8 CSV'])
+        directory = workbook.create_sheet('教师编号目录')
+        directory.append(['教师编号', '教师姓名', '所属学院'])
+        for teacher in Teacher.objects.order_by('pk'):
+            directory.append([teacher.pk, teacher.name, teacher.college])
+        for page in workbook:
+            page.column_dimensions['A'].width = 18
+            page.column_dimensions['B'].width = 75
+            page.column_dimensions['C'].width = 85
+        output = io.BytesIO()
+        workbook.save(output)
+        response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename="timetable-template.xlsx"'
+        return response
 
 
 class StudentViewSet(AuditedDataMixin, ImportMixin, ModelViewSet):

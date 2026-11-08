@@ -19,7 +19,7 @@ class AuditedDataMixin:
         with transaction.atomic():
             ScheduleWriteLock.objects.filter(pk=1).update(revision=F('revision') + 1)
             response = super().dispatch(request, *args, **kwargs)
-            if self.action in ('import_data', 'import_cohort') and getattr(response, 'data', {}).get('preview') is True:
+            if self.action in ('import_data', 'import_cohort', 'import_timetable') and getattr(response, 'data', {}).get('preview') is True:
                 # Preview must not change logs, draft revisions, or the write lock.
                 transaction.set_rollback(True)
                 return response

@@ -129,6 +129,12 @@ def generate_schedule(
     # [TASK-P05 修改] 将外院导师身份传入分组器，以执行导师学生数对应的组数规则。
     external_supervisor_ids = {teacher.id for teacher in parsed_teachers if teacher.is_external}
     grouped_students = build_student_groups(parsed_students, rules, external_supervisor_ids, parsed_teachers)
+    unassigned_students = []
+    if rules.get('policy_version', 1) >= 4 and rules.get('defense_type') == 'mid':
+        unassigned_students = [dict(id=s.id, name=s.name,
+            reason=f'{s.campus or "未填校区"}剩余学生不足 10 人，无法组成中期答辩小组，请核对名单')
+            for batch in grouped_students if len(batch) != 10 for s in batch]
+        grouped_students = [batch for batch in grouped_students if len(batch) == 10]
     if pre_mentor_committee(rules):
         from scheduling.joint_groups import build_linked_student_groups
         teacher_map = {t.id: t for t in parsed_teachers}
@@ -274,10 +280,20 @@ def generate_schedule(
 
     conflicts.extend(detect_global_conflicts(drafts, parsed_students, parsed_teachers, parsed_rooms, rules))
 
+    if unassigned_students:
+        reasons = {student['id']: student['reason'] for student in unassigned_students}
+        for conflict in conflicts:
+            if conflict['type'] == 'missing_student':
+                sid = next((sid for sid in conflict.get('related_ids', []) if sid in reasons), None)
+                if sid is not None:
+                    conflict.update(student_id=sid, description=reasons[sid])
+
     result = {
         "groups": [serialize_group(d) for d in drafts],
         "conflicts": deduplicate_conflicts(conflicts),
     }
+    if rules.get('policy_version', 1) >= 4 and rules.get('defense_type') == 'mid':
+        result['unassigned_students'] = unassigned_students
     if rules.get('defense_type') == 'formal':
         result["random_seed"] = seed
     return result
@@ -336,7 +352,7 @@ def validate_inputs(
 ) -> None:
     if not students:
         raise SchedulingError("没有可参加排期的学生数据，请先导入学生")
-    if not teachers and rules.get('policy_version') != 3:
+    if not teachers and not (rules.get('policy_version', 1) >= 3 and rules.get('defense_type') in ('pre', 'formal')):
         raise SchedulingError("没有可参加排期的教师数据，请先导入教师")
 
     required_rule_fields = ["start_date", "end_date", "group_size", "expert_count"]
@@ -476,6 +492,11 @@ def build_student_groups(
     prefer_academic_master_first 高于 50 时学硕占比高的组优先获得靠前的时间槽。
     """
     target_size = int(rules["group_size"])
+    if rules.get('policy_version', 1) >= 4 and rules.get('defense_type') == 'mid':
+        cohorts = {}
+        for student in sorted(students, key=lambda s: (s.campus or '', s.id)):
+            cohorts.setdefault(student.campus, []).append(student)
+        return [batch[i:i + 10] for batch in cohorts.values() for i in range(0, len(batch), 10)]
     min_size = int(rules.get("group_min", 0) or 0)
     max_size = int(rules.get("group_max", 0) or 0)
     grouping = str(rules.get("grouping") or "")

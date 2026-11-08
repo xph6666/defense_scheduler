@@ -15,12 +15,13 @@ def fingerprint(payload, rules):
     # bindings must not make the same planning input appear to be new input.
     for student in data['students']:
         student.pop('secretary_id', None)
-    return sha256(json.dumps({'input': data, 'rules': rules}, sort_keys=True,
+    algorithm_revision = 2 if rules.get('policy_version', 1) >= 4 else 1
+    return sha256(json.dumps({'input': data, 'rules': rules, 'algorithm_revision': algorithm_revision}, sort_keys=True,
                              ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def validated(payload, rules, result):
-    if rules.get('defense_type') != 'pre' or rules.get('policy_version') != 3:
+    if rules.get('defense_type') != 'pre' or rules.get('policy_version', 1) < 3:
         return None
     from algorithm import GroupDraft, parse_student, parse_teacher, parse_time_range
     from scheduling.current import validate
@@ -46,6 +47,7 @@ def validated(payload, rules, result):
         candidate['conflicts'] = conflicts
         candidate['unassigned_students'] = []
         from scheduling.fairness import distribution_metrics, mentor_share_excess
+        from scheduling.policies import committee_size
         metrics = distribution_metrics(groups, students, teachers)
         diagnostics = candidate.setdefault('diagnostics', {})
         diagnostics['fairness'] = metrics
@@ -55,13 +57,16 @@ def validated(payload, rules, result):
         size_scale = max(1, (rules['group_max'] - rules['group_size']) ** 2,
                          (rules['group_min'] - rules['group_size']) ** 2)
         size_cost = sum((len(g.student_ids) - rules['group_size']) ** 2 / size_scale for g in groups) / max(1, len(groups))
-        share_cost = sum(p['share_excess'] / max(1, mentor_share_excess({0: len(g.student_ids)}, rules['expert_count']))
+        share_cost = sum(p['share_excess'] / max(1, mentor_share_excess({0: len(g.student_ids)}, committee_size(rules, g.campus)))
                          for p, g in zip(metrics['panels'], groups)) / max(1, len(groups))
         visits = list(metrics['appearances'].values())
         visit_total = sum(visits)
         visit_cost = max(0, len(visits) * sum(n * n for n in visits) / visit_total ** 2 - 1) if visit_total else 0
         diagnostics['quality_components'] = {'size': size_cost, 'mentor_shares': share_cost, 'appearance_cv_squared': visit_cost}
         diagnostics['quality'] = size_cost + share_cost + visit_cost
+        if rules.get('policy_version', 1) >= 4:
+            diagnostics['priority_quality'] = [metrics['share_excess'],
+                sum((len(g.student_ids) - rules['group_size']) ** 2 for g in groups), metrics['appearance_square_sum']]
         return candidate
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
@@ -89,7 +94,9 @@ def remember_pre_plan(payload, rules, result):
     if candidate is None:
         return False
     existing = read_pre_plan(payload, rules)
-    if existing is not None and existing['diagnostics']['quality'] <= candidate['diagnostics']['quality']:
+    def quality(value):
+        return value['diagnostics'].get('priority_quality', value['diagnostics']['quality'])
+    if existing is not None and quality(existing) <= quality(candidate):
         return False
     path = Path(directory) / (fingerprint(payload, rules) + '.json')
     try:

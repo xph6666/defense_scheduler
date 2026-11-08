@@ -96,6 +96,11 @@ export const importTeachers = async (file: File) => {
 }
 
 export interface TimetableImportResult {
+  preview?: boolean
+  previewToken?: string
+  canImport?: boolean
+  duplicateCount?: number
+  rows?: { teacherId: number | null; teacherName: string; matched: boolean; entries: string[]; newEntries: string[]; duplicateCount: number }[]
   message: string
   updatedTeachers: number
   matchedTeachers: number
@@ -105,11 +110,13 @@ export interface TimetableImportResult {
   entryCount: number
 }
 
-export const importTimetable = async (file: File, semesterFirstMonday: string) => {
+export const importTimetable = async (file: File, semesterFirstMonday: string, options?: { preview?: boolean; previewToken?: string }) => {
   if (!USE_MOCK) {
     const formData = new FormData()
     formData.append('file', file)
     formData.append('semesterFirstMonday', semesterFirstMonday)
+    if (options?.preview) formData.append('preview', 'true')
+    if (options?.previewToken) formData.append('previewToken', options.previewToken)
     return request.post('/teachers/import_timetable/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
@@ -130,6 +137,16 @@ export const importTimetable = async (file: File, semesterFirstMonday: string) =
       })
     }, 500)
   })
+}
+
+export const downloadTimetableTemplate = async () => {
+  const blob = await request.get('/teachers/timetable-template/', { responseType: 'blob' }) as Blob
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = '课表导入模板.xlsx'
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export const batchDeleteTeachers = async (ids: number[]) => {

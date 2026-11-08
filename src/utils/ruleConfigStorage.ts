@@ -18,7 +18,7 @@ export function getDefaultRuleConfig(defenseType: DefenseType): RuleConfig {
   const policy = getDefensePolicy(defenseType)
   return normalizeRuleConfig({
     ...policy,
-    policyVersion: defenseType === '中期答辩' ? 2 : policyVersion,
+    policyVersion,
     defenseType,
     startDate,
     endDate: addDays(startDate, 10),

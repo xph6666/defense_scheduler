@@ -14,7 +14,7 @@
 
     <div class="flex flex-wrap items-center gap-2">
       <el-button v-if="canManage" type="primary" :loading="loading" @click="emit('generate')">
-        {{ defenseType === '正式答辩' ? '沿用预答辩生成正式答辩' : defenseType === '预答辩' ? '生成预答辩草稿' : (hasResult ? '生成新草稿' : '生成排期草稿') }}
+        {{ defenseType === '正式答辩' ? '生成正式答辩草稿' : defenseType === '预答辩' ? '生成预答辩草稿' : (hasResult ? '生成新草稿' : '生成排期草稿') }}
       </el-button>
       <el-button v-if="canManage && defenseType !== '中期答辩'" :disabled="loading" @click="emit('generate-linked')">联合生成两阶段</el-button>
       <el-button plain :disabled="loading" @click="emit('refresh')">刷新安排</el-button>

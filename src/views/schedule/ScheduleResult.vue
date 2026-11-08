@@ -18,6 +18,14 @@
       </div>
 
       <div :class="{ 'mt-5': !guided }">
+        <div class="flex flex-wrap items-center gap-3 mb-4">
+          <strong class="text-sm text-gray-700">排期批次</strong>
+          <el-radio-group v-model="batchCampus" :disabled="loading || publishing || moving || adjustSaving" aria-label="选择排期校区批次">
+            <el-radio-button label="创新港">创新港</el-radio-button>
+            <el-radio-button label="兴庆">兴庆</el-radio-button>
+          </el-radio-group>
+          <span class="text-xs text-gray-500">两校区分别生成、调整和发布，共用教师仍检查时间冲突</span>
+        </div>
         <ScheduleToolbar
           :defense-type="defenseType"
           v-model:viewMode="viewMode"
@@ -48,7 +56,7 @@
       <el-select v-model="selectedVersion" placeholder="当前版本（下拉可查看历史）" clearable class="w-64" @change="fetchResult">
         <el-option
           v-for="v in versions" :key="v.id" :value="v.id"
-          :label="`v${v.version} · ${v.status === 'published' ? '已发布' : '草稿'}${v.is_current ? ' · 当前' : ''}`"
+          :label="`v${v.version} · ${v.campus_scope || '历史综合批次'} · ${v.status === 'published' ? '已发布' : '草稿'}${v.is_current ? ' · 当前' : ''}`"
         />
       </el-select>
       <el-tag :type="result?.status === 'published' ? 'success' : 'warning'">
@@ -56,11 +64,16 @@
       </el-tag>
       <el-button v-if="canEdit && result?.versionId && (!guided || guidedStage === 'publish')" :loading="publishing" :disabled="loading" type="primary" @click="handlePublish">校验并发布</el-button>
       <el-button v-if="canEdit && result?.versionId" :disabled="loading" @click="editingRevision = result?.revision; moveVisible = true">移动学生</el-button>
+      <el-button v-if="defenseType !== '中期答辩' && result?.versionId" :disabled="loading" @click="mappingVisible = true">查看两阶段学生去向</el-button>
       <el-button :disabled="loading" link type="primary" @click="openOperationLogDrawer">
         <el-icon><Document /></el-icon>
         <span>查看操作记录</span>
       </el-button>
     </div>
+
+    <p v-if="defenseType === '正式答辩' && result?.sourcePreVersion" class="text-sm text-gray-600">
+      关联预答辩 v{{ result.sourcePreVersion }}。{{ result.rules?.preserve_pre_defense_groups ? '沿用学生组、组号与秘书，正式评审轮换。' : '按学生记录实际分组关系，可查看拆分与合并去向。' }}
+    </p>
 
     <el-alert
       v-if="errorMsg"
@@ -126,7 +139,14 @@
         <SoftConstraintPanel :summary="optimizationSummary" :conflicts="conflicts" />
       </section>
     </details>
-    <div v-if="loading" class="bg-white p-6 rounded-lg shadow-sm">
+    <div v-if="generationPhase !== 'idle'" class="bg-white p-8 rounded-lg shadow-sm generation-progress-card" role="status" aria-live="polite">
+      <p class="text-base font-medium text-gray-800 mb-1">{{ batchCampus }} · 编排阶段进度</p>
+      <el-progress :percentage="generationPercent" :stroke-width="10" :indeterminate="generationPercent < 100" :duration="3" class="my-3" />
+      <p class="text-sm text-gray-600">{{ generationHint }}</p>
+      <p class="text-xs text-gray-500 mt-2">百分比表示已完成的阶段；求解耗时随名单和限制条件变化。</p>
+      <p class="text-xs text-gray-400 mt-2">{{ generationElapsedLabel }}，请勿关闭或刷新页面</p>
+    </div>
+    <div v-else-if="loading" class="bg-white p-6 rounded-lg shadow-sm">
       <p v-if="loadingMessage" class="mb-4 text-sm text-gray-600" role="status">{{ loadingMessage }}</p>
       <el-skeleton :rows="6" animated />
     </div>
@@ -195,18 +215,19 @@
     </div>
   </div>
 
-  <el-dialog v-model="generationVisible" title="生成前，确认这次安排" width="min(560px, 94vw)" :close-on-click-modal="false">
+  <StageMappingDialog v-model="mappingVisible" :defense-type="defenseType" :version-id="result?.versionId" />
+  <el-dialog v-model="generationVisible" :title="`${batchCampus} · 生成前确认`" width="min(560px, 94vw)" :close-on-click-modal="false">
     <template v-if="generationConfig">
-      <p class="mb-4">{{ defenseType === '正式答辩' ? '沿用当前预答辩的学生、固定组号、秘书和组号顺序；主席与专家全部轮换，导师回避，按组号顺排正式日期及半天。' : '确认后生成新草稿，历史版本保留。每组仅允许 5～7 人，以 6 人为主。预答辩全部优化后按日期和半天确定最终组号，正式答辩沿用同组学生、组号和顺序。' }}</p>
+      <p class="mb-4">{{ generationSummary }}</p>
       <el-descriptions :column="1" border>
         <el-descriptions-item label="答辩类型">{{ defenseType }}</el-descriptions-item>
         <el-descriptions-item label="答辩日期">{{ generationConfig.startDate || '未设置' }} 至 {{ generationConfig.endDate || '未设置' }}</el-descriptions-item>
         <el-descriptions-item label="每组人数">学生 {{ generationConfig.studentCount.target }} 人 / 专家{{ defenseType === '预答辩' ? '至少' : '目标' }} {{ defenseType === '预答辩' ? generationConfig.expertCount.min : generationConfig.expertCount.target }} 人<span v-if="defenseType !== '预答辩'">（至少 {{ generationConfig.expertCount.min }} 人）</span> / 秘书 1 人</el-descriptions-item>
-        <el-descriptions-item label="参与学生">{{ generationStudentCount }} 人</el-descriptions-item>
-        <el-descriptions-item label="导师安排">{{ defenseType !== '正式答辩' ? '导师与学生同组' : generationConfig.mentorAvoidance ? '导师回避自己的学生' : '不要求导师回避' }}</el-descriptions-item>
+        <el-descriptions-item label="参与学生">{{ generationConfig.useConfirmedPreStudents ? '读取本校区已发布预答辩名单' : `${generationStudentCount} 人` }}</el-descriptions-item>
+        <el-descriptions-item label="导师安排">{{ defenseType === '中期答辩' ? '导师不回避，可评审自己的学生' : defenseType === '预答辩' ? '导师与学生同组' : generationConfig.mentorAvoidance ? '导师回避自己的学生' : '不要求导师回避' }}</el-descriptions-item>
       </el-descriptions>
       <el-alert v-if="!generationConfig.enabled" title="此答辩类型尚未启用，请先修改安排要求。" type="warning" :closable="false" class="mt-4" />
-      <el-alert v-else-if="!generationStudentCount" title="还没有参加本次答辩的学生，请先在学生名单中补充参与环节。" type="warning" :closable="false" class="mt-4" />
+      <el-alert v-else-if="!generationStudentCount && !generationConfig.useConfirmedPreStudents" title="还没有参加本次答辩的学生，请先在学生名单中补充参与环节。" type="warning" :closable="false" class="mt-4" />
 
       <!-- 预检结果区域 -->
       <div v-else class="preflight-section mt-4">
@@ -283,7 +304,7 @@
       <el-button
         type="primary"
         :loading="preflightLoading"
-        :disabled="!generationConfig?.enabled || !generationStudentCount || preflightStatus === 'failed'"
+        :disabled="!generationConfig?.enabled || (!generationStudentCount && !generationConfig?.useConfirmedPreStudents) || preflightStatus === 'failed'"
         @click="handleGenerate"
       >
         {{ preflightStatus === 'passed' && preflightResult?.warnings.length ? '继续生成草稿' : '确认生成草稿' }}
@@ -495,6 +516,7 @@
   <ScheduleAdjustDrawer
     v-model="adjustVisible"
     :defense-type="defenseType"
+    :policy-version="result?.rules?.policy_version"
     :group="currentGroup"
     :teachers="teacherOptions"
     :students="studentOptions"
@@ -539,7 +561,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Warning, CircleCloseFilled, InfoFilled, Loading } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -560,6 +582,7 @@ import SoftConstraintPanel from '../../components/SoftConstraintPanel.vue'
 import OperationLogTable from '../../components/OperationLogTable.vue'
 import type { ScheduleGroup, ScheduleResult, ScheduleStudent, ScheduleTeacher, ScheduleWorkflowState } from '../../types/schedule'
 import { generateSchedule, generateLinkedSchedule, getScheduleResults, listScheduleVersions, publishSchedule, moveScheduleStudent, preflightSchedule, type ScheduleVersionOption, type PreflightResult } from '../../api/schedule'
+import StageMappingDialog from '../../components/StageMappingDialog.vue'
 import { checkScheduleConflicts } from '../../api/conflict'
 import { updateScheduleGroup } from '../../api/adjustment'
 import type { ScheduleConflict } from '../../types/conflict'
@@ -605,6 +628,13 @@ const updateLinkedExpertCount = () => {
 }
 const linkedError = ref('')
 const generationConfig = ref<RuleConfig | null>(null)
+const generationSummary = computed(() => {
+  if (defenseType.value === '中期答辩') return '每组 5 位专家（含组长）、10 名学生，组长必须为正高，导师不回避；不足 10 人的余数逐人列为未安排。'
+  if (defenseType.value === '正式答辩') return generationConfig.value?.preservePreDefenseGroups
+    ? '沿用本校区预答辩的学生组、组号与秘书，主席和专家全部轮换，导师回避。'
+    : '本校区正式答辩重新分组，按学生保留预答辩来源，可查看拆分与合并后的实际去向。'
+  return '每组 5～7 名学生，以 6 人为主；组长必须为正高，优先本院专家。只生成当前校区的草稿，历史版本保留。'
+})
 const generationStudentCount = ref(0)
 // 预检相关状态
 const preflightLoading = ref(false)
@@ -618,6 +648,39 @@ const linkedPreflightStatus = ref<'idle' | 'loading' | 'passed' | 'failed'>('idl
 const viewMode = ref<'agenda' | 'card' | 'table'>('table')
 const loading = ref(false)
 const loadingMessage = ref('')
+// 百分比表示后端已完成的阶段；求解阶段保持动画，等待时间不推进执行阶段。
+const generationElapsed = ref(0)
+const generationPhase = ref('idle')
+const generationPercent = ref(0)
+const generationHint = ref('等待服务开始编排…')
+let generationTimer: ReturnType<typeof setInterval> | undefined
+function updateGenerationProgress(progress: import('../../api/schedule').GenerationProgress) {
+  if (generationPhase.value === 'idle') return
+  generationPhase.value = progress.stage
+  generationPercent.value = progress.percent
+  const label = progress.defenseType === 'pre' ? '预答辩 · ' : progress.defenseType === 'formal' ? '正式答辩 · ' : ''
+  generationHint.value = label + progress.message
+}
+const generationElapsedLabel = computed(() => {
+  const mm = Math.floor(generationElapsed.value / 60)
+  const ss = generationElapsed.value % 60
+  return `已等待 ${mm}:${ss.toString().padStart(2, '0')}`
+})
+function stopGenerationProgress() {
+  if (generationTimer) { clearInterval(generationTimer); generationTimer = undefined }
+  generationPhase.value = 'idle'
+  generationElapsed.value = 0
+}
+function startGenerationProgress() {
+  stopGenerationProgress()
+  generationElapsed.value = 0
+  generationPercent.value = 0
+  generationPhase.value = 'waiting'
+  generationHint.value = '等待服务开始编排…'
+  generationTimer = setInterval(() => {
+    generationElapsed.value += 1
+  }, 1000)
+}
 const errorMsg = ref('')
 const result = ref<ScheduleResult | null>(null)
 const mentorColors = computed(() => buildMentorColors(result.value?.groups ?? []))
@@ -630,7 +693,9 @@ const { canManage, requireAdmin } = useAdminGuard()
 
 const selectedVersion = ref<number | undefined>()
 const versions = ref<ScheduleVersionOption[]>([])
-const workspace = useScheduleContext(defenseType, selectedVersion, result)
+const batchCampus = ref<'创新港' | '兴庆'>('创新港')
+const mappingVisible = ref(false)
+const workspace = useScheduleContext(defenseType, selectedVersion, result, batchCampus)
 const editingRevision = ref<number | undefined>()
 const canEdit = computed(() => canManage.value && result.value?.status !== 'published' && result.value?.isCurrent !== false && !loading.value && !publishing.value && !moving.value)
 
@@ -963,7 +1028,7 @@ const fetchResult = async () => {
   highlightedGroupIds.value = []
   try {
     const [scheduleResult, versionOptions] = await Promise.all([
-      getScheduleResults(context.defenseType, context.versionId), listScheduleVersions(context.defenseType)
+      getScheduleResults(context.defenseType, context.versionId, context.campusScope), listScheduleVersions(context.defenseType, context.campusScope)
     ])
     if (!workspace.isCurrent(context)) return
     result.value = scheduleResult
@@ -999,10 +1064,10 @@ const prepareGeneration = async () => {
     ])
     if (!workspace.isCurrent(context)) return
     generationConfig.value = context.defenseType === '预答辩'
-      ? { ...config, expertCount: { target: 3, min: 3 } }
+      ? { ...config, campusScope: batchCampus.value, expertCount: { target: 3, min: 3 } }
       : context.defenseType === '正式答辩'
-        ? { ...config, preservePreDefenseGroups: true, mentorAvoidance: false } : config
-    generationStudentCount.value = students.filter(student => student.defenseTypes.includes(context.defenseType)).length
+        ? { ...config, campusScope: batchCampus.value } : { ...config, campusScope: batchCampus.value }
+    generationStudentCount.value = students.filter(student => student.defenseTypes.includes(context.defenseType) && student.campus === batchCampus.value).length
     // 重置预检状态
     preflightStatus.value = 'idle'
     preflightResult.value = null
@@ -1021,7 +1086,7 @@ const prepareLinkedGeneration = async () => {
       getRuleConfig('预答辩'), getRuleConfig('正式答辩'), listStudents('预答辩')
     ])
     if (!workspace.isCurrent(context)) return
-    linkedConfigs.value = [pre, { ...formal, preservePreDefenseGroups: true }]
+    linkedConfigs.value = [{ ...pre, campusScope: batchCampus.value }, { ...formal, campusScope: batchCampus.value, preservePreDefenseGroups: true, useConfirmedPreStudents: false }]
     linkedExpertCount.value = pre.expertCount.target
     updateLinkedExpertCount()
     const errors = [...validateWizardRules(pre), ...validateWizardRules(formal)]
@@ -1082,8 +1147,9 @@ const doGenerateLinked = async (configs: [RuleConfig, RuleConfig]) => {
   selectedVersion.value = undefined
   const context = workspace.begin()
   loading.value = true
+  startGenerationProgress()
   try {
-    await generateLinkedSchedule(configs[0], configs[1])
+    await generateLinkedSchedule(configs[0], configs[1], p => { if (workspace.isCurrent(context)) updateGenerationProgress(p) })
     if (!workspace.isCurrent(context)) return
     ElMessage.success('两阶段草稿已生成，请分别核对冲突后发布')
     await fetchResult()
@@ -1091,7 +1157,10 @@ const doGenerateLinked = async (configs: [RuleConfig, RuleConfig]) => {
     if (!workspace.isCurrent(context)) return
     errorMsg.value = error instanceof Error ? error.message : '联合生成失败'
     ElMessage.error(`${errorMsg.value}。若请求超时，可重试获取同一联合生成结果。`)
-  } finally { if (workspace.isCurrent(context)) loading.value = false }
+  } finally {
+    stopGenerationProgress()
+    if (workspace.isCurrent(context)) loading.value = false
+  }
 }
 
 const handleGenerate = async () => {
@@ -1134,14 +1203,15 @@ const doGenerate = async (config: RuleConfig) => {
   selectedVersion.value = undefined
   const context = workspace.begin()
   loading.value = true
+  startGenerationProgress()
   errorMsg.value = ''
   conflicts.value = []
   currentConflict.value = null
   try {
-    const scheduleResult = await generateSchedule(context.defenseType, config)
+    const scheduleResult = await generateSchedule(context.defenseType, config, p => { if (workspace.isCurrent(context)) updateGenerationProgress(p) })
     if (!workspace.isCurrent(context)) return
     result.value = scheduleResult
-    const options = await listScheduleVersions(context.defenseType)
+    const options = await listScheduleVersions(context.defenseType, context.campusScope)
     if (!workspace.isCurrent(context)) return
     versions.value = options
     ElMessage.success('草稿已生成，请核对冲突后发布')
@@ -1159,7 +1229,10 @@ const doGenerate = async (config: RuleConfig) => {
     conflicts.value = []
     currentConflict.value = null
     ElMessage.error(`${errorMsg.value}。若请求超时，可重试获取同一生成结果。`)
-  } finally { if (workspace.isCurrent(context)) loading.value = false }
+  } finally {
+    stopGenerationProgress()
+    if (workspace.isCurrent(context)) loading.value = false
+  }
 }
 
 // 根据错误类型跳转到对应的数据补齐页面
@@ -1251,7 +1324,9 @@ const handleSaveAdjust = async (groupData: ScheduleGroup) => {
 watch(selectedVersion, () => { adjustVisible.value = false; moveVisible.value = false; generationVisible.value = false; linkedVisible.value = false; publishing.value = false; moving.value = false; adjustSaving.value = false; highlightedGroupIds.value = [] })
 watch(moveVisible, visible => { if (visible) { preserveSecretary.value = true; replacementSecretaryId.value = undefined; moveStudentId.value = undefined; moveTargetId.value = undefined } })
 
-watch(defenseType, async () => {
+watch([defenseType, batchCampus], async () => {
+  stopGenerationProgress()
+  mappingVisible.value = false
   selectedVersion.value = undefined
   adjustVisible.value = false
   moveVisible.value = false
@@ -1276,6 +1351,7 @@ watch(canManage, isAllowed => {
 })
 
 onMounted(() => { void fetchResult() })
+onBeforeUnmount(() => { stopGenerationProgress() })
 
 const groupStatusMap = computed(() => {
   const map: Record<number, 'normal' | 'warning' | 'error'> = {}
@@ -1521,6 +1597,33 @@ const meta = computed(() => {
   background: #ecf5ff;
   border-radius: 6px;
   border: 1px solid #d9ecff;
+}
+
+.generation-progress-card {
+  text-align: center;
+}
+.generation-progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #ebeef5;
+  overflow: hidden;
+  position: relative;
+}
+.generation-progress-bar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -40%;
+  height: 100%;
+  width: 40%;
+  border-radius: 4px;
+  background: var(--el-color-primary);
+  animation: generation-bar-slide 1.4s ease-in-out infinite;
+}
+@keyframes generation-bar-slide {
+  0% { left: -40%; }
+  50% { left: 100%; }
+  100% { left: -40%; }
 }
 
 .preflight-error-item {

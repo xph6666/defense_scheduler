@@ -138,7 +138,9 @@ class FormalRotation:
             label = previous.group_id
             mentors = {self.student_map[sid].supervisor_id for sid in ids} - {None}
             secretary = self.teacher_map.get(previous.secretary_id)
-            if not group_min <= len(ids) <= group_max:
+            if self.rules.get('policy_version', 1) >= 4 and len(ids) != len(previous.student_ids):
+                reason = f'预答辩 {label} 的参与学生已变化，无法整组平移；请先核对两阶段名单'
+            elif not group_min <= len(ids) <= group_max:
                 reason = (f'预答辩 {label} 在本阶段的学生人数不满足 {group_min}～{group_max} 人，'
                           '请先调整预答辩或核对参与名单')
             elif secretary is None:

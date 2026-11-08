@@ -4,7 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from rest_framework import serializers
-from scheduling.policies import scenario_policy, effective_teacher_roles
+from scheduling.policies import scenario_policy, effective_teacher_roles, validate_campus_expert_counts
 
 from .models import Group, OperationLog, Room, RuleConfig, ScheduleVersion, Student, Teacher
 from .services.reference_data import ReferenceDataError, sync_student_references, sync_teacher_rename
@@ -20,8 +20,8 @@ DEFENSE_TYPE_VALUES = {value: key for key, value in DEFENSE_TYPE_LABELS.items()}
 DATE_FORMAT = '%Y-%m-%d'
 
 
-def default_rule_config(defense_type='pre', policy_version=3):
-    config = scenario_policy(defense_type)
+def default_rule_config(defense_type='pre', policy_version=4):
+    config = scenario_policy(defense_type, policy_version)
     if policy_version == 2 and defense_type in ('pre', 'formal'):
         count = 4 if defense_type == 'pre' else 5
         config.update(studentCount={'target': 6, 'min': 4, 'max': 8},
@@ -29,7 +29,7 @@ def default_rule_config(defense_type='pre', policy_version=3):
                       mentorAvoidance=defense_type == 'formal',
                       formalSoftwareMin=3, formalMentorSameSession=defense_type == 'formal')
     today = timezone.localdate()
-    config.update(policyVersion=2 if defense_type == 'mid' else policy_version, startDate=today.isoformat(),
+    config.update(policyVersion=2 if defense_type == 'mid' and policy_version < 4 else policy_version, startDate=today.isoformat(),
                   endDate=(today + timedelta(days=10)).isoformat(), excludeDates=[])
     return config
 
@@ -116,7 +116,16 @@ def validate_rule_config(config):
     experts = config['expertCount']
     target = parse_non_negative_int(experts['target'], 'expertCount.target')
     minimum = parse_non_negative_int(experts['min'], 'expertCount.min')
-    current = config.get('policyVersion') == 3 and defense_type != 'mid'
+    latest = config.get('policyVersion', 2) >= 4
+    try:
+        validate_campus_expert_counts(config.get('campusExpertCounts', {}), defense_type, config.get('policyVersion', 2))
+    except ValueError as exc:
+        raise serializers.ValidationError({'campusExpertCounts': [str(exc)]})
+    if latest and defense_type == 'mid' and (
+            any(int(config['studentCount'][key]) != 10 for key in ('min', 'target', 'max'))
+            or target != 5 or minimum != 5):
+        raise serializers.ValidationError({'studentCount': ['中期答辩固定每组 10 名学生、5 位专家（含组长），导师不回避']})
+    current = config.get('policyVersion', 2) >= 3 and defense_type != 'mid'
     if current and not (5 <= int(config['studentCount']['min'])
             <= int(config['studentCount']['target']) <= int(config['studentCount']['max']) <= 7):
         raise serializers.ValidationError({'studentCount': ['预答辩及正式答辩每组至少 5 人、最多 7 人，建议 6 人']})
@@ -134,7 +143,7 @@ def validate_rule_config(config):
     if 'includesChair' in experts and experts['includesChair'] is not True:
         raise serializers.ValidationError({'expertCount': ['主席/组长必须计入专家人数']})
     if defense_type != 'formal' and config['mentorAvoidance'] is not False:
-        raise serializers.ValidationError({'mentorAvoidance': ['预答辩和中期答辩必须保持导师在场']})
+        raise serializers.ValidationError({'mentorAvoidance': ['预答辩和中期答辩不启用导师回避']})
     if config.get('courseHalfDayBlocking') is not True:
         raise serializers.ValidationError({'courseHalfDayBlocking': ['有课的半天不能安排答辩']})
     if parse_non_negative_int(config.get('secretaryCount'), 'secretaryCount') != 1:
@@ -150,7 +159,7 @@ def validate_rule_config(config):
         raise serializers.ValidationError({'roleQualification': ['配置格式不正确']})
     ranks = {'助教': 0, '讲师': 1, '副教授': 2, '副高': 2, '教授': 3, '正高': 3,
              '副研究员': 2, '研究员': 3}
-    for key, floor in (('leaderMinTitle', 2), ('chairmanMinTitle', 3), ('secretaryMinTitle', 1)):
+    for key, floor in (('leaderMinTitle', 3 if latest and defense_type in ('pre', 'mid') else 2), ('chairmanMinTitle', 3), ('secretaryMinTitle', 1)):
         if ranks.get(qualifications.get(key), -1) < floor:
             raise serializers.ValidationError({f'roleQualification.{key}': ['职称门槛不能低于业务要求']})
 
@@ -381,8 +390,8 @@ class RuleConfigSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'defense_type': '缺少答辩类型'})
         if defense_type not in DEFENSE_TYPE_LABELS:
             raise serializers.ValidationError({'defense_type': ['不支持的答辩类型']})
-        version = payload.get('policyVersion', self.instance.config.get('policyVersion', 3) if self.instance else 3)
-        if version not in (2, 3) or isinstance(version, bool):
+        version = payload.get('policyVersion', self.instance.config.get('policyVersion', 4) if self.instance else 4)
+        if version not in (2, 3, 4) or isinstance(version, bool):
             raise serializers.ValidationError({'policyVersion': ['不支持的规则版本']})
         config = default_rule_config(defense_type, version)
         if self.instance and self.instance.defense_type == defense_type:
@@ -394,8 +403,8 @@ class RuleConfigSerializer(serializers.ModelSerializer):
             config['expertCount']['max'] = None
         config['defenseType'] = DEFENSE_TYPE_LABELS.get(defense_type, config.get('defenseType', defense_type))
         config.pop('updatedAt', None)
-        config['policyVersion'] = 2 if defense_type == 'mid' else config.get('policyVersion', 3)
-        if config['policyVersion'] == 3 and defense_type != 'mid' and isinstance(config.get('expertCount'), dict):
+        config['policyVersion'] = 2 if defense_type == 'mid' and version < 4 else version
+        if config['policyVersion'] >= 3 and defense_type != 'mid' and isinstance(config.get('expertCount'), dict):
             config['expertCount']['max'] = config['expertCount'].get('target')
         config['softwareTeacherMin'] = config['formalSoftwareMin'] if defense_type == 'formal' else 0
         validate_rule_config(config)

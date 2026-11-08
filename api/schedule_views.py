@@ -13,6 +13,7 @@ from .schedule_integrity import schedule_write, audit, capture_export_groups, ex
 from .serializers import DEFENSE_TYPE_LABELS, ScheduleVersionSerializer
 from .services.schedules import ScheduleApplication
 from .services.time_data import validate_schedule_time_text
+from .services.generation_progress import read_progress, track_generation
 
 class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     queryset = ScheduleVersion.objects.all()
@@ -22,6 +23,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     read_actions = {
         'current', 'export', 'export_excel', 'export_word', 'export_conclusion',
         'check_conflicts', 'versions', 'record_pdf_export',
+        'stage_mapping',
     }
 
     def get_permissions(self):
@@ -43,6 +45,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         'chair_title_relaxed': ('主席职称放宽提示', 'warning'),
         'formal_group_order': ('正式答辩组号时序冲突', 'error'),
         'pre_group_order': ('预答辩组号时序冲突', 'error'),
+        'student_campus_mismatch': ('学生校区冲突', 'error'),
+        'pre_group_mapping_broken': ('预答辩映射冲突', 'error'),
         'pre_group_capacity': ('预答辩人数与组长资格冲突', 'warning'),
         'remark_confirmation': ('教师备注待确认', 'warning'),
         'availability_pending': ('教师可用时间待确认', 'warning'),
@@ -189,6 +193,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         return Response(result)
 
     @action(detail=False, methods=['post'])
+    @track_generation
     @schedule_write
     def generate(self, request):
         rules = self._normalize_rules(request.data.get('rules', {}))
@@ -211,6 +216,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
             return Response({'error': str(exc)}, status=400)
 
     @action(detail=False, methods=['post'], url_path='generate-linked')
+    @track_generation
     @schedule_write
     def generate_linked(self, request):
         """Generate both stages atomically, preserving the pre-defense grouping."""
@@ -218,15 +224,20 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         pre_raw, formal_raw = request.data.get('pre_rules', {}), request.data.get('formal_rules', {})
         if not isinstance(pre_raw, dict) or not isinstance(formal_raw, dict):
             return Response({'error': '两阶段规则必须是对象'}, status=400)
-        pre_rules = self._normalize_rules({**pre_raw, 'defense_type': 'pre', 'policy_version': pre_raw.get('policy_version', 3)})
+        pre_rules = self._normalize_rules({**pre_raw, 'defense_type': 'pre', 'policy_version': pre_raw.get('policy_version', 4)})
         pre_rules.update(reserve_formal_resources=True, refresh_secretary_bindings=True)
-        formal_rules = self._normalize_rules({**formal_raw, 'defense_type': 'formal', 'policy_version': formal_raw.get('policy_version', 3),
+        formal_rules = self._normalize_rules({**formal_raw, 'defense_type': 'formal', 'policy_version': formal_raw.get('policy_version', 4),
             'preserve_pre_defense_groups': True, 'formal_mentor_same_session': True})
-        if pre_rules['policy_version'] == 3:
+        if formal_rules.get('use_confirmed_pre_students'):
+            # Linked generation uses the new pre draft produced in this transaction.
+            formal_rules['use_confirmed_pre_students'] = False
+        if pre_rules['policy_version'] >= 3:
             # 正式答辩沿用本轮预答辩的学生和秘书，评审全部轮换；派生规则与单独生成一致
             self._apply_formal_rules(formal_rules, pre_rules['chair_title'])
         if formal_rules['start_date'] <= pre_rules['end_date']:
             return Response({'error': '正式答辩开始日期必须晚于预答辩结束日期'}, status=400)
+        if pre_rules.get('campus_scope', '') != formal_rules.get('campus_scope', ''):
+            return Response({'error': '联合生成的两阶段必须属于同一校区批次'}, status=400)
         key = request.data.get('request_key')
         if key and (not isinstance(key, str) or len(key) > 64):
             return Response({'error': '请求标识格式不正确'}, status=400)
@@ -247,6 +258,31 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         except ValueError as exc:
             return Response({'error': str(exc)}, status=400)
         return Response({'pre': self._version_result(pre_version), 'formal': self._version_result(formal_version)})
+
+    @action(detail=False, methods=['get'], url_path='generation-progress')
+    def generation_progress(self, request):
+        return read_progress(request.user.pk, request.query_params.get('request_key'))
+
+    @action(detail=False, methods=['get'], url_path='stage-mapping')
+    def stage_mapping(self, request):
+        from .services.stage_mapping import build_stage_mapping
+        stage = request.query_params.get('defense_type', 'pre')
+        if stage not in ('pre', 'formal'):
+            return Response({'error': '请选择预答辩或正式答辩版本'}, status=400)
+        selected = self._selected_version(request, stage)
+        if not selected:
+            return Response({'error': '所选版本不存在'}, status=404)
+        if stage == 'formal':
+            pre, formal = selected.source_pre_version, selected
+            if pre and not is_admin_user(request.user) and pre.status != 'published':
+                pre = None
+        else:
+            pre = selected
+            candidates = pre.linked_formal_versions.all()
+            if not is_admin_user(request.user):
+                candidates = candidates.filter(status='published')
+            formal = candidates.order_by('-is_current', '-created_at').first()
+        return Response(build_stage_mapping(pre, formal))
 
     @action(detail=False, methods=['get'])
     def current(self, request):
@@ -276,6 +312,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 return queryset.filter(pk=int(version_id)).first()
             except (ValueError, TypeError):
                 raise ValidationError('版本 ID 格式不正确')
+        if request.query_params.get('campus_scope'):
+            queryset = queryset.filter(campus_scope=request.query_params['campus_scope'])
         return queryset.filter(is_current=True).first() if is_admin_user(request.user) else queryset.first()
 
     # [TASK-P09/P12 修改] 实时及冻结版本响应补足评分和版本化导出所需字段。
@@ -290,7 +328,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 for student in group.get('students', [])
             ]} for group in result.get('groups', [])]
             result.setdefault('rules', schedule_version.rules_snapshot)
-            return {**result, 'status': schedule_version.status, 'revision': schedule_version.revision, 'isCurrent': schedule_version.is_current}
+            result.setdefault('sourcePreVersion', schedule_version.source_pre_version.version if schedule_version.source_pre_version_id else None)
+            return {**result, 'campusScope': schedule_version.campus_scope, 'status': schedule_version.status, 'revision': schedule_version.revision, 'isCurrent': schedule_version.is_current}
         groups = export_groups(schedule_version)
         formatted_groups = []
         teacher_external_by_id = dict(Teacher.objects.values_list('id', 'is_external'))
@@ -325,8 +364,10 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         raw_conflicts = self._check_conflicts(schedule_version)
         return {
             'isCurrent': schedule_version.is_current,
+            'campusScope': schedule_version.campus_scope,
             'versionId': schedule_version.id,
             'sourcePreVersionId': schedule_version.source_pre_version_id,
+            'sourcePreVersion': schedule_version.source_pre_version.version if schedule_version.source_pre_version_id else None,
             'version': schedule_version.version,
             'revision': schedule_version.revision,
             'status': schedule_version.status,
@@ -339,7 +380,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         }
 
     def _allocation_summary(self, version, groups, conflicts):
-        if version.rules_snapshot.get('policy_version') != 3:
+        if version.rules_snapshot.get('policy_version', 1) < 3:
             return {}
         scheduled = {s['id'] for group in groups for s in group['students']}
         reasons = {c.get('student_id'): c['description'] for c in [*conflicts, *version.conflicts_snapshot] if c.get('type') == 'missing_student'}
@@ -397,7 +438,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         next_group_id = group_data.get('groupName') or group.group_id
         if not isinstance(next_group_id, str) or len(next_group_id) > 20:
             return Response({'error': '组名必须为不超过 20 个字符的文本'}, status=400)
-        if (group.schedule_version.rules_snapshot.get('policy_version') == 3
+        if (group.schedule_version.rules_snapshot.get('policy_version', 1) >= 3
                 and group.schedule_version.defense_type in ('pre', 'formal')
                 and next_group_id != group.group_id):
             return Response({'error': '预答辩组号确定后固定，正式答辩沿用同一组号'}, status=400)
@@ -413,7 +454,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
 
         room = None
         room_name = group_data.get('classroom')
-        if group.schedule_version.rules_snapshot.get('policy_version') == 3 and room_name in ('待预约', '未分配'):
+        if group.schedule_version.rules_snapshot.get('policy_version', 1) >= 3 and room_name in ('待预约', '未分配'):
             room_name = None
         if room_name:
             room = Room.objects.filter(name=room_name, campus=next_campus).first()
@@ -870,9 +911,12 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     @action(detail=False, methods=['get'])
     def versions(self, request):
         queryset = ScheduleVersion.objects.filter(defense_type=request.query_params.get('defense_type', 'pre'))
+        if request.query_params.get('campus_scope'):
+            from django.db.models import Q
+            queryset = queryset.filter(Q(campus_scope=request.query_params['campus_scope']) | Q(campus_scope=''))
         if not is_admin_user(request.user):
             queryset = queryset.filter(status='published')
-        return Response(list(queryset.values('id', 'version', 'status', 'is_current', 'created_at', 'published_at', 'revision')[:100]))
+        return Response(list(queryset.values('id', 'version', 'status', 'is_current', 'campus_scope', 'created_at', 'published_at', 'revision')[:100]))
 
     @action(detail=False, methods=['post'])
     @schedule_write

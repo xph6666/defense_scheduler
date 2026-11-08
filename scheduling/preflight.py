@@ -9,9 +9,9 @@ def personnel_capacity_issues(payload, rules):
 
     通过检查不代表一定能全部安排；未通过时生成仍会尽量安排，并逐人列出未安排原因。
     """
-    if rules.get('policy_version') != 3 or rules.get('defense_type') not in ('pre', 'formal'):
+    if rules.get('policy_version', 1) < 3 or rules.get('defense_type') not in ('pre', 'formal'):
         return [], []
-    from algorithm import build_candidate_slots, parse_teacher
+    from algorithm import build_candidate_slots, parse_teacher, parse_student
     from .current import available
     from .policies import formal_chair_level, pre_chair_is_qualified
     errors, warnings = [], []
@@ -43,9 +43,15 @@ def personnel_capacity_issues(payload, rules):
     secretaries = {t.id for t in teachers if secretary_is_qualified(t, rules.get('secretary_title', '讲师'))}
     experts = int(rules['expert_count'])
     if rules['defense_type'] == 'pre':
+        from .policies import committee_size
+        from .pre_capacity import pre_capacity_notices
+        for notice in pre_capacity_notices([parse_student(s) for s in students], teachers, rules):
+            issue('pre_group_capacity', 'warning', notice['description'],
+                  '按校区调整专家人数或核对名单与职称；时间范围不改变该人数矛盾。')
         chairs = {t.id for t in teachers if pre_chair_is_qualified(t, rules)}
         # 每组需 1 位秘书、1 位合格组长及 expert_count 位评审，且同一半天互不重复
-        capacity = sum(min(len(ids & secretaries), len(ids & chairs), len(ids) // (experts + 1)) for ids in free)
+        smallest_panel = min((committee_size(rules, campus) for campus in sizes), default=experts)
+        capacity = sum(min(len(ids & secretaries), len(ids & chairs), len(ids) // (smallest_panel + 1)) for ids in free)
         basis = f'按 {len(secretaries)} 位秘书、合格组长和评审人数'
         groups, need_text = minimum_groups, f'{len(students)} 名学生按每组最多 {group_max} 人也至少需要 {minimum_groups} 组'
     else:

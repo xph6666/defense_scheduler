@@ -24,6 +24,9 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     rules = rules or {}
     students = list(Student.objects.select_related('mentor', 'bound_secretary'))
     rooms = list(Room.objects.all())
+    if rules.get('campus_scope'):
+        students = [student for student in students if student.campus == rules['campus_scope']]
+        rooms = [room for room in rooms if room.campus == rules['campus_scope']]
 
     all_teachers = list(Teacher.objects.all())
     teachers = [
@@ -50,7 +53,7 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     teacher_payload = []
     for teacher in teachers:
         allow_multiple, unknown_remarks = teacher_remark_rules(teacher.remark)
-        if rules.get('policy_version') == 3:
+        if rules.get('policy_version', 1) >= 3 and defense_type in ('pre', 'formal'):
             if unknown_remarks:
                 data_notices.append({'type': 'remark_confirmation', 'description': f'教师 {teacher.name} 的备注尚未转换为排班规则，请核对结构化配置：{"；".join(unknown_remarks)}', 'related_ids': [teacher.id]})
             if not teacher.availability_confirmed and not (teacher.unavailable_times.strip() or teacher.available_times.strip()):
@@ -102,11 +105,12 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     # 正式答辩沿用预答辩分组：把预答辩当前版本的组号随学生传给算法
     previous_group_map = {}
     previous_secretary_map = {}
-    if defense_type == 'formal' and rules.get('preserve_pre_defense_groups', True):
+    if defense_type == 'formal' and (rules.get('preserve_pre_defense_groups', True) or rules.get('use_confirmed_pre_students')):
         if '_source_pre_version_id' in rules:
             previous_version = ScheduleVersion.objects.filter(pk=rules['_source_pre_version_id'], defense_type='pre').first()
         else:
-            previous_version = ScheduleVersion.objects.filter(defense_type='pre', is_current=True).first()
+            from .campus_batches import current_pre
+            previous_version = current_pre(rules)
         if previous_version:
             from ..schedule_integrity import export_groups
             for previous_group in export_groups(previous_version):
@@ -118,11 +122,14 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     missing_type_students = []
     for student in students:
         defense_types = student.defense_types or []
-        if not defense_types:
+        from_confirmed_pre = rules.get('use_confirmed_pre_students') and student.pk in previous_group_map
+        if rules.get('use_confirmed_pre_students') and not from_confirmed_pre:
+            continue
+        if not defense_types and not from_confirmed_pre:
             if not nonparticipation_reason(student.remark):
                 missing_type_students.append(student)
             continue
-        if defense_label not in defense_types:
+        if defense_label not in defense_types and not from_confirmed_pre:
             continue
 
         mentor_name = (student.mentor.name if student.mentor_id else student.mentor_name or '').strip()
@@ -157,6 +164,7 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         student_payload.append({
             'id': student.id,
             'name': student.name,
+            'student_no': student.student_no or '',
             'type': student.student_type,
             'supervisor_id': mentor.id if mentor else None,
             'campus': student.campus,
@@ -224,7 +232,13 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         ),
     )
 
-    if rules.get('policy_version') == 3:
+    if rules.get('campus_scope'):
+        from .campus_batches import other_batch_reservations
+        busy = other_batch_reservations(rules)
+        for teacher in teacher_payload:
+            teacher['available_time'] = list(dict.fromkeys([
+                *teacher['available_time'], *[row[0] for row in busy.get(teacher['id'], [])]]))
+    if rules.get('policy_version', 1) >= 3 and defense_type in ('pre', 'formal'):
         return {'teachers': teacher_payload, 'students': student_payload, 'rooms': []}, data_notices
     room_payload = []
     for room in rooms:

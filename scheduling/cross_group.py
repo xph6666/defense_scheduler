@@ -3,7 +3,7 @@ from collections import Counter, defaultdict
 from itertools import combinations, product
 
 from .current import participants, validate
-from .fairness import distribution_metrics, panel_cost
+from .fairness import distribution_metrics, panel_cost, mentor_share_excess
 
 
 class CrossGroupRepair:
@@ -17,14 +17,23 @@ class CrossGroupRepair:
         self.p = planner
         self.checked = self.accepted = 0
         self.started_nodes = planner.combination_nodes
+        self.prioritize_shares = planner.rules.get('policy_version', 1) >= 4
 
     def counts(self, group):
         return Counter(self.p.student_map[sid].supervisor_id for sid in group.student_ids)
 
     def cost(self, group):
-        return panel_cost(self.counts(group), self.p.rules['group_size'], self.p.rules['expert_count'])
+        return panel_cost(self.counts(group), self.p.rules['group_size'], self.p.panel_size(group.campus))
+
+    def panel_score(self, group):
+        return (mentor_share_excess(self.counts(group), self.p.panel_size(group.campus)),
+                (len(group.student_ids) - self.p.rules['group_size']) ** 2)
 
     def quality(self):
+        if self.prioritize_shares:
+            scores = [self.panel_score(plan.group) for plan in self.p.plans]
+            return (sum(s[0] for s in scores), sum(s[1] for s in scores),
+                    sum(len(visits) ** 2 for visits in self.p.calendar().values()))
         return (sum(self.cost(plan.group) for plan in self.p.plans)
                 + sum(len(visits) ** 2 for visits in self.p.calendar().values()))
 
@@ -39,7 +48,7 @@ class CrossGroupRepair:
         total = old_left + old_right
         mentors = sorted(total, key=str)
         minimum, maximum = self.p.rules.get('group_min', 1), self.p.rules['group_max']
-        experts = self.p.rules['expert_count']
+        experts = self.p.panel_size(left.campus)
         external_max = self.p.rules.get('external_expert_max', 1)
         options = []
         majority = sum(len(plan.group.student_ids) == self.p.rules['group_size'] for plan in self.p.plans)
@@ -61,7 +70,9 @@ class CrossGroupRepair:
             targets = sum(sum(c.values()) == self.p.rules['group_size'] for c in (a, b))
             if 2 * majority >= len(self.p.plans) and 2 * (majority - old_targets + targets) < len(self.p.plans):
                 continue
-            score = sum(panel_cost(c, self.p.rules['group_size'], experts) for c in (a, b))
+            score = ((sum(mentor_share_excess(c, experts) for c in (a, b)),
+                      sum((sum(c.values()) - self.p.rules['group_size']) ** 2 for c in (a, b)))
+                     if self.prioritize_shares else sum(panel_cost(c, self.p.rules['group_size'], experts) for c in (a, b)))
             moves = sum(abs(a[t] - old_left[t]) for t in mentors)
             options.append((score, moves, seats, a, b))
         return [(a, b) for _, _, _, a, b in sorted(options, key=lambda item: item[:3])[:self.MAX_SPLITS]]
@@ -116,7 +127,12 @@ class CrossGroupRepair:
                 self.p.release(gid)
             rest_visits = Counter({tid: len(visits) for tid, visits in self.p.calendar().items()})
             rest_square = sum(n * n for n in rest_visits.values())
-            rest_cost = before - before_pair - before_fair
+            if self.prioritize_shares:
+                pair_scores = [self.panel_score(g) for g in (left, right)]
+                rest_cost = (before[0] - sum(s[0] for s in pair_scores),
+                             before[1] - sum(s[1] for s in pair_scores))
+            else:
+                rest_cost = before - before_pair - before_fair
             for a, b in quotas:
                 if self.exhausted():
                     break
@@ -130,8 +146,12 @@ class CrossGroupRepair:
                             counts = rest_visits.copy()
                             counts.update(people_a)
                             counts.update(people_b)
-                            score = rest_cost + self.cost(ga) + self.cost(gb) + rest_square + sum(
-                                counts[t] ** 2 - rest_visits[t] ** 2 for t in people_a | people_b)
+                            visits_score = rest_square + sum(counts[t] ** 2 - rest_visits[t] ** 2 for t in people_a | people_b)
+                            if self.prioritize_shares:
+                                sa, sb = self.panel_score(ga), self.panel_score(gb)
+                                score = (rest_cost[0] + sa[0] + sb[0], rest_cost[1] + sa[1] + sb[1], visits_score)
+                            else:
+                                score = rest_cost + self.cost(ga) + self.cost(gb) + visits_score
                             if score < best_score:
                                 best, best_score = (ga, gb), score
                     finally:

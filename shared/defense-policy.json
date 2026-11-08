@@ -1,5 +1,5 @@
 {
-  "policyVersion": 3,
+  "policyVersion": 4,
   "scenarios": {
     "pre": {
       "defenseType": "预答辩",
@@ -22,9 +22,10 @@
         "includesChair": true
       },
       "expertCountIncludesChair": true,
+      "campusExpertCounts": {"创新港": 3, "兴庆": 5},
       "secretaryCount": 1,
       "roleQualification": {
-        "leaderMinTitle": "副教授",
+        "leaderMinTitle": "教授",
         "chairmanMinTitle": "教授",
         "secretaryMinTitle": "讲师",
         "preferSeniorTitle": true
@@ -93,20 +94,20 @@
       "mentorAvoidance": false,
       "formalMentorSameSession": false,
       "studentCount": {
-        "target": 12,
+        "target": 10,
         "min": 10,
-        "max": 12
+        "max": 10
       },
       "expertCount": {
         "target": 5,
         "min": 5,
-        "max": null,
+        "max": 5,
         "includesChair": true
       },
       "expertCountIncludesChair": true,
       "secretaryCount": 1,
       "roleQualification": {
-        "leaderMinTitle": "副教授",
+        "leaderMinTitle": "教授",
         "chairmanMinTitle": "教授",
         "secretaryMinTitle": "讲师",
         "preferSeniorTitle": true

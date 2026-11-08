@@ -33,11 +33,11 @@ function normalizeScheduleResult(result: ScheduleResult & { random_seed?: number
   return normalized
 }
 
-export async function getScheduleResults(defenseType: DefenseType, versionId?: number): Promise<ScheduleResult | null> {
+export async function getScheduleResults(defenseType: DefenseType, versionId?: number, campusScope?: string): Promise<ScheduleResult | null> {
   if (USE_MOCK) return getScheduleResult(defenseType)
   try {
     const result = await request.get('/schedule/current/', {
-      params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId }
+      params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId, campus_scope: campusScope }
     }) as ScheduleResult
     return normalizeScheduleResult(result)
   } catch (error) {
@@ -114,8 +114,40 @@ export async function preflightSchedule(rules: Record<string, unknown>, options?
   return request.post('/schedule/preflight/', { rules, linked_generation: options?.linkedGeneration ?? false }) as Promise<PreflightResult>
 }
 
-export async function generateSchedule(defenseType: DefenseType, config = getDefaultRuleConfig(defenseType)) {
-  return generateScheduleWithOptions(defenseType, config)
+export interface GenerationProgress {
+  status: 'waiting' | 'running' | 'completed' | 'failed'
+  stage: string
+  message: string
+  percent: number
+  defenseType?: string
+}
+export type ProgressListener = (progress: GenerationProgress) => void
+
+async function withGenerationProgress<T>(key: string, run: () => Promise<T>, listener?: ProgressListener): Promise<T> {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const poll = async () => {
+    try {
+      const progress = await request.get('/schedule/generation-progress/', {
+        params: { request_key: key }, timeout: 5000
+      }) as GenerationProgress
+      if (!stopped) listener?.(progress)
+    } catch { /* The generation response remains authoritative if a progress poll fails. */ }
+    if (!stopped) timer = setTimeout(() => { void poll() }, 1000)
+  }
+  if (listener) timer = setTimeout(() => { void poll() }, 300)
+  try {
+    const result = await run()
+    listener?.({ status: 'completed', stage: 'completed', message: '草稿已保存，编排完成', percent: 100 })
+    return result
+  } finally {
+    stopped = true
+    if (timer) clearTimeout(timer)
+  }
+}
+
+export async function generateSchedule(defenseType: DefenseType, config = getDefaultRuleConfig(defenseType), onProgress?: ProgressListener) {
+  return generateScheduleWithOptions(defenseType, config, undefined, onProgress)
 }
 
 function createRandomSeed(previousSeed?: number | string) {
@@ -139,7 +171,8 @@ export async function regenerateScheduleWithNewSeed(
 async function generateScheduleWithOptions(
   defenseType: DefenseType,
   config: RuleConfig,
-  options?: { freshSeed: true; previousSeed?: number | string }
+  options?: { freshSeed: true; previousSeed?: number | string },
+  onProgress?: ProgressListener
 ) {
   if (USE_MOCK) return mockDraft(defenseType)
   const baseRules = buildScheduleRules(defenseType, config)
@@ -147,16 +180,29 @@ async function generateScheduleWithOptions(
     ? { ...baseRules, random_seed: createRandomSeed(options.previousSeed) }
     : baseRules
   const storageKey = `pending-generation-${defenseType}`
-  const result = await request.post('/schedule/generate/', {
-    rules, request_key: generationKey(storageKey, rules)
-  }, { timeout: GENERATION_TIMEOUT_MS }) as ScheduleResult
+  const key = generationKey(storageKey, rules)
+  const result = await withGenerationProgress(key, () => request.post('/schedule/generate/', {
+    rules, request_key: key
+  }, { timeout: GENERATION_TIMEOUT_MS }) as Promise<ScheduleResult>, onProgress)
   sessionStorage.removeItem(storageKey)
   return normalizeScheduleResult(result)
 }
 
 export interface LinkedScheduleResult { pre: ScheduleResult; formal: ScheduleResult }
 
-export async function generateLinkedSchedule(preConfig: RuleConfig, formalConfig: RuleConfig): Promise<LinkedScheduleResult> {
+export interface StageMapping {
+  preVersion?: number | null
+  formalVersion?: number | null
+  rows: { studentId: number; studentNo: string; name: string; status: 'matched' | 'pending_formal' | 'missing_pre' | 'duplicate';
+    preGroups: { id: number; name: string; campus: string }[]; formalGroups: { id: number; name: string; campus: string }[] }[]
+  links: { preGroupId: number; preGroup: string; formalGroupId: number; formalGroup: string; studentCount: number }[]
+  summary: Record<'matched' | 'pending_formal' | 'missing_pre' | 'duplicate', number>
+}
+export const getStageMapping = (defenseType: DefenseType, versionId: number) => request.get('/schedule/stage-mapping/', {
+  params: { defense_type: toBackendDefenseType(defenseType), version_id: versionId }
+}) as Promise<StageMapping>
+
+export async function generateLinkedSchedule(preConfig: RuleConfig, formalConfig: RuleConfig, onProgress?: ProgressListener): Promise<LinkedScheduleResult> {
   if (USE_MOCK) {
     throw new Error('联合排班需要连接真实排班服务；当前为演示模式，请切换到实际排期模式后生成。')
   }
@@ -165,9 +211,10 @@ export async function generateLinkedSchedule(preConfig: RuleConfig, formalConfig
     formal_rules: buildScheduleRules('正式答辩', formalConfig)
   }
   const storageKey = 'pending-generation-linked'
-  const result = await request.post('/schedule/generate-linked/', {
-    ...payload, request_key: generationKey(storageKey, payload)
-  }, { timeout: GENERATION_TIMEOUT_MS }) as LinkedScheduleResult
+  const key = generationKey(storageKey, payload)
+  const result = await withGenerationProgress(key, () => request.post('/schedule/generate-linked/', {
+    ...payload, request_key: key
+  }, { timeout: GENERATION_TIMEOUT_MS }) as Promise<LinkedScheduleResult>, onProgress)
   sessionStorage.removeItem(storageKey)
   return {
     pre: normalizeScheduleResult(result.pre),
@@ -182,14 +229,15 @@ export interface ScheduleVersionOption {
   is_current: boolean
   created_at: string
   revision: number
+  campus_scope?: string
 }
 
-export async function listScheduleVersions(defenseType: DefenseType): Promise<ScheduleVersionOption[]> {
+export async function listScheduleVersions(defenseType: DefenseType, campusScope?: string): Promise<ScheduleVersionOption[]> {
   if (USE_MOCK) {
     const result = getScheduleResult(defenseType)
     return result?.versionId ? [{ id: result.versionId, version: result.version || 1, status: result.status || 'draft', is_current: true, created_at: result.generatedAt, revision: result.revision || 1 }] : []
   }
-  return request.get('/schedule/versions/', { params: { defense_type: toBackendDefenseType(defenseType) } }) as Promise<ScheduleVersionOption[]>
+  return request.get('/schedule/versions/', { params: { defense_type: toBackendDefenseType(defenseType), campus_scope: campusScope } }) as Promise<ScheduleVersionOption[]>
 }
 
 function editableMock(versionId?: number, groupId?: number, revision?: number) {

@@ -414,7 +414,8 @@ class ScenarioPolicyV2Tests(SimpleTestCase):
     def test_catalog_scenarios_do_not_share_mutable_configuration(self):
         first = scenario_policy('mid')
         first['studentCount']['target'] = 99
-        self.assertEqual(scenario_policy('中期答辩')['studentCount'], {'target': 12, 'min': 10, 'max': 12})
+        self.assertEqual(scenario_policy('中期答辩')['studentCount'], {'target': 10, 'min': 10, 'max': 10})
+        self.assertEqual(scenario_policy('中期答辩', 2)['studentCount'], {'target': 12, 'min': 10, 'max': 12})
 
     def test_chair_in_member_list_counts_once_and_uses_chair_qualification(self):
         teachers = [{'id': 1, 'roles': ['组长'], 'member_eligible': False, 'title': '教授'},

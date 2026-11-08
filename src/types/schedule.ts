@@ -61,12 +61,15 @@ export interface ScheduleGroup {
 
 export interface ScheduleResult {
   versionId?: number
+  sourcePreVersionId?: number | null
+  sourcePreVersion?: number | null
   version?: number
   revision?: number
   status?: 'draft' | 'published'
   isCurrent?: boolean
   defenseType: DefenseType
   generatedAt: string
+  campusScope?: string
   groups: ScheduleGroup[]
   unassignedStudents?: { id: number; name: string; reason: string }[]
   teacherWorkloads?: { id: number; name: string; supervisedStudents: number; groupCount: number; studentCount: number; sessions: string[] }[]
@@ -75,6 +78,7 @@ export interface ScheduleResult {
   // [TASK-P12 新增] 历史版本导出按该版本规则快照处理备注。
   rules?: {
     policy_version?: number
+    preserve_pre_defense_groups?: boolean
     expert_count?: number
     start_date?: string
     end_date?: string

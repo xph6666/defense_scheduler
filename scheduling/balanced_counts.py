@@ -9,7 +9,7 @@ from .fairness import mentor_share_excess, panel_cost
 
 
 def pack_counts(counts, target, minimum, maximum, experts, external_max,
-                teacher_map, chair_ids, feasible, seeds=(), max_groups=None):
+                teacher_map, chair_ids, feasible, seeds=(), max_groups=None, prioritize_shares=False):
     """Jointly balance group size, mentor shares and mentor appearances.
 
     Columns describe mentor seat quotas, never student IDs. Uncovered seats
@@ -270,21 +270,43 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
         majority = np.array([1.0 if sum(d.values()) == target else -1.0 for d in candidates])
         if np.dot(majority, candidate[:count]) >= 0:
             solver.addRow(0, np.inf, count, np.arange(count, dtype=np.int32), majority)
-        solver.changeColsCost(len(costs), np.arange(len(costs), dtype=np.int32), refinement_costs)
-        solver.setOptionValue('time_limit', 25.0)
-        solver.setOptionValue('mip_rel_gap', 0.0)
-        solver.setOptionValue('random_seed', 2)
-        solver.setSolution(len(costs), np.arange(len(costs), dtype=np.int32), candidate)
-        solver.run()
-        refined = solver.getSolution()
-        if refined.value_valid:
-            proposed = np.array(refined.col_value)
-            integral = np.rint(proposed)
-            if (np.max(np.abs(proposed - integral)) <= 1e-5
-                    and np.allclose(matrix @ integral, totals)
-                    and sum(integral[count:count + len(mentors)]) <= round(sum(candidate[count:count + len(mentors)]))
-                    and np.dot(refinement_costs, integral) < np.dot(refinement_costs, candidate)):
-                candidate = integral
+        if prioritize_shares:
+            shares, sizes, attendance = (np.zeros(len(costs)) for _ in range(3))
+            shares[:count] = [mentor_share_excess(c, experts) for c in candidates]
+            sizes[:count] = [(sum(c.values()) - target) ** 2 for c in candidates]
+            for tid, columns in attendance_columns.items():
+                attendance[columns] = [2 * visit - 1 for visit in range(1, len(columns) + 1)]
+            phases = [(shares, 25.0), (sizes, 12.0), (attendance, 12.0)]
+        else:
+            phases = [(refinement_costs, 25.0)]
+        protected = []
+        for phase, (objective, seconds) in enumerate(phases):
+            # Each later phase must retain every earlier goal's best incumbent.
+            # An objective already at its nonnegative lower bound needs no solve.
+            if np.dot(objective, candidate) > 0:
+                solver.clearSolver()
+                solver.changeColsCost(len(costs), all_columns, objective)
+                solver.setOptionValue('time_limit', seconds)
+                solver.setOptionValue('mip_rel_gap', 0.0)
+                solver.setOptionValue('random_seed', 2 + phase)
+                solver.setSolution(len(costs), all_columns, candidate)
+                solver.run()
+                refined = solver.getSolution()
+                if refined.value_valid:
+                    proposed = np.array(refined.col_value)
+                    integral = np.rint(proposed)
+                    if (np.max(np.abs(proposed - integral)) <= 1e-5
+                            and np.allclose(matrix @ integral, totals)
+                            and sum(integral[count:count + len(mentors)]) <= coverage_uncovered
+                            and all(np.dot(previous, integral) <= bound + 1e-5 for previous, bound in protected)
+                            and np.dot(objective, integral) < np.dot(objective, candidate)):
+                        candidate = integral
+            if prioritize_shares:
+                bound = float(np.dot(objective, candidate))
+                protected.append((objective, bound))
+                indexes = np.flatnonzero(objective).astype(np.int32)
+                if len(indexes):
+                    solver.addRow(0, bound, len(indexes), indexes, objective[indexes])
     integers = np.rint(candidate).astype(int)
     # Never trust a timed-out solver's non-integral or infeasible incumbent.
     if (np.max(np.abs(candidate - integers)) > 1e-5
@@ -299,6 +321,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                     'coverage_seed': coverage_seed, 'full_cover_status': full_cover_status,
                     'preferred_groups': preferred_groups, 'group_count_protected': group_row,
                     'coverage_objective': 'unassigned_students_only',
+                    'objective_order': ['coverage', 'mentor_shares', 'group_sizes', 'appearances'] if prioritize_shares else ['coverage', 'joint_quality'],
                     'coverage_uncovered': coverage_uncovered,
                     'initial_cost': round(float(np.dot(costs, initial)), 2),
                     'final_cost': round(float(np.dot(costs, candidate)), 2),

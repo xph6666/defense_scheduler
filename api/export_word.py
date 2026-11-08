@@ -76,7 +76,8 @@ def export_arrangement_document(schedule_version, defense_type=None, include_rem
     forms.configure_document(doc, **PAGE, base_size=BODY_SIZE)
 
     title = forms.add_paragraph(doc, align='center', line=300)
-    forms.styled_run(title, _title_text(texts, defense_type, slots, grade), font=forms.HEI,
+    batch = getattr(schedule_version, 'campus_scope', '')
+    forms.styled_run(title, (f'{batch} · ' if batch else '') + _title_text(texts, defense_type, slots, grade), font=forms.HEI,
                      size=15, color=forms.BLACK)
 
     subtitle = forms.add_paragraph(doc, align='center', line=300)

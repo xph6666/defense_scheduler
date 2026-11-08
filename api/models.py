@@ -69,6 +69,7 @@ class ScheduleVersion(models.Model):
     ]
     version = models.IntegerField(default=1, verbose_name="版本号")
     defense_type = models.CharField(max_length=10, choices=DEFENSE_TYPE_CHOICES, verbose_name="答辩类型")
+    campus_scope = models.CharField(max_length=20, blank=True, default='', verbose_name="排期校区批次")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="创建时间")
     is_current = models.BooleanField(default=True, verbose_name="是否当前生效")
     rules_snapshot = models.JSONField(default=dict, verbose_name="规则快照")
@@ -89,7 +90,7 @@ class ScheduleVersion(models.Model):
         ordering = ['-created_at']
         constraints = [
             models.UniqueConstraint(fields=['defense_type', 'version'], name='unique_schedule_version'),
-            models.UniqueConstraint(fields=['defense_type'], condition=models.Q(is_current=True), name='unique_current_schedule'),
+            models.UniqueConstraint(fields=['defense_type', 'campus_scope'], condition=models.Q(is_current=True), name='unique_current_schedule'),
         ]
 
     def __str__(self):

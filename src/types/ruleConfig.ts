@@ -28,13 +28,16 @@ export interface SoftConstraintWeightConfig {
 }
 
 export interface RuleConfig {
-  policyVersion?: 2 | 3
+  policyVersion?: 2 | 3 | 4
   expertCountIncludesChair?: boolean
   courseHalfDayBlocking?: boolean
   formalSoftwareMin?: number
   includeRemarks?: boolean
   preservePreDefenseGroups?: boolean
+  useConfirmedPreStudents?: boolean
   campusStartDates?: Record<string, string>
+  campusExpertCounts?: Record<string, number>
+  campusScope?: '创新港' | '兴庆'
   defenseType: DefenseType
   enabled: boolean
   startDate: string

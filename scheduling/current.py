@@ -1,11 +1,11 @@
 """Personnel-first scheduling (policy 3), independent of classroom resources."""
 from collections import Counter, defaultdict
 
-from .policies import teacher_can_role, secretary_is_qualified, pre_chair_is_qualified, formal_chair_level
+from .policies import teacher_can_role, secretary_is_qualified, pre_chair_is_qualified, formal_chair_level, committee_size
 
 
 def enabled(rules):
-    return rules.get('policy_version') == 3 and rules.get('defense_type') in ('pre', 'formal')
+    return rules.get('policy_version', 1) >= 3 and rules.get('defense_type') in ('pre', 'formal')
 
 
 def available(teacher, slot):
@@ -49,15 +49,19 @@ def validate(groups, students, teachers, rules):
                 stage = '预答辩' if rules['defense_type'] == 'pre' else '正式答辩'
                 report('pre_group_order' if stage == '预答辩' else 'formal_group_order',
                        f'{right.group_id} 的时间早于 {left.group_id}，{stage}须按固定组号顺排', right)
+    from .pre_capacity import pre_capacity_notices
+    capacity_reasons = {notice['campus']: notice['description'] for notice in
+                        pre_capacity_notices(students, teachers, rules)}
     for student in students:
         if counts[student.id] != 1:
             report('missing_student' if not counts[student.id] else 'duplicate_student',
-                   f'学生 {student.name} ' + ('未安排：请补全导师可用时间、资格或扩大日期范围' if not counts[student.id] else '被重复安排'),
+                   f'学生 {student.name} ' + ('未安排：' + capacity_reasons.get(student.campus, '请核对导师时间、资格或排期日期范围') if not counts[student.id] else '被重复安排'),
                    student_id=student.id)
     for group in groups:
         reviewers = {group.chair_id, *group.expert_ids} - {None}
-        if len(reviewers) != rules['expert_count'] or len(group.expert_ids) != len(set(group.expert_ids)) or group.chair_id in group.expert_ids:
-            report('expert_count_out_of_range', f'{group.group_id} 专家人数必须为 {rules["expert_count"]}，组长只计一次', group)
+        expected = committee_size(rules, group.campus)
+        if len(reviewers) != expected or len(group.expert_ids) != len(set(group.expert_ids)) or group.chair_id in group.expert_ids:
+            report('expert_count_out_of_range', f'{group.group_id} 专家人数必须为 {expected}，组长只计一次', group)
         chair = teacher_map.get(group.chair_id)
         if rules.get('formal_rotation'):
             # 正式答辩专家轮换：主席按职称判断，教授不足时放宽到预答辩组长职称并提示
@@ -108,6 +112,14 @@ def validate(groups, students, teachers, rules):
             report('group_size_out_of_range', f'{group.group_id} 学生人数须为 {rules.get("group_min", 1)}～{rules["group_max"]} 人', group)
         if any(sid not in student_map for sid in group.student_ids):
             report('missing_student', f'{group.group_id} 存在不属于本次参排名单的学生', group)
+        if rules.get('policy_version', 1) >= 4:
+            if group.campus not in ('创新港', '兴庆') or any(student_map[sid].campus != group.campus for sid in group.student_ids if sid in student_map):
+                report('student_campus_mismatch', f'{group.group_id} 学生须按创新港、兴庆校区分开编排', group)
+            if rules.get('formal_rotation'):
+                if any(student_map[sid].previous_group_id != group.group_id for sid in group.student_ids if sid in student_map):
+                    report('pre_group_mapping_broken', f'{group.group_id} 正式答辩须沿用预答辩学生组及组号', group)
+                if any(student_map[sid].secretary_id != group.secretary_id for sid in group.student_ids if sid in student_map):
+                    report('pre_group_mapping_broken', f'{group.group_id} 正式答辩须沿用预答辩秘书', group)
         external = sum(teacher_map[tid].is_external for tid in reviewers if tid in teacher_map)
         if external > rules.get('external_expert_max', 1):
             kind = 'expert_count_out_of_range'
@@ -115,7 +127,9 @@ def validate(groups, students, teachers, rules):
         elif rules['defense_type'] == 'pre' and external > 1 and any(
                 teacher_map[tid].is_external for tid in reviewers - mentors if tid in teacher_map):
             report('expert_count_out_of_range', f'{group.group_id} 第 2 位外院评审仅允许为本组学生的导师', group)
-        elif not external:
+        elif rules['defense_type'] == 'pre' and rules.get('policy_version', 1) >= 4 and external >= len(reviewers) - external:
+            report('external_distribution', f'{group.group_id} 外院专家 {external} 位，本院专家 {len(reviewers) - external} 位；为满足导师评审与人数底线保留，建议外院少于本院', group)
+        elif not external and not (rules['defense_type'] == 'pre' and rules.get('policy_version', 1) >= 4):
             report('external_distribution', f'{group.group_id} 无合适且可用的外院专家，已用本院教师补足', group)
         elif external > 1:
             report('external_distribution', f'{group.group_id} 为满足学生人数下限并保留导师评审，安排了 {external} 位外院专家', group)
@@ -207,6 +221,9 @@ def generate(teachers, students, rules):
     def quality(result):
         sizes = [len(g['student_ids']) for g in result['groups']]
         fairness = result.get('diagnostics', {}).get('fairness', {})
+        if rules.get('policy_version', 1) >= 4:
+            return (len(result['unassigned_students']), fairness.get('share_excess', 0),
+                    sum((n - rules['group_size']) ** 2 for n in sizes), fairness.get('appearance_square_sum', 0))
         joint = (sum((n - rules['group_size']) ** 2 for n in sizes)
                  + fairness.get('share_excess', 0) + fairness.get('appearance_square_sum', 0))
         return (len(result['unassigned_students']), joint)

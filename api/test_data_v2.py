@@ -144,7 +144,7 @@ class RuleDefaultsV2Tests(TestCase):
     def test_each_scenario_matches_documented_counts_and_today(self):
         today = date(2026, 10, 2)
         with patch('api.serializers.timezone.localdate', return_value=today):
-            for kind, target, minimum, maximum, expert in (('pre', 6, 5, 7, 3), ('formal', 6, 5, 7, 5), ('mid', 12, 10, 12, 5)):
+            for kind, target, minimum, maximum, expert in (('pre', 6, 5, 7, 3), ('formal', 6, 5, 7, 5), ('mid', 10, 10, 10, 5)):
                 config = default_rule_config(kind)
                 self.assertEqual(config['studentCount'], {'target': target, 'min': minimum, 'max': maximum})
                 self.assertEqual(config['expertCount']['target'], expert)

@@ -149,8 +149,8 @@ const buildGroups = (defenseType: DefenseType): ScheduleGroup[] => {
   }
 
   const baseStudents = pickStudentsByDefenseType(defenseType)
-  const groupStudentsA = Array.from({ length: 12 }, (_, i) => mapStudent(baseStudents[i % baseStudents.length].id))
-  const groupStudentsB = Array.from({ length: 11 }, (_, i) => mapStudent(baseStudents[(i + 6) % baseStudents.length].id))
+  const groupStudentsA = Array.from({ length: 10 }, (_, i) => mapStudent(baseStudents[i % baseStudents.length].id))
+  const groupStudentsB = Array.from({ length: 10 }, (_, i) => mapStudent(baseStudents[(i + 6) % baseStudents.length].id))
 
   return [
     {

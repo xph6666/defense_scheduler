@@ -110,6 +110,7 @@ import type { ScheduleGroup, ScheduleTeacher, ScheduleStudent, DefenseType } fro
 const props = defineProps<{
   modelValue: boolean
   defenseType: DefenseType
+  policyVersion?: number
   group: ScheduleGroup | null
   teachers: ScheduleTeacher[]
   students: ScheduleStudent[]
@@ -161,7 +162,7 @@ watch(
 )
 
 const chairOptions = computed(() => props.teachers.filter(teacher => {
-  if (props.defenseType === '预答辩') return isPreDefenseChairEligible(teacher.title)
+  if (props.defenseType === '预答辩') return isPreDefenseChairEligible(teacher.title, props.policyVersion)
   const qualified = props.defenseType === '正式答辩' ? teacher.title === '教授' : ['教授', '副教授'].includes(teacher.title)
   return qualified && (teacher.roles.includes(props.defenseType === '正式答辩' ? '主席' : '组长') || teacher.id === form.chairId)
 }))

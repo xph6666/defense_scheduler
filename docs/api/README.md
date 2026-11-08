@@ -2,7 +2,19 @@
 
 统一前缀 `/api/`。路由来源为 `api/urls.py`、`api/views.py` 和 `api/schedule_views.py`；前端适配在 `src/api/`，字段映射在 `api/serializers.py`。本文件描述跨端共同约定，详细字段以对应请求适配、Serializer 和测试共同核对。
 
+2026-10-31 规则版本：新前端提交 `policy_version: 4`，规则配置对应 `policyVersion: 4`；无版本且无旧式 `expert_count` 的生成请求默认采用 4，已有 1/2/3 请求保留兼容。中期人数必须为 `group_size=group_min=group_max=10`、`expert_count=expert_min=5`，后端派生 `avoid_supervisor=false`、`supervisor_policy=none`；预答辩 `chair_title` 至少正高。正式生成响应保留 `sourcePreVersionId` 并补充 `sourcePreVersion`（来源版本号），组号／学生／校区／秘书沿用源组；名单变化不静默缩组。历史冻结结果补充来源版本号时不改写保存内容。
+
 ## 认证与权限
+
+2026-11-06 补充：
+
+- 单独及联合生成的规则可带 `campus_scope`（`创新港`／`兴庆`）；同校区两阶段联排必须一致。当前版本按答辩类型、校区独立保存；`current/`、`versions/` 支持 `campus_scope` 查询，历史未分批版本保留。页面新生成始终指定校区；旧集成不带校区的协议兼容保留。跨批次教师占用进入算法输入，并在冲突复核及发布时校验。
+- `GET /schedule/generation-progress/?request_key=...` 返回 `status`、`stage`、`message`、`percent`、`defenseType`，只允许管理员查询自己的请求。检查点对应实际执行阶段，不代表预计剩余时长；100% 在写事务成功后返回。同步生成请求和原有幂等标识保持。
+- `GET /schedule/stage-mapping/?defense_type=pre|formal&version_id=...` 按学生 ID 返回版本来源、学生明细、小组间人数流向，以及 `matched`／`pending_formal`／`missing_pre`／`duplicate` 汇总。读取遵守发布可见性，分组调整后重新读取即可更新，不保存一对一推测。
+- 正式生成可选 `use_confirmed_pre_students=true`，从当前校区已发布预答辩名单读取学生。关闭 `preserve_pre_defense_groups` 后允许重新分组，仍记录来源预答辩版本。联排使用本次新生成名单，自动关闭已发布名单选项。
+- `POST /teachers/import_timetable/` 带 `preview=true` 返回 `rows`、`canImport`、`previewToken`、重复条数、未知教师及完整告警，不写业务数据或审计。确认时提交相同文件、学期及 `previewToken`；资料变动返回 409，要求重新预览。旧直接导入调用保留。
+- `GET /teachers/timetable-template/` 下载含填写说明和系统教师编号目录的 Excel；表头为“教师编号／主讲教师／时间地点”。有编号时优先校验编号及姓名一致性，无编号时沿用教师表唯一姓名。支持 `.xlsx`、`.xls`、UTF-8 CSV，星期、周次、单双周及节次沿用现有解析器；异常行不静默丢弃，重复表头不当课程处理。
+- policy 4 中期与预答辩组长均须正高；历史 policy 1/2/3 仍按原资格读取。
 
 `POST /api/auth/login/` 提交 `username`、`password`，成功返回 `data.token`、`data.username`、`data.isAdmin`。后续 API 使用：
 

@@ -8,22 +8,34 @@ def normalize_schedule_rules(raw):
         raise ValidationError('排期规则必须是对象')
     rules = dict(raw)
     for internal_key in ('_source_pre_version_id', 'reserve_formal_resources', 'refresh_secretary_bindings',
-                         'linked_translation', 'source_chair_title', 'formal_rotation', 'formal_group_order', 'pre_group_order'):
+                         'linked_translation', 'source_chair_title', 'formal_rotation', 'formal_group_order', 'pre_group_order', 'pre_balance_priority'):
         rules.pop(internal_key, None)
     defense_type = rules.setdefault('defense_type', 'pre')
+    if rules.get('campus_scope', '') not in ('', '创新港', '兴庆'):
+        raise ValidationError('排期批次校区必须为创新港或兴庆')
+    if 'use_confirmed_pre_students' in rules and (not isinstance(rules['use_confirmed_pre_students'], bool)
+            or (rules['use_confirmed_pre_students'] and defense_type != 'formal')):
+        raise ValidationError('已确认预答辩名单仅用于正式答辩')
     if defense_type not in ('pre', 'formal', 'mid'):
         raise ValidationError('未知答辩类型')
     if 'mentor_avoidance' in rules and 'avoid_supervisor' not in rules:
         rules['avoid_supervisor'] = rules['mentor_avoidance']
     # Historical integrations supplied low-level counts without a schema version.
     # Keep historical contracts readable; current linked UI uses policy 3.
-    version = rules.setdefault('policy_version', 1 if 'expert_count' in raw else 2)
-    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2, 3):
+    version = rules.setdefault('policy_version', 1 if 'expert_count' in raw else 4)
+    if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2, 3, 4):
         raise ValidationError('不支持的规则版本')
+    from scheduling.policies import validate_campus_expert_counts
+    try:
+        campus_counts = validate_campus_expert_counts(rules.get('campus_expert_counts', {}), defense_type, version)
+    except ValueError as exc:
+        raise ValidationError(str(exc))
+    if 'campus_expert_counts' in rules:
+        rules['campus_expert_counts'] = campus_counts
     if version == 1:
         return rules
     config = default_rule_config(defense_type, version)
-    current = version == 3 and defense_type != 'mid'
+    current = version >= 3 and defense_type != 'mid'
     defaults = {
         'start_date': config['startDate'], 'end_date': config['endDate'],
         'group_size': config['studentCount']['target'],
@@ -33,7 +45,7 @@ def normalize_schedule_rules(raw):
         'exclude_dates': [], 'course_half_day_blocking': True,
         'formal_software_min': 3, 'include_remarks': True, 'preserve_pre_defense_groups': True,
         'formal_mentor_same_session': defense_type == 'formal',
-        'chair_title': '教授' if defense_type == 'formal' else '副教授',
+        'chair_title': '教授' if defense_type == 'formal' or (version >= 4 and defense_type in ('pre', 'mid')) else '副教授',
         'secretary_title': '讲师', 'prefer_senior': True,
         'prefer_full_day_external': True,
         'grouping': 'secretary' if defense_type == 'formal' else 'supervisor',
@@ -78,7 +90,7 @@ def normalize_schedule_rules(raw):
     rules['secretary_count'] = 1
     ranks = {'助教': 0, '讲师': 1, '副教授': 2, '副高': 2, '教授': 3, '正高': 3,
         'lecturer': 1, 'associate professor': 2, 'professor': 3, '副研究员': 2, '研究员': 3}
-    if not isinstance(rules['chair_title'], str) or ranks.get(rules['chair_title'], -1) < (3 if defense_type == 'formal' else 2):
+    if not isinstance(rules['chair_title'], str) or ranks.get(rules['chair_title'], -1) < (3 if defense_type == 'formal' or (version >= 4 and defense_type in ('pre', 'mid')) else 2):
         raise ValidationError('主席/组长职称不能低于业务要求')
     if not isinstance(rules['secretary_title'], str) or ranks.get(rules['secretary_title'], -1) < 1:
         raise ValidationError('秘书职称必须为讲师及以上')
@@ -89,6 +101,9 @@ def normalize_schedule_rules(raw):
     avoidance = bool(rules.get('avoid_supervisor', defense_type == 'formal'))
     rules['avoid_supervisor'] = defense_type == 'formal' and avoidance
     rules['supervisor_policy'] = ('avoid' if avoidance else 'none') if defense_type == 'formal' else 'same_group'
+    if version >= 4 and defense_type == 'mid':
+        rules['supervisor_policy'] = 'none'
+        rules['grouping'] = 'campus'
     # [TASK-P04 修改] 后端规则归一化与界面人数口径保持一致。
     floor = 3 if current else 4 if defense_type == 'pre' else 5
     try:
@@ -100,6 +115,10 @@ def normalize_schedule_rules(raw):
         if not 1 <= rules['group_min'] <= rules['group_size'] <= rules['group_max']:
             raise ValueError
         if defense_type == 'mid' and not 10 <= rules['group_min'] <= rules['group_size'] <= rules['group_max'] <= 12:
+            raise ValueError
+        if version >= 4 and defense_type == 'mid' and (
+                (rules['group_min'], rules['group_size'], rules['group_max']) != (10, 10, 10)
+                or (rules['expert_count'], rules['expert_min']) != (5, 5)):
             raise ValueError
         if current and (rules['expert_count'] not in (3, 5) or rules['expert_min'] != rules['expert_count']):
             raise ValueError
@@ -115,4 +134,6 @@ def normalize_schedule_rules(raw):
         cap = rules.setdefault('external_expert_max', 2)
         if isinstance(cap, bool) or not isinstance(cap, int) or cap not in (1, 2):
             raise ValidationError('外院专家上限只能为 1 或 2；第二位仅用于必要的导师组合')
+        if version >= 4 and defense_type == 'pre':
+            rules['pre_balance_priority'] = True
     return rules

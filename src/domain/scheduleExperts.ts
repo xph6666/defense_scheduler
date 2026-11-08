@@ -1,8 +1,10 @@
 import type { ScheduleGroup, ScheduleTeacher } from '../types/schedule'
 
 /** Pre-defense chair eligibility follows title; no extra chair-role checkbox. */
-export function isPreDefenseChairEligible(title: string) {
-  return ['教授', '副教授', '研究员', '副研究员', '正高', '正高级', '副高', '副高级'].includes(title.trim())
+export function isPreDefenseChairEligible(title: string, policyVersion = 4) {
+  const titles = ['教授', '研究员', '正高', '正高级']
+  if (policyVersion < 4) titles.push('副教授', '副研究员', '副高', '副高级')
+  return titles.includes(title.trim())
 }
 
 /** API member lists can exclude the chair; legacy/demo responses can include the chair. */

@@ -14,6 +14,13 @@ def build_schedule_workbook(schedule_version, defense_type, conflicts=None, incl
     wb.remove(default_sheet)
 
     groups = list(export_groups(schedule_version))
+    if getattr(schedule_version, 'campus_scope', ''):
+        batch = wb.create_sheet('批次信息')
+        batch.append(['排期校区', schedule_version.campus_scope])
+        batch.append(['答辩类型', schedule_version.get_defense_type_display()])
+        batch.append(['版本', schedule_version.version])
+        batch.column_dimensions['A'].width = 18
+        batch.column_dimensions['B'].width = 28
     if include_remarks is None:
         include_remarks = schedule_version.rules_snapshot.get('include_remarks', True)
     scenario_color = scenario_policy(defense_type)['color'].lstrip('#')

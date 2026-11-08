@@ -97,8 +97,8 @@ export const checkConflictsMock = (result: ScheduleResult) => {
     let warn = false
     let rangeText = ''
     if (dt === '中期答辩') {
-      rangeText = '允许 10-12 人/组'
-      warn = count < 10 || count > 12
+      rangeText = '固定 10 人/组'
+      warn = count !== 10
     } else {
       rangeText = '建议约 6 人/组'
       warn = count < 4 || count > 8

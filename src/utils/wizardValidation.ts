@@ -16,8 +16,14 @@ export function validateWizardRules(config: RuleConfig): string[] {
       || config.expertCount.target < config.expertCount.min) {
     errors.push('专家人数不能低于 1 或已设置的最少人数，请核对“更多要求”。')
   }
-  if (config.defenseType === '中期答辩' && (min < 10 || max > 12)) errors.push('中期答辩每组学生人数必须在 10–12 人之间。')
+  if (config.defenseType === '中期答辩' && (min !== 10 || max !== 10 || target !== 10)) errors.push('中期答辩固定每组 10 名学生。')
+  if (config.defenseType === '中期答辩' && (config.expertCount.target !== 5 || config.expertCount.min !== 5)) errors.push('中期答辩固定每组 5 位专家（含组长）。')
+  if (config.defenseType !== '正式答辩' && !['教授', '研究员'].includes(config.roleQualification.leaderMinTitle || '')) errors.push(`${config.defenseType}组长必须为正高（教授或研究员）。`)
   const current = config.defenseType !== '中期答辩'
+  if (Object.entries(config.campusExpertCounts || {}).some(([campus, count]) =>
+    config.defenseType !== '预答辩' || !['创新港', '兴庆'].includes(campus) || ![3, 5].includes(count))) {
+    errors.push('仅预答辩可按创新港、兴庆设置 3 或 5 位专家。')
+  }
   if (current && (min < 5 || max > 7)) errors.push('预答辩及正式答辩每组必须为 5～7 人，建议 6 人。')
   if (current && (![3, 5].includes(config.expertCount.target) || config.expertCount.min !== config.expertCount.target)) errors.push('专家人数请选择 3 或 5 人，含组长。')
   const expertMinimum = current ? 3 : 5

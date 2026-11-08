@@ -45,11 +45,31 @@ _MISSING = object()
 def pre_chair_is_qualified(teacher, rules):
     """Pre-defense chairs qualify by title, without a separate role checkbox."""
     from algorithm import meets_chair_requirement
-    return meets_chair_requirement(teacher, {**rules, 'chair_title': rules.get('chair_title') or '副教授'})
+    title = rules.get('chair_title') or ('教授' if rules.get('policy_version', 1) >= 4 else '副教授')
+    if rules.get('policy_version', 1) >= 4 and _TITLE_RANKS.get(str(teacher.title).strip().lower(), -1) < 3:
+        return False
+    return meets_chair_requirement(teacher, {**rules, 'chair_title': title})
 
 
 # 正式答辩（policy 3）固定 5 位专家，含主席
 FORMAL_EXPERT_COUNT = 5
+
+
+def validate_campus_expert_counts(value, defense_type, policy_version):
+    if not isinstance(value, dict) or any(c not in ('创新港', '兴庆') for c in value):
+        raise ValueError('分校区专家人数必须按创新港、兴庆配置')
+    if value and (defense_type != 'pre' or policy_version < 4):
+        raise ValueError('分校区专家人数仅适用于新版预答辩')
+    if any(isinstance(n, bool) or not isinstance(n, int) or n not in (3, 5) for n in value.values()):
+        raise ValueError('各校区专家人数只能为 3 或 5 人，含组长')
+    return dict(value)
+
+
+def committee_size(rules, campus=None):
+    """Resolve a pre-defense campus override without mutating the common rules."""
+    if rules.get('defense_type') == 'pre' and rules.get('policy_version', 1) >= 4:
+        return (rules.get('campus_expert_counts') or {}).get(campus, rules['expert_count'])
+    return rules['expert_count']
 
 
 def formal_rotation_rules(source_chair_title=None):
@@ -85,12 +105,22 @@ def formal_chair_level(teacher, rules):
     return 1 if rank >= floor else None
 
 
-def scenario_policy(defense_type: str) -> dict[str, Any]:
+def scenario_policy(defense_type: str, policy_version: int | None = None) -> dict[str, Any]:
     """Return an independent copy of a Chinese- or code-named scenario."""
     key = _DEFENSE_TYPES.get(str(defense_type).strip().lower())
     if key is None:
         raise ValueError(f"不支持的答辩类型：{defense_type}")
-    return deepcopy(_CATALOG["scenarios"][key])
+    policy = deepcopy(_CATALOG["scenarios"][key])
+    # Historical snapshots retain the requirements under which they were made.
+    if policy_version is not None and policy_version < 4:
+        policy.pop('campusExpertCounts', None)
+        if key == 'pre':
+            policy['roleQualification']['leaderMinTitle'] = '副教授'
+        if key == 'mid':
+            policy['roleQualification']['leaderMinTitle'] = '副教授'
+            policy['studentCount'] = {'target': 12, 'min': 10, 'max': 12}
+            policy['expertCount']['max'] = None
+    return policy
 
 
 def _value(source: Any, *names: str, default: Any = None) -> Any:
@@ -238,7 +268,7 @@ def committee_member_target(rules: Mapping[str, Any]) -> int:
 
 def pre_mentor_committee(rules: Mapping[str, Any]) -> bool:
     """Current pre-defense contract, with an explicit legacy boundary."""
-    if rules.get('policy_version') == 3:
+    if rules.get('policy_version', 1) >= 3:
         return False
     defense = _DEFENSE_TYPES.get(str(_value(rules, 'defense_type', 'defenseType', default='')))
     return defense == 'pre' and (_includes_chair(rules) or rules.get('policy_version', 1) >= 2)
@@ -280,8 +310,8 @@ def committee_violations(draft: Any, teachers: Any, rules: Mapping[str, Any]) ->
     teacher_map = _teacher_map(teachers)
     included = _includes_chair(rules)
     defense = _DEFENSE_TYPES.get(str(_value(rules, "defense_type", "defenseType", default="")).strip().lower())
-    policy = scenario_policy(defense) if defense is not None else {}
-    if defense in ('pre', 'formal') and rules.get('policy_version') != 3:
+    policy = scenario_policy(defense, rules.get('policy_version', 1)) if defense is not None else {}
+    if defense in ('pre', 'formal') and rules.get('policy_version', 1) < 3:
         count = 4 if defense == 'pre' else 5
         policy['expertCount'] = {'target': count, 'min': count, 'max': None}
     qualifications = rules.get("roleQualification") or {}

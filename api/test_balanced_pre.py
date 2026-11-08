@@ -65,7 +65,11 @@ class BalancedPreTests(SimpleTestCase):
                     24: [6, 6, 6, 6], 25: [6, 6, 6, 7]}
         for count, sizes in expected.items():
             with self.subTest(count=count):
-                result = generate_schedule(teachers(), students(count), [],
+                # Keep three required mentors so size remainders are measured
+                # independently of changes to the general-purpose fixture.
+                cohort = [{**student, 'supervisor_id': (student['id'] - 1) % 3 + 1}
+                          for student in students(count)]
+                result = generate_schedule(teachers(), cohort, [],
                                            {**rules(), 'end_date': '2026-11-06'})
                 self.assertEqual(result['unassigned_students'], [])
                 self.assertEqual(sorted(len(g['student_ids']) for g in result['groups']), sizes)
@@ -151,7 +155,8 @@ class BalancedPreTests(SimpleTestCase):
         staff[1]['is_external'] = True
         cohort = students(12)
         for index, student in enumerate(cohort):
-            student['supervisor_id'] = 2 if index < 2 else 3 if index < 4 else 1
+            # 每位导师最多 3 人，两组各由 1 位外院导师 + 2 位本院导师组成
+            student['supervisor_id'] = [2, 3, 1, 4][index % 4]
         result = generate_schedule(staff, cohort, [], rules())
         self.assertEqual(result['unassigned_students'], [])
         self.assertEqual([len(g['student_ids']) for g in result['groups']], [6, 6])
@@ -177,7 +182,10 @@ class BalancedPreTests(SimpleTestCase):
         self.assertLess(planner.attendance_score(), before)
 
     def test_optional_reviewers_have_balanced_appearances(self):
-        result = generate_schedule(teachers(), students(36), [], {**rules(), 'end_date': '2026-11-06'})
+        # Mentors 1 and 3 are mandatory; 2/4/5/6 are actually optional reviewers.
+        cohort = [{**student, 'supervisor_id': 1 if student['id'] % 2 else 3}
+                  for student in students(36)]
+        result = generate_schedule(teachers(), cohort, [], {**rules(), 'end_date': '2026-11-06'})
         self.assertEqual(result['unassigned_students'], [])
         loads = Counter(tid for g in result['groups'] for tid in g['expert_ids'] if tid != 3)
         counts = [loads[tid] for tid in (2, 4, 5, 6)]

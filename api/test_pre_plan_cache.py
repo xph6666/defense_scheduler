@@ -54,7 +54,9 @@ class PrePlanCacheTests(SimpleTestCase):
         self.assertIsNone(read_pre_plan(self.payload, self.rules))
 
     def test_a_worse_complete_plan_cannot_replace_a_better_one(self):
-        self.payload['students'] = students(12)
+        # Both panels share one required mentor, so changing optional reviewers
+        # tests appearance quality without creating a missing-supervisor error.
+        self.payload['students'] = [{**student, 'supervisor_id': 1} for student in students(12)]
         first = deepcopy(self.plan)
         other = deepcopy(first['groups'][0])
         other.update(group_id='G002', student_ids=list(range(7, 13)), time='2026-11-02 14:00-17:00')

@@ -2,7 +2,8 @@
 from collections import Counter
 
 
-def repack_sixes(packed, experts, external_max, teacher_map, chair_ids, feasible, limit=None):
+def repack_sixes(packed, experts, external_max, teacher_map, chair_ids, feasible, limit=None,
+                 mentor_cap=None):
     """limit：最多再增加的组数（每次重编增加 1 组）；为 None 时不限，按原规则最多三次。"""
     import numpy as np
     from scipy.sparse import csc_matrix
@@ -27,7 +28,7 @@ def repack_sixes(packed, experts, external_max, teacher_map, chair_ids, feasible
         x, y = {}, {}
         for tid in mentors:
             for group in range(7):
-                limit = min(6, totals[tid])
+                limit = min(6, totals[tid]) if not mentor_cap else min(6, mentor_cap, totals[tid])
                 x[tid, group], y[tid, group] = variable(0, limit), variable(0, 1)
                 increments = [variable((2 * seat - 1) / 2, 1) for seat in range(1, limit + 1)]
                 constraint([(x[tid, group], 1), *[(col, -1) for col in increments]], 0, 0)

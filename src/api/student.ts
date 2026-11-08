@@ -90,7 +90,8 @@ export const importStudents = async (file: File) => {
     return request.post('/students/import_data/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data'
-      }
+      },
+      timeout: 3 * 60 * 1000
     })
   }
   studentsData = repository.read()

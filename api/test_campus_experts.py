@@ -24,6 +24,20 @@ def teachers():
 
 
 class CampusExpertTests(SimpleTestCase):
+    def test_leftover_repair_uses_campus_panel_size_and_versioned_limits(self):
+        from scheduling.personnel_first import PersonnelPlanner
+        planner = PersonnelPlanner([parse_teacher(t) for t in teachers()], [], rules())
+        packed = planner.attach_leftovers([Counter({1: 1, 2: 1, 3: 1, 4: 1})],
+            Counter({1: 1, 2: 1, 3: 1, 4: 1, 5: 1}), '兴庆', lambda campus, counts: True)
+        self.assertEqual(packed, [Counter({1: 1, 2: 1, 3: 1, 4: 1, 5: 1})])
+        self.assertEqual(planner.mentor_limit(1), 7)
+        legacy_rules = {**rules(), 'policy_version': 3}
+        legacy_rules.pop('campus_expert_counts')
+        legacy = PersonnelPlanner([parse_teacher(t) for t in teachers()], [], legacy_rules)
+        packed = legacy.attach_leftovers([Counter({1: 3, 2: 2})], Counter({1: 4, 2: 2}),
+                                        '创新港', lambda campus, counts: True)
+        self.assertEqual(packed, [Counter({1: 3, 2: 2})])
+
     def test_map_is_validated_and_never_applied_to_formal_or_legacy(self):
         for mapping in ({'兴庆': 4}, {'兴庆': True}, {'兴庆': '5'}, {'其他': 5}, [], None):
             with self.subTest(mapping=mapping), self.assertRaises(ValidationError):

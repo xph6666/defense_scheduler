@@ -1,6 +1,10 @@
 import request from './request'
 import type { DefenseType } from '../domain/defense'
 
+// Parsing up to ten workbooks and validating thousands of rows can exceed the
+// 10s default. Allow the server's 180s import window before giving up.
+const IMPORT_TIMEOUT_MS = 3 * 60 * 1000
+
 export interface CohortSource { file: string; sheet: string; row?: number }
 export interface CohortFile { kind: 'teacher' | 'student'; index: number; name: string; sheets: string[]; sheetName: string }
 export interface CohortStudent {
@@ -31,5 +35,5 @@ export async function uploadCohort(teacher: File, students: File[], options: Coh
   students.forEach(file => form.append('studentFiles', file))
   form.append('preview', String(preview))
   Object.entries(options).forEach(([key, value]) => form.append(key, typeof value === 'string' ? value : JSON.stringify(value)))
-  return await request.post('/students/import-cohort/', form) as unknown as CohortPreview | { message: string; stats: CohortPreview['stats'] }
+  return await request.post('/students/import-cohort/', form, { timeout: IMPORT_TIMEOUT_MS }) as unknown as CohortPreview | { message: string; stats: CohortPreview['stats'] }
 }

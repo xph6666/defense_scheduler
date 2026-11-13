@@ -382,16 +382,44 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     def _allocation_summary(self, version, groups, conflicts):
         if version.rules_snapshot.get('policy_version', 1) < 3:
             return {}
-        scheduled = {s['id'] for group in groups for s in group['students']}
+        from collections import Counter
+        from algorithm import parse_time_range, SchedulingError
+        counts = Counter(s['id'] for group in groups for s in group['students'])
+        scheduled, untimed = set(), set()
+        for group in groups:
+            ids = {s['id'] for s in group['students']}
+            try:
+                parse_time_range(f'{group["date"]} {group["timeRange"]}')
+            except SchedulingError:
+                untimed.update(ids)
+            else:
+                scheduled.update(ids)
         reasons = {c.get('student_id'): c['description'] for c in [*conflicts, *version.conflicts_snapshot] if c.get('type') == 'missing_student'}
-        students = version.input_snapshot.get('students', [])
-        unassigned = [{'id': s['id'], 'name': s['name'], 'reason': reasons.get(s['id'], '未找到满足教师时间与专家资格的安排，已尝试局部补排')} for s in students if s['id'] not in scheduled]
+        students_by_id = {s['id']: s for s in version.input_snapshot.get('students', [])}
+        # Draft coverage follows the current roster as well as the generation
+        # baseline. Frozen results retain their own historical roster.
+        if not (version.result_snapshot or version.export_snapshot):
+            label = DEFENSE_TYPE_LABELS[version.defense_type]
+            roster = Student.objects.select_related('mentor')
+            if version.campus_scope:
+                roster = roster.filter(campus=version.campus_scope)
+            for student in roster:
+                if label in (student.defense_types or []):
+                    students_by_id[student.pk] = dict(id=student.pk, name=student.name,
+                        supervisor_id=student.mentor_id)
+        students = list(students_by_id.values())
+        unassigned = [{'id': s['id'], 'name': s['name'], 'reason':
+            '已分组但尚未安排有效答辩时间' if s['id'] in untimed else
+            reasons.get(s['id'], '未找到满足教师时间与专家资格的安排，已尝试局部补排')}
+            for s in students if s['id'] not in scheduled or s['id'] in untimed]
         work = []
         for teacher in version.input_snapshot.get('teachers', []):
             tid = teacher['id']
             tasks = [g for g in groups if tid in {g.get('chairId'), g.get('secretaryId'), *[t['id'] for t in g['teachers']], *[s.get('mentorId') for s in g['students']]}]
             work.append({'id': tid, 'name': teacher['name'], 'supervisedStudents': sum(s.get('supervisor_id') == tid for s in students), 'groupCount': len(tasks), 'studentCount': sum(len(g['students']) for g in tasks), 'sessions': sorted({g['date'] + ' ' + g['timeRange'] for g in tasks})})
-        return {'unassignedStudents': unassigned, 'teacherWorkloads': work, 'allocationStatus': 'partial' if unassigned else 'scheduled', 'totalStudents': len(students)}
+        return {'unassignedStudents': unassigned, 'teacherWorkloads': work,
+            'allocationStatus': 'partial' if unassigned or any(n != 1 for n in counts.values()) else 'scheduled',
+            'totalStudents': len(students)}
 
     @staticmethod
     def _student_schedule_payload(student, teacher_external_by_id, teacher_external_by_name):

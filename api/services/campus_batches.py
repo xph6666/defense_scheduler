@@ -38,10 +38,8 @@ def other_batch_reservations(rules, *, exclude_version_id=None):
 
 
 def cross_batch_conflicts(version, groups):
-    if not version.campus_scope:
-        return []
     from algorithm import parse_time_range, SchedulingError, make_conflict
-    rules = {**version.rules_snapshot, 'campus_scope': version.campus_scope}
+    rules = {**version.rules_snapshot, 'defense_type': version.defense_type, 'campus_scope': version.campus_scope}
     busy = other_batch_reservations(rules, exclude_version_id=version.pk)
     result = []
     for group in groups:
@@ -52,7 +50,8 @@ def cross_batch_conflicts(version, groups):
         except SchedulingError:
             continue
         people = {group.chair_id, group.secretary_id, *[t.id for t in group.experts.all()]} - {None}
-        if version.defense_type in ('pre', 'formal') and not rules.get('formal_rotation'):
+        if (rules.get('formal_mentor_same_session') or
+                (version.defense_type in ('pre', 'formal') and not rules.get('formal_rotation'))):
             people.update(getattr(s, 'mentor_id', None) for s in group.students.all())
         for tid in people:
             for text, other_id, other_group, campus in busy.get(tid, []):

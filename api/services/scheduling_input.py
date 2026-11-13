@@ -12,8 +12,8 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     过滤语义：
     - 学生 defense_types 必须包含当前答辩类型；为空视为数据缺失，跳过并生成提示。
     - 教师 available_types 为空视为不限类型；非空则必须包含当前类型。
-    - 姓名→ID 映射基于过滤后的教师集合：被过滤的导师本就不会被排入，
-      supervisor_id 置空即可，避免算法校验到不存在的教师 ID。
+    - 正式轮换不要求导师到场，仍保留导师 ID 用于回避；教师候选名单独立按参与类型过滤。
+      其余场景需要导师到场，未参加该阶段的导师进入资料提示。
 
     date_range=(开始日, 结束日) 用于把"周一至周五全天"等周期性时间描述
     展开为具体日期区间。
@@ -123,8 +123,6 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
     for student in students:
         defense_types = student.defense_types or []
         from_confirmed_pre = rules.get('use_confirmed_pre_students') and student.pk in previous_group_map
-        if rules.get('use_confirmed_pre_students') and not from_confirmed_pre:
-            continue
         if not defense_types and not from_confirmed_pre:
             if not nonparticipation_reason(student.remark):
                 missing_type_students.append(student)
@@ -135,7 +133,7 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         mentor_name = (student.mentor.name if student.mentor_id else student.mentor_name or '').strip()
         refresh_secretary = defense_type == 'pre' and rules.get('refresh_secretary_bindings')
         effective_bindings = secretary_bindings if secretary_bindings is not None else previous_secretary_map
-        if refresh_secretary:
+        if refresh_secretary or (defense_type == 'mid' and (rules.get('policy_version') or 1) >= 4):
             secretary_name = ''
         elif student.pk in effective_bindings:
             saved_id = effective_bindings[student.pk]
@@ -144,6 +142,8 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         else:
             secretary_name = (student.bound_secretary.name if student.bound_secretary_id else student.secretary_name or '').strip()
         mentor = teacher_by_name.get(mentor_name) if mentor_name else None
+        if defense_type == 'formal' and rules.get('formal_rotation') and mentor is None:
+            mentor = all_teacher_by_name.get(mentor_name)
         secretary = teacher_by_name.get(secretary_name) if secretary_name else None
         if rules.get('policy_version', 1) >= 2 and not mentor_name:
             data_notices.append({'type': 'mentor_missing',
@@ -232,12 +232,11 @@ def build_algorithm_input(defense_type, date_range=None, rules=None, *, secretar
         ),
     )
 
-    if rules.get('campus_scope'):
-        from .campus_batches import other_batch_reservations
-        busy = other_batch_reservations(rules)
-        for teacher in teacher_payload:
-            teacher['available_time'] = list(dict.fromkeys([
-                *teacher['available_time'], *[row[0] for row in busy.get(teacher['id'], [])]]))
+    from .campus_batches import other_batch_reservations
+    busy = other_batch_reservations({**rules, 'defense_type': defense_type})
+    for teacher in teacher_payload:
+        teacher['available_time'] = list(dict.fromkeys([
+            *teacher['available_time'], *[row[0] for row in busy.get(teacher['id'], [])]]))
     if rules.get('policy_version', 1) >= 3 and defense_type in ('pre', 'formal'):
         return {'teachers': teacher_payload, 'students': student_payload, 'rooms': []}, data_notices
     room_payload = []

@@ -15,7 +15,7 @@ def fingerprint(payload, rules):
     # bindings must not make the same planning input appear to be new input.
     for student in data['students']:
         student.pop('secretary_id', None)
-    algorithm_revision = 2 if rules.get('policy_version', 1) >= 4 else 1
+    algorithm_revision = 3 if rules.get('policy_version', 1) >= 4 else 1
     return sha256(json.dumps({'input': data, 'rules': rules, 'algorithm_revision': algorithm_revision}, sort_keys=True,
                              ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
 
@@ -65,7 +65,10 @@ def validated(payload, rules, result):
         diagnostics['quality_components'] = {'size': size_cost, 'mentor_shares': share_cost, 'appearance_cv_squared': visit_cost}
         diagnostics['quality'] = size_cost + share_cost + visit_cost
         if rules.get('policy_version', 1) >= 4:
-            diagnostics['priority_quality'] = [metrics['share_excess'],
+            teacher_map = {t.id: t for t in teachers}
+            exceptions = sum(max(0, sum(teacher_map[tid].is_external
+                for tid in {g.chair_id, *g.expert_ids} if tid in teacher_map) - 1) for g in groups)
+            diagnostics['priority_quality'] = [exceptions, metrics['share_excess'],
                 sum((len(g.student_ids) - rules['group_size']) ** 2 for g in groups), metrics['appearance_square_sum']]
         return candidate
     except (KeyError, TypeError, ValueError, AttributeError):

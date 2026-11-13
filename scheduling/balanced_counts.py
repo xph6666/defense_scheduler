@@ -27,7 +27,7 @@ SHORTLIST_SIZE = 24
 
 def pack_counts(counts, target, minimum, maximum, experts, external_max,
                 teacher_map, chair_ids, feasible, seeds=(), max_groups=None,
-                mentor_cap=None, prioritize_shares=False):
+                mentor_cap=None, prioritize_shares=False, prioritize_external=False):
     """Jointly balance group size, mentor shares and mentor appearances.
 
     Columns describe mentor seat quotas, never student IDs. Uncovered seats
@@ -293,10 +293,14 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                                 np.zeros(len(costs)), np.array(bounds, dtype=float))
         solver.addRow(0, round(sum(candidate[count:count + len(mentors)])),
                       len(mentors), missing_columns, np.ones(len(mentors)))
+        # Composition has priority over target sizes: release the feasibility
+        # search's group-count preference before minimizing external exceptions.
+        if prioritize_external and group_row:
+            solver.deleteRows(1, np.array([matrix.shape[0] + capacity_rows], dtype=np.int32))
         # Preserve a feasible majority of target-sized panels, while allowing
         # the joint quality objective to trade some sixes for fairer shares.
         majority = np.array([1.0 if sum(d.values()) == target else -1.0 for d in candidates])
-        if np.dot(majority, candidate[:count]) >= 0:
+        if not prioritize_external and np.dot(majority, candidate[:count]) >= 0:
             solver.addRow(0, np.inf, count, np.arange(count, dtype=np.int32), majority)
         if prioritize_shares:
             shares, sizes, attendance = (np.zeros(len(costs)) for _ in range(3))
@@ -308,6 +312,11 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                       (attendance, REFINEMENT_TIME_LIMIT)]
         else:
             phases = [(refinement_costs, REFINEMENT_TIME_LIMIT)]
+        if prioritize_external:
+            external_exceptions = np.zeros(len(costs))
+            external_exceptions[:count] = [max(0, sum(teacher_map[t].is_external for t in c) - 1)
+                                           for c in candidates]
+            phases.insert(0, (external_exceptions, REFINEMENT_TIME_LIMIT))
         protected = []
         for phase, (objective, seconds) in enumerate(phases):
             # Each later phase must retain every earlier goal's best incumbent.
@@ -330,7 +339,7 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                             and all(np.dot(previous, integral) <= bound + 1e-5 for previous, bound in protected)
                             and np.dot(objective, integral) < np.dot(objective, candidate)):
                         candidate = integral
-            if prioritize_shares:
+            if prioritize_shares or prioritize_external:
                 bound = float(np.dot(objective, candidate))
                 protected.append((objective, bound))
                 indexes = np.flatnonzero(objective).astype(np.int32)
@@ -348,9 +357,10 @@ def pack_counts(counts, target, minimum, maximum, experts, external_max,
                     'solver_status': str(solver.getModelStatus()),
                     'coverage_solver_status': coverage_status,
                     'coverage_seed': coverage_seed, 'full_cover_status': full_cover_status,
-                    'preferred_groups': preferred_groups, 'group_count_protected': group_row,
+                    'preferred_groups': preferred_groups, 'group_count_protected': group_row and not prioritize_external,
                     'coverage_objective': 'unassigned_students_only',
-                    'objective_order': ['coverage', 'mentor_shares', 'group_sizes', 'appearances'] if prioritize_shares else ['coverage', 'joint_quality'],
+                    'objective_order': ['coverage'] + (['external_exceptions'] if prioritize_external else [])
+                        + (['mentor_shares', 'group_sizes', 'appearances'] if prioritize_shares else ['joint_quality']),
                     'coverage_uncovered': coverage_uncovered,
                     'initial_cost': round(float(np.dot(costs, initial)), 2),
                     'final_cost': round(float(np.dot(costs, candidate)), 2),

@@ -345,14 +345,21 @@ class PersonnelPlanner:
                         self.panel_size(campus), external_max, self.teacher_map, self.chair_ids,
                         lambda counts: feasible(campus, counts), seed_counts, max_groups=cap,
                         mentor_cap=self.mentor_limit(None),
-                        prioritize_shares=self.rules.get('policy_version', 1) >= 4)
+                        prioritize_shares=self.rules.get('policy_version', 1) >= 4,
+                        prioritize_external=self.rules.get('policy_version', 1) >= 4)
                 if target == 6 and self.rules['group_max'] == 7:
                     from .compact_counts import repack_sixes
                     # 七人组改六人组会增加组数，容量受限时不得超过本校区可开设的组数
+                    previous = optimized
                     optimized, blocks = repack_sixes(optimized, self.panel_size(campus), external_max,
                         self.teacher_map, self.chair_ids, lambda counts: feasible(campus, counts),
                         limit=None if cap is None else max(0, cap - len(optimized)),
                         mentor_cap=self.mentor_limit(None))
+                    if self.rules.get('policy_version', 1) >= 4:
+                        def exceptions(panels):
+                            return sum(max(0, sum(self.teacher_map[t].is_external for t in c) - 1) for c in panels)
+                        if exceptions(optimized) > exceptions(previous):
+                            optimized, blocks = previous, 0
                     diagnostics['six_seat_repack_blocks'] = blocks
                 optimized = self.attach_leftovers(optimized, remaining, campus, feasible)
                 diagnostics['uncovered'] = int(sum((remaining - sum(optimized, Counter())).values()))

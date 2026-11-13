@@ -32,7 +32,7 @@ def move_student_bundle(student, source, target, *, preserve_secretary=True, mov
         student.secretary_name = new_secretary.name if new_secretary else ''
     # Formal-stage relationship changes are persisted in that version's input
     # snapshot by the caller; the global binding belongs to the pre round.
-    if source.schedule_version.defense_type != 'formal':
+    if source.schedule_version.defense_type == 'pre':
         student.save(update_fields=['secretary_name', 'bound_secretary'])
     # In pre/mid defenses the mentor is a committee member in the student's group.
     # Formal defenses keep the mentor identity and use the same-session validator.

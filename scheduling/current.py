@@ -222,7 +222,10 @@ def generate(teachers, students, rules):
         sizes = [len(g['student_ids']) for g in result['groups']]
         fairness = result.get('diagnostics', {}).get('fairness', {})
         if rules.get('policy_version', 1) >= 4:
-            return (len(result['unassigned_students']), fairness.get('share_excess', 0),
+            teacher_map = {t.id: t for t in teachers}
+            external_exceptions = sum(max(0, sum(teacher_map[t].is_external
+                for t in {g['chair_id'], *g['expert_ids']} if t in teacher_map) - 1) for g in result['groups'])
+            return (len(result['unassigned_students']), external_exceptions, fairness.get('share_excess', 0),
                     sum((n - rules['group_size']) ** 2 for n in sizes), fairness.get('appearance_square_sum', 0))
         joint = (sum((n - rules['group_size']) ** 2 for n in sizes)
                  + fairness.get('share_excess', 0) + fairness.get('appearance_square_sum', 0))

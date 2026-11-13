@@ -176,7 +176,9 @@ def generate_schedule(
     reviewer_load: Dict[int, int] = {}
     secretary_load: Dict[int, int] = {}
     all_supervisor_ids = {s.supervisor_id for s in parsed_students if s.supervisor_id is not None}
-    all_secretary_ids = {s.secretary_id for s in parsed_students if s.secretary_id is not None}
+    all_secretary_ids = set() if is_policy4_mid(rules) else {
+        s.secretary_id for s in parsed_students if s.secretary_id is not None
+    }
 
     labels = inherited_group_labels(grouped_students, rules)
     if (rules.get('defense_type') == 'formal' and rules.get('formal_mentor_same_session')
@@ -413,6 +415,11 @@ def get_supervisor_policy(rules: Dict[str, Any]) -> str:
     if policy in ("same_group", "avoid", "none"):
         return policy
     return "avoid" if rules.get("avoid_supervisor", False) else "none"
+
+
+def is_policy4_mid(rules: Dict[str, Any]) -> bool:
+    """判断是否为 policy v4 及以上的中期答辩规则（按校区每 10 人切分，不继承预答辩秘书/外院分组）。"""
+    return int(rules.get("policy_version", 1) or 1) >= 4 and rules.get("defense_type") == "mid"
 
 
 def parse_excluded_dates(rules: Dict[str, Any]) -> set:
@@ -791,14 +798,17 @@ def assign_teachers(
     reserve_formal = rules.get('defense_type') == 'pre' and rules.get('reserve_formal_resources')
     peer_mentor_ids = all_supervisor_ids - supervisor_ids
     mentor_session_required = rules.get('defense_type') == 'formal' and rules.get('formal_mentor_same_session')
-    # 学生既定秘书（预答辩确定，正式答辩沿用）：统计组内绑定情况
+    # 学生既定秘书（预答辩确定，正式答辩沿用；policy 4 中期按每组 10 人切分，不继承预答辩绑定）
     desired_secretary_counts: Dict[int, int] = {}
-    for student in students_in_group:
-        if student.secretary_id is not None:
-            desired_secretary_counts[student.secretary_id] = (
-                desired_secretary_counts.get(student.secretary_id, 0) + 1
-            )
-    other_group_secretary_ids = (all_secretary_ids or set()) - set(desired_secretary_counts)
+    if not is_policy4_mid(rules):
+        for student in students_in_group:
+            if student.secretary_id is not None:
+                desired_secretary_counts[student.secretary_id] = (
+                    desired_secretary_counts.get(student.secretary_id, 0) + 1
+                )
+    other_group_secretary_ids = (
+        set() if is_policy4_mid(rules) else (all_secretary_ids or set()) - set(desired_secretary_counts)
+    )
 
     teacher_name_map = {t.id: t.name for t in teachers}
     available_teachers = [
@@ -1373,29 +1383,30 @@ def detect_global_conflicts(
                     )
                 )
 
-    # [TASK-P05 新增] 对外院导师学生组数执行生成、调整、发布共用的硬校验。
-    external_mentor_students: Dict[Tuple[int, Optional[str]], List[Student]] = {}
-    student_group = {sid: draft.group_id for draft in drafts for sid in draft.student_ids}
-    for student in students:
-        mentor = teacher_map.get(student.supervisor_id)
-        if mentor is not None and mentor.is_external:
-            external_mentor_students.setdefault((mentor.id, student.campus), []).append(student)
-    for (mentor_id, campus), advised_students in external_mentor_students.items():
-        mentor = teacher_map[mentor_id]
-        expected_groups = 1 if len(advised_students) < 3 else 2
-        assigned_groups = sorted({student_group[s.id] for s in advised_students if s.id in student_group})
-        if len(assigned_groups) != expected_groups:
-            conflicts.append(make_conflict(
-                conflict_type="external_mentor_group_count",
-                description=(
-                    f"外院导师 {mentor.name} 在{campus or '未填校区'}有 {len(advised_students)} 名学生，"
-                    f"应集中安排在 {expected_groups} 组，当前分布在 {len(assigned_groups)} 组"
-                ),
-                related_ids=[*assigned_groups, mentor_id, *[s.id for s in advised_students]],
-                teacher_name=mentor.name,
-                assigned=len(assigned_groups),
-                required=expected_groups,
-            ))
+    # [TASK-P05 新增] 对外院导师学生组数执行生成、调整、发布共用的硬校验（policy 4 中期按 10 人切分，跳过）。
+    if not is_policy4_mid(rules):
+        external_mentor_students: Dict[Tuple[int, Optional[str]], List[Student]] = {}
+        student_group = {sid: draft.group_id for draft in drafts for sid in draft.student_ids}
+        for student in students:
+            mentor = teacher_map.get(student.supervisor_id)
+            if mentor is not None and mentor.is_external:
+                external_mentor_students.setdefault((mentor.id, student.campus), []).append(student)
+        for (mentor_id, campus), advised_students in external_mentor_students.items():
+            mentor = teacher_map[mentor_id]
+            expected_groups = 1 if len(advised_students) < 3 else 2
+            assigned_groups = sorted({student_group[s.id] for s in advised_students if s.id in student_group})
+            if len(assigned_groups) != expected_groups:
+                conflicts.append(make_conflict(
+                    conflict_type="external_mentor_group_count",
+                    description=(
+                        f"外院导师 {mentor.name} 在{campus or '未填校区'}有 {len(advised_students)} 名学生，"
+                        f"应集中安排在 {expected_groups} 组，当前分布在 {len(assigned_groups)} 组"
+                    ),
+                    related_ids=[*assigned_groups, mentor_id, *[s.id for s in advised_students]],
+                    teacher_name=mentor.name,
+                    assigned=len(assigned_groups),
+                    required=expected_groups,
+                ))
 
     # Secretary constraints: continuity with the pre-assigned secretary and
     # "a secretary must not supervise students in their own group".
@@ -1424,10 +1435,11 @@ def detect_global_conflicts(
             )
 
         desired_counts: Dict[int, int] = {}
-        for sid in draft.student_ids:
-            student = student_map.get(sid)
-            if student is not None and student.secretary_id is not None:
-                desired_counts[student.secretary_id] = desired_counts.get(student.secretary_id, 0) + 1
+        if not is_policy4_mid(rules):
+            for sid in draft.student_ids:
+                student = student_map.get(sid)
+                if student is not None and student.secretary_id is not None:
+                    desired_counts[student.secretary_id] = desired_counts.get(student.secretary_id, 0) + 1
         if desired_counts:
             # Every student's binding matters. Checking only the most common
             # secretary hides a minority's lost cross-stage relationship.

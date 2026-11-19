@@ -56,9 +56,10 @@
       <el-select v-model="selectedVersion" placeholder="当前版本（下拉可查看历史）" clearable class="w-64" @change="fetchResult">
         <el-option
           v-for="v in versions" :key="v.id" :value="v.id"
-          :label="`v${v.version} · ${v.campus_scope || '历史综合批次'} · ${v.status === 'published' ? '已发布' : '草稿'}${v.is_current ? ' · 当前' : ''}`"
+          :label="`v${v.version} · ${v.campus_scope || (v.is_current ? '综合批次（两校区）' : '历史综合批次')} · ${v.status === 'published' ? '已发布' : '草稿'}${v.is_current ? ' · 当前' : ''}`"
         />
       </el-select>
+      <el-tag v-if="result?.versionId && !result?.campusScope" type="info" effect="plain">综合批次（两校区）</el-tag>
       <el-tag :type="result?.status === 'published' ? 'success' : 'warning'">
         {{ result?.status === 'published' ? '已发布 · 内容已锁定' : '草稿 · 请核对后发布' }}
       </el-tag>
@@ -222,7 +223,7 @@
       <el-descriptions :column="1" border>
         <el-descriptions-item label="答辩类型">{{ defenseType }}</el-descriptions-item>
         <el-descriptions-item label="答辩日期">{{ generationConfig.startDate || '未设置' }} 至 {{ generationConfig.endDate || '未设置' }}</el-descriptions-item>
-        <el-descriptions-item label="每组人数">学生 {{ generationConfig.studentCount.target }} 人 / 专家{{ defenseType === '预答辩' ? '至少' : '目标' }} {{ defenseType === '预答辩' ? generationConfig.expertCount.min : generationConfig.expertCount.target }} 人<span v-if="defenseType !== '预答辩'">（至少 {{ generationConfig.expertCount.min }} 人）</span> / 秘书 1 人</el-descriptions-item>
+        <el-descriptions-item label="每组人数">学生 {{ generationConfig.studentCount.target }} 人 / 专家{{ defenseType === '预答辩' ? '（本校区）' : '目标' }} {{ generationExpertCount }} 人<span v-if="defenseType !== '预答辩'">（至少 {{ generationConfig.expertCount.min }} 人）</span> / 秘书 1 人</el-descriptions-item>
         <el-descriptions-item label="参与学生">{{ generationConfig.useConfirmedPreStudents ? '读取本校区已发布预答辩名单' : `${generationStudentCount} 人` }}</el-descriptions-item>
         <el-descriptions-item label="导师安排">{{ defenseType === '中期答辩' ? '导师不回避，可评审自己的学生' : defenseType === '预答辩' ? '导师与学生同组' : generationConfig.mentorAvoidance ? '导师回避自己的学生' : '不要求导师回避' }}</el-descriptions-item>
       </el-descriptions>
@@ -354,8 +355,10 @@
       >
         <template #default>
           <div class="text-xs">
-            <p>• 导师跟随：预答辩/中期答辩时，导师随学生一起移动到目标组</p>
-            <p>• 秘书关系：可选择保留原秘书或改绑到目标组秘书</p>
+            <p v-if="isPolicy4MidMove">• 导师评审：中期答辩每组固定 5 位评审，移动学生不会变动评审组导师</p>
+            <p v-else>• 导师跟随：预答辩时导师随学生一起移动到目标组；正式答辩采用导师回避</p>
+            <p v-if="isPolicy4MidMove">• 秘书关系：中期各组独立分配秘书，不影响预答辩秘书绑定</p>
+            <p v-else>• 秘书关系：可选择保留原秘书或改绑到目标组秘书</p>
             <p>• 冲突检测：移动完成后自动刷新冲突状态</p>
           </div>
         </template>
@@ -390,7 +393,7 @@
         </el-select>
       </div>
 
-      <div class="move-select-row">
+      <div v-if="!isPolicy4MidMove" class="move-select-row">
         <label class="move-label">秘书关系</label>
         <div class="w-full space-y-2">
           <el-checkbox v-model="preserveSecretary" class="w-full">
@@ -426,6 +429,9 @@
           <el-tag v-if="defenseType === '正式答辩'" size="small" type="info">
             正式答辩不移动导师（导师回避）
           </el-tag>
+          <el-tag v-else-if="isPolicy4MidMove" size="small" type="info">
+            中期答辩不移动导师（评审组固定 5 人）
+          </el-tag>
           <el-tag v-else size="small" type="success">
             导师将随学生一起移动到目标组
           </el-tag>
@@ -437,7 +443,7 @@
       <el-button
         type="primary"
         :loading="moving"
-        :disabled="!moveStudentId || !moveTargetId || (!preserveSecretary && !replacementSecretaryId)"
+        :disabled="!moveStudentId || !moveTargetId || (!isPolicy4MidMove && !preserveSecretary && !replacementSecretaryId)"
         @click="handleMoveStudent"
       >
         确认移动
@@ -621,15 +627,46 @@ const linkedVisible = ref(false)
 const linkedConfigs = ref<[RuleConfig, RuleConfig] | null>(null)
 const linkedExpertCount = ref(3)
 const updateLinkedExpertCount = () => {
-  if (linkedConfigs.value) linkedConfigs.value = linkedConfigs.value.map((config, index) => ({ ...config, mentorAvoidance: false, expertCount: { target: index === 0 ? linkedExpertCount.value : 5, min: index === 0 ? linkedExpertCount.value : 5 } })) as [RuleConfig, RuleConfig]
+  if (linkedConfigs.value) {
+    linkedConfigs.value = linkedConfigs.value.map((config, index) => {
+      if (index === 0) {
+        const campusCounts = config.campusExpertCounts && Object.keys(config.campusExpertCounts).length > 0
+          ? { ...config.campusExpertCounts, [batchCampus.value]: linkedExpertCount.value }
+          : {}
+        return {
+          ...config,
+          mentorAvoidance: false,
+          expertCount: { target: linkedExpertCount.value, min: linkedExpertCount.value },
+          campusExpertCounts: campusCounts
+        }
+      }
+      return {
+        ...config,
+        mentorAvoidance: true,
+        expertCount: { target: 5, min: 5 }
+      }
+    }) as [RuleConfig, RuleConfig]
+  }
   linkedPreflightStatus.value = 'idle'
   linkedPreflightPre.value = null
   linkedPreflightFormal.value = null
 }
 const linkedError = ref('')
 const generationConfig = ref<RuleConfig | null>(null)
+const generationExpertCount = computed(() => {
+  const cfg = generationConfig.value
+  if (!cfg) return 5
+  if (defenseType.value === '预答辩') {
+    const campusCount = cfg.campusExpertCounts?.[batchCampus.value]
+    return campusCount ?? cfg.expertCount.target
+  }
+  return cfg.expertCount.target
+})
+const isPolicy4MidMove = computed(() => defenseType.value === '中期答辩' && (result.value?.rules?.policy_version ?? 4) >= 4)
 const generationSummary = computed(() => {
-  if (defenseType.value === '中期答辩') return '每组 5 位专家（含组长）、10 名学生，组长必须为正高，导师不回避；不足 10 人的余数逐人列为未安排。'
+  if (defenseType.value === '中期答辩') return generationConfig.value?.allowMidRemainderGroup
+    ? '标准组 10 名学生，各校区余数单独成组并标记。每组均需 5 位专家，组长须为正高，导师不回避。'
+    : '每组 10 名学生，各校区余数列为未安排。每组需 5 位专家，组长须为正高，导师不回避。'
   if (defenseType.value === '正式答辩') return generationConfig.value?.preservePreDefenseGroups
     ? '沿用本校区预答辩的学生组、组号与秘书，主席和专家全部轮换，导师回避。'
     : '本校区正式答辩重新分组，按学生保留预答辩来源，可查看拆分与合并后的实际去向。'
@@ -799,7 +836,7 @@ const handlePublish = async () => {
     if (!workspace.isCurrent(context, true)) return
     result.value = published
     applyConflictsFromResult(published)
-    const options = await listScheduleVersions(context.defenseType)
+    const options = await listScheduleVersions(context.defenseType, context.campusScope)
     if (!workspace.isCurrent(context)) return
     versions.value = options
     ElMessage.success('已发布并锁定该版本，后续修改请生成新草稿')
@@ -812,18 +849,28 @@ const handleMoveStudent = async () => {
   const choice = moveChoices.value.find(student => student.id === moveStudentId.value)
   const sourceGroup = result.value?.groups.find(g => g.id === choice?.groupId)
   const targetGroup = result.value?.groups.find(g => g.id === moveTargetId.value)
-  if (!requireAdmin() || !choice || !moveTargetId.value || !result.value || !canEdit.value || (!preserveSecretary.value && !replacementSecretaryId.value)) return
+  if (!requireAdmin() || !choice || !moveTargetId.value || !result.value || !canEdit.value || (!isPolicy4MidMove.value && !preserveSecretary.value && !replacementSecretaryId.value)) return
   const context = workspace.capture()
   const beforeErrorCount = conflicts.value.filter(c => c.level === 'error').length
   const studentName = selectedMoveStudent.value?.name || '该学生'
   const sourceGroupName = sourceGroup?.groupName || '原组'
   const targetGroupName = targetGroup?.groupName || '目标组'
-  const secretaryText = preserveSecretary.value ? '保留原秘书' : `改绑秘书`
-  const mentorText = defenseType.value === '正式答辩' ? '导师回避（不移动）' : '导师跟随移动'
+  const policy4Mid = isPolicy4MidMove.value
+  const shouldMoveMentor = !policy4Mid && defenseType.value !== '正式答辩'
+  const secretaryText = policy4Mid ? '独立分配（不改绑定）' : preserveSecretary.value ? '保留原秘书' : '改绑秘书'
+  const mentorText = defenseType.value === '正式答辩'
+    ? '导师回避（不移动）'
+    : policy4Mid
+      ? '固定评审组（不移动）'
+      : '导师跟随移动'
 
   moving.value = true
   try {
-    await moveScheduleStudent(choice.id, choice.groupId, moveTargetId.value, editingRevision.value, { preserveSecretary: preserveSecretary.value, moveMentor: true, secretaryId: replacementSecretaryId.value })
+    await moveScheduleStudent(choice.id, choice.groupId, moveTargetId.value, editingRevision.value, {
+      preserveSecretary: policy4Mid ? false : preserveSecretary.value,
+      moveMentor: shouldMoveMentor,
+      secretaryId: policy4Mid ? undefined : replacementSecretaryId.value
+    })
     if (!workspace.isCurrent(context, true)) return
     moveVisible.value = false
     moving.value = false
@@ -839,7 +886,7 @@ const handleMoveStudent = async () => {
     const detailLines = [
       `学生：${studentName}`,
       `从【${sourceGroupName}】 → 【${targetGroupName}】`,
-      `秘书：${secretaryText}${preserveSecretary.value ? '' : replacementSecretaryId.value ? '（已选择新秘书）' : ''}`,
+      `秘书：${secretaryText}${policy4Mid || preserveSecretary.value || !replacementSecretaryId.value ? '' : '（已选择新秘书）'}`,
       `导师：${mentorText}`,
       `冲突已自动复核${newErrors > 0 ? `，新增 ${newErrors} 项硬冲突` : '，无新增硬冲突'}`
     ]
@@ -992,7 +1039,7 @@ const loadOptions = async (context: ScheduleContext) => {
     roles: t.roles,
     college: t.college,
     isExternal: t.isExternal,
-    isActive: t.isActive, memberEligible: t.memberEligible, isSoftwareTeacher: t.isSoftwareTeacher
+    isActive: t.isActive, memberEligible: t.memberEligible, expertOnly: t.expertOnly, isSoftwareTeacher: t.isSoftwareTeacher
   }))
 
   studentOptions.value = students.map(s => ({
@@ -1063,10 +1110,7 @@ const prepareGeneration = async () => {
       getRuleConfig(context.defenseType), listStudents(context.defenseType)
     ])
     if (!workspace.isCurrent(context)) return
-    generationConfig.value = context.defenseType === '预答辩'
-      ? { ...config, campusScope: batchCampus.value, expertCount: { target: 3, min: 3 } }
-      : context.defenseType === '正式答辩'
-        ? { ...config, campusScope: batchCampus.value } : { ...config, campusScope: batchCampus.value }
+    generationConfig.value = { ...config, campusScope: batchCampus.value }
     generationStudentCount.value = students.filter(student => student.defenseTypes.includes(context.defenseType) && student.campus === batchCampus.value).length
     // 重置预检状态
     preflightStatus.value = 'idle'
@@ -1087,7 +1131,7 @@ const prepareLinkedGeneration = async () => {
     ])
     if (!workspace.isCurrent(context)) return
     linkedConfigs.value = [{ ...pre, campusScope: batchCampus.value }, { ...formal, campusScope: batchCampus.value, preservePreDefenseGroups: true, useConfirmedPreStudents: false }]
-    linkedExpertCount.value = pre.expertCount.target
+    linkedExpertCount.value = pre.campusExpertCounts?.[batchCampus.value] ?? pre.expertCount.target
     updateLinkedExpertCount()
     const errors = [...validateWizardRules(pre), ...validateWizardRules(formal)]
     if (formal.startDate <= pre.endDate) errors.push('正式答辩开始日期必须晚于预答辩结束日期，请修改两阶段日期。')

@@ -239,8 +239,8 @@ class ScheduleApplication:
             },
         }
 
-    def generate_version(self, rules, request_key=None):
-        """Compute and persist a draft. Caller holds the schedule write transaction."""
+    def compute_version_plan(self, rules):
+        """Run preflight, load inputs, and solve without holding a DB write lock."""
         rules = self.prepare_generation_rules(rules)
         def progress(stage, message, percent):
             report_progress(stage, message, percent, rules['defense_type'])
@@ -290,6 +290,24 @@ class ScheduleApplication:
         # 将使用的随机种子持久化到规则快照，便于复现
         if result.get('random_seed') is not None:
             rules['random_seed'] = result['random_seed']
+        return {
+            'rules': rules,
+            'payload': payload,
+            'notices': notices,
+            'result': result,
+            'source_pre_id': source_pre.pk if source_pre else None,
+        }
+
+    def persist_version_plan(self, plan, request_key=None):
+        """Persist a computed draft plan inside the caller's write transaction."""
+        rules = plan['rules']
+        payload = plan['payload']
+        notices = plan['notices']
+        result = plan['result']
+        source_pre_id = plan.get('source_pre_id')
+        def progress(stage, message, percent):
+            report_progress(stage, message, percent, rules['defense_type'])
+        progress('saving', '分组求解结束，正在保存草稿与冲突明细', 85)
         for old in replaced_versions(rules):
             self._freeze_version(old)
         replaced_versions(rules).update(is_current=False)
@@ -297,7 +315,7 @@ class ScheduleApplication:
         version = ScheduleVersion.objects.create(version=number, defense_type=rules['defense_type'],
             campus_scope=rules.get('campus_scope', ''),
             rules_snapshot=rules, input_snapshot=payload, request_key=request_key,
-            source_pre_version=source_pre, is_current=True)
+            source_pre_version_id=source_pre_id, is_current=True)
         group_map = {}
         for row in result['groups']:
             group = Group.objects.create(schedule_version=version, group_id=row['group_id'],
@@ -313,6 +331,10 @@ class ScheduleApplication:
             self._sync_student_secretaries(version)
         progress('checking', '草稿已写入，正在核验结果与保存操作记录', 95)
         return version
+
+    def generate_version(self, rules, request_key=None):
+        """Compute and persist a draft. Caller holds the schedule write transaction."""
+        return self.persist_version_plan(self.compute_version_plan(rules), request_key=request_key)
 
 
     @staticmethod

@@ -86,10 +86,6 @@
         </el-select>
         <div class="text-xs text-gray-500 mt-1">调整学生归属请使用排期页的“移动学生”，确保学生始终属于一个组。</div>
       </el-form-item>
-
-      <el-form-item label="备注" prop="remark">
-        <el-input v-model="form.remark" type="textarea" />
-      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -103,7 +99,12 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { isPreDefenseChairEligible } from '../domain/scheduleExperts'
+import {
+  STANDARD_TIME_OPTIONS,
+  buildAdjustTimeOptions,
+  isChairOptionEligible,
+  isSecretaryOptionEligible
+} from '../domain/scheduleExperts'
 import type { FormInstance, FormRules } from 'element-plus'
 import type { ScheduleGroup, ScheduleTeacher, ScheduleStudent, DefenseType } from '../types/schedule'
 
@@ -130,8 +131,6 @@ const visible = ref(props.modelValue)
 watch(() => props.modelValue, v => { visible.value = v })
 watch(visible, v => { emit('update:modelValue', v) })
 
-const timeOptions = ['08:30-10:30', '10:30-12:30', '14:00-16:00', '16:00-18:00', '19:00-21:00']
-
 const emptyGroup: ScheduleGroup = {
   id: 0,
   defenseType: '预答辩',
@@ -139,34 +138,44 @@ const emptyGroup: ScheduleGroup = {
   campus: '创新港',
   classroom: '',
   date: '',
-  timeRange: timeOptions[0],
+  timeRange: STANDARD_TIME_OPTIONS[0],
   secretary: '',
   teachers: [],
-  students: [],
-  remark: ''
+  students: []
 }
 
 const form = reactive<ScheduleGroup>({ ...emptyGroup })
 const formRef = ref<FormInstance>()
+
+const timeOptions = computed(() => buildAdjustTimeOptions(form.timeRange))
 
 watch(
   () => props.group,
   g => {
     if (!g) return
     Object.assign(form, emptyGroup, JSON.parse(JSON.stringify(g)))
-    form.chairId = g.chairId ?? props.teachers.find(teacher => teacher.name === (g.chairman || g.leader))?.id
+    const chairName = g.chairman || g.leader || ''
+    form.chairId = g.chairId ?? props.teachers.find(teacher => teacher.name === chairName)?.id
+    const resolvedChairName = chairName || props.teachers.find(teacher => teacher.id === form.chairId)?.name || ''
+    if (props.defenseType === '正式答辩') {
+      form.chairman = resolvedChairName || undefined
+      form.leader = undefined
+    } else {
+      form.leader = resolvedChairName || undefined
+      form.chairman = undefined
+    }
     form.secretaryId = g.secretaryId ?? props.teachers.find(teacher => teacher.name === g.secretary)?.id
     form.teachers = form.teachers.filter(teacher => teacher.id !== form.chairId)
   },
   { immediate: true }
 )
 
-const chairOptions = computed(() => props.teachers.filter(teacher => {
-  if (props.defenseType === '预答辩') return isPreDefenseChairEligible(teacher.title, props.policyVersion)
-  const qualified = props.defenseType === '正式答辩' ? teacher.title === '教授' : ['教授', '副教授'].includes(teacher.title)
-  return qualified && (teacher.roles.includes(props.defenseType === '正式答辩' ? '主席' : '组长') || teacher.id === form.chairId)
-}))
-const secretaryOptions = computed(() => props.teachers.filter(teacher => teacher.roles.includes('秘书') && teacher.title !== '其他'))
+const chairOptions = computed(() => props.teachers.filter(teacher =>
+  isChairOptionEligible(teacher, props.defenseType, props.policyVersion ?? 4, form.chairId)
+))
+const secretaryOptions = computed(() => props.teachers.filter(teacher =>
+  isSecretaryOptionEligible(teacher, form.secretaryId)
+))
 const memberOptions = computed(() => props.teachers.filter(teacher => teacher.memberEligible !== false && teacher.id !== form.chairId && teacher.id !== form.secretaryId))
 
 const filteredClassrooms = computed(() => {

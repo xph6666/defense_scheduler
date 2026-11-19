@@ -147,6 +147,111 @@ class CurrentRequirementApiTests(TestCase):
         self.teachers = [Teacher.objects.create(name=t['name'], title=t['title'],
             roles=t['roles'], availability_confirmed=True) for t in staff()]
 
+    def test_mid_campus_tails_are_scheduled_and_flagged_for_review(self):
+        for campus, count in [('创新港', 13), ('兴庆', 8)]:
+            Room.objects.create(name='A101', campus=campus, capacity=30)
+            for index in range(count):
+                Student.objects.create(name=f'{campus}{index}', mentor=self.teachers[0],
+                    campus=campus, defense_types=['中期答辩'])
+
+        config = self.client.post('/api/rule-config/',
+            {'defense_type': 'mid', 'allowMidRemainderGroup': True}, format='json')
+        self.assertEqual(config.status_code, 200, config.data)
+        response = self.client.post('/api/schedule/generate/',
+            {'rules': rules('mid', allow_mid_remainder_group=config.data['allowMidRemainderGroup'])}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['unassignedStudents'], [])
+        self.assertCountEqual([(g['campus'], len(g['students'])) for g in response.data['groups']],
+            [('创新港', 10), ('创新港', 3), ('兴庆', 8)])
+        issues = response.data['conflicts']
+        self.assertFalse([c for c in issues if c['level'] == 'error'], issues)
+        self.assertEqual(sum(c['type'] == '中期答辩尾组' and c['level'] == 'warning' for c in issues), 2)
+
+        version = ScheduleVersion.objects.get(pk=response.data['versionId'])
+        full, tail = sorted(version.groups.filter(campus='创新港'), key=lambda g: -g.students.count())
+        moved = list(full.students.all()[:2])
+        full.students.remove(*moved)
+        tail.students.add(*moved)
+        bad = self.client.post('/api/schedule/publish/', dict(version_id=version.pk,
+            expected_revision=version.revision), format='json')
+        self.assertEqual(bad.status_code, 400, bad.data)
+        self.assertTrue(any(c['type'] == '人数规则冲突' for c in bad.data['conflicts']))
+
+        tail.students.remove(*moved)
+        full.students.add(*moved)
+        publish = self.client.post('/api/schedule/publish/', dict(version_id=version.pk,
+            expected_revision=version.revision), format='json')
+        self.assertEqual(publish.status_code, 200, publish.data)
+
+    def test_mid_without_tail_enforces_same_campus_rooms_and_students(self):
+        Room.objects.create(name='A101', campus='创新港', capacity=30)
+        for index in range(10):
+            Student.objects.create(name=f'兴庆{index}', mentor=self.teachers[0],
+                campus='兴庆', defense_types=['中期答辩'])
+
+        response = self.client.post('/api/schedule/generate/', {'rules': rules('mid')}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['groups'][0]['classroom'], '待预约')
+        self.assertTrue(any(c['type'] == '教室冲突' and c['level'] == 'error' for c in response.data['conflicts']))
+
+        xingqing_room = Room.objects.create(name='X101', campus='兴庆', capacity=30)
+        version = ScheduleVersion.objects.get(pk=response.data['versionId'])
+        group = version.groups.get()
+        group.room = Room.objects.get(campus='创新港')
+        group.time = '2026-11-02 09:00-12:00'
+        group.save()
+        bad_room = self.client.post('/api/schedule/publish/', dict(version_id=version.pk,
+            expected_revision=version.revision), format='json')
+        self.assertEqual(bad_room.status_code, 400, bad_room.data)
+        self.assertTrue(any(c['type'] == '学生校区冲突' for c in bad_room.data['conflicts']))
+
+        group.room = xingqing_room
+        group.save()
+        wrong_student = Student.objects.create(name='误入创新港生', mentor=self.teachers[0],
+            campus='创新港', defense_types=['中期答辩'])
+        group.students.remove(group.students.first())
+        group.students.add(wrong_student)
+        bad_student = self.client.post('/api/schedule/publish/', dict(version_id=version.pk,
+            expected_revision=version.revision), format='json')
+        self.assertEqual(bad_student.status_code, 400, bad_student.data)
+        self.assertTrue(any(c['type'] == '学生校区冲突' for c in bad_student.data['conflicts']))
+
+    def test_mid_policy4_move_student_does_not_mutate_committee_or_chair(self):
+        Room.objects.create(name='A101', campus='创新港', capacity=30)
+        Room.objects.create(name='A102', campus='创新港', capacity=30)
+        mentor = self.teachers[0]
+        other_mentor = self.teachers[1]
+        for index in range(20):
+            Student.objects.create(name=f'中生{index}', mentor=mentor if index == 0 else other_mentor,
+                campus='创新港', defense_types=['中期答辩'])
+
+        generated = self.client.post('/api/schedule/generate/', {'rules': rules('mid')}, format='json')
+        self.assertEqual(generated.status_code, 200, generated.data)
+        version = ScheduleVersion.objects.get(pk=generated.data['versionId'])
+        g1, g2 = list(version.groups.order_by('id'))
+        student = Student.objects.get(name='中生0')
+        source, target = (g1, g2) if g1.students.filter(pk=student.pk).exists() else (g2, g1)
+        source.chair = mentor
+        source.experts.set(self.teachers[2:6])
+        source.save()
+        target.chair = self.teachers[6]
+        target.experts.set(self.teachers[7:11])
+        target.save()
+        source_experts_before = sorted(source.experts.values_list('pk', flat=True))
+        target_experts_before = sorted(target.experts.values_list('pk', flat=True))
+
+        moved = self.client.post('/api/schedule/adjust/', {
+            'action': 'move_student', 'student_id': student.pk,
+            'from_group_id': source.pk, 'to_group_id': target.pk,
+            'expected_revision': version.revision, 'move_mentor': True,
+        }, format='json')
+        self.assertEqual(moved.status_code, 200, moved.data)
+        self.assertFalse(moved.data['movement']['mentorMoved'])
+        source.refresh_from_db(); target.refresh_from_db()
+        self.assertEqual(source.chair_id, mentor.pk)
+        self.assertEqual(sorted(source.experts.values_list('pk', flat=True)), source_experts_before)
+        self.assertEqual(sorted(target.experts.values_list('pk', flat=True)), target_experts_before)
+
     def test_mid_generation_and_publish_with_own_mentor(self):
         for index in range(10):
             Student.objects.create(name=f'M{index}', mentor=self.teachers[0],

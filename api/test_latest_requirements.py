@@ -226,3 +226,47 @@ class LatestRequirementTests(TestCase):
         self.assertEqual(workbook['批次信息']['B1'].value, '创新港')
         document = export_schedule_word(version)
         self.assertIn('创新港', document.paragraphs[0].text)
+
+    def test_campus_scope_query_falls_back_to_current_combined_batch_only_when_active(self):
+        combined_resp = self.client.post('/api/schedule/generate/', {
+            'rules': rules(), 'request_key': 'combined-all'}, format='json')
+        self.assertEqual(combined_resp.status_code, 200, combined_resp.data)
+        combined_id = combined_resp.data['versionId']
+
+        # 尚无单校区批次时，按创新港/兴庆查询自动回退到当前生效的综合批次
+        for campus in ('创新港', '兴庆'):
+            res = self.client.get('/api/schedule/current/', {'defense_type': 'pre', 'campus_scope': campus})
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.data['versionId'], combined_id)
+
+        # 生成创新港独立批次后，综合批次被置为历史，此时查兴庆应为空
+        scoped = self.generate('创新港', 'scoped-only-cxg')
+        cxg = self.client.get('/api/schedule/current/', {'defense_type': 'pre', 'campus_scope': '创新港'})
+        self.assertEqual(cxg.data['versionId'], scoped.pk)
+        xq = self.client.get('/api/schedule/current/', {'defense_type': 'pre', 'campus_scope': '兴庆'})
+        self.assertEqual(xq.data['groups'], [])
+
+    def test_publish_writes_single_publish_audit_log(self):
+        version = self.generate('创新港', 'publish-audit-once')
+        before_gen = OperationLog.objects.filter(type='生成', authoritative=True).count()
+        before_pub = OperationLog.objects.filter(type='发布', authoritative=True).count()
+        published = self.client.post('/api/schedule/publish/', {
+            'version_id': version.pk, 'expected_revision': version.revision}, format='json')
+        self.assertEqual(published.status_code, 200, published.data)
+        self.assertEqual(OperationLog.objects.filter(type='生成', authoritative=True).count(), before_gen)
+        self.assertEqual(OperationLog.objects.filter(type='发布', authoritative=True).count(), before_pub + 1)
+
+    def test_generation_rejects_stale_plan_when_base_data_changes_during_solve(self):
+        from django.db.models import F
+        from api.models import ScheduleWriteLock
+        real = generate_schedule
+
+        def mutate_while_solving(**kwargs):
+            ScheduleWriteLock.objects.filter(pk=1).update(revision=F('revision') + 1)
+            return real(**kwargs)
+
+        with patch('algorithm.generate_schedule', side_effect=mutate_while_solving):
+            response = self.client.post('/api/schedule/generate/', {
+                'rules': rules(campus_scope='创新港'), 'request_key': 'stale-plan'}, format='json')
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertEqual(ScheduleVersion.objects.count(), 0)

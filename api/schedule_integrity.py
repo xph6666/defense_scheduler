@@ -15,6 +15,34 @@ def audit(request, action, description, **details):
         operator=request.user.get_username(), authoritative=True, details=details)
 
 
+def audit_version_summary(version, result=None):
+    """Build a compact audit snapshot without duplicating the full schedule payload."""
+    if isinstance(result, dict):
+        conflicts = result.get('conflicts') if isinstance(result.get('conflicts'), list) else []
+        groups = result.get('groups') if isinstance(result.get('groups'), list) else []
+        return {
+            'versionId': version.id,
+            'version': version.version,
+            'revision': version.revision,
+            'status': version.status,
+            'defenseType': version.defense_type,
+            'campusScope': version.campus_scope,
+            'groupCount': len(groups),
+            'conflictCount': len(conflicts),
+            'errorCount': sum(1 for item in conflicts if item.get('level') == 'error'),
+        }
+    return {
+        'versionId': version.id,
+        'version': version.version,
+        'revision': version.revision,
+        'status': version.status,
+        'defenseType': version.defense_type,
+        'campusScope': version.campus_scope,
+        'groupCount': version.groups.count(),
+        'conflictCount': len(version.conflicts_snapshot or []),
+    }
+
+
 def response_schedule_version_ids(data):
     if not isinstance(data, dict):
         return []
@@ -40,7 +68,7 @@ def schedule_write(fn):
             except (ValueError, TypeError):
                 return Response({'error': '分组 ID 格式不正确'}, status=400)
             versions = {g.schedule_version_id: g.schedule_version for g in groups}
-            before = {str(version.id): self._version_result(version) for version in versions.values()}
+            before = {str(version.id): audit_version_summary(version) for version in versions.values()}
             if len(versions) > 1:
                 return Response({'error': '不能跨排期版本移动学生'}, status=400)
             for version in versions.values():
@@ -85,9 +113,10 @@ def schedule_write(fn):
                     response.data['revision'] = version.revision
             for version in logged_versions.values():
                 version.refresh_from_db()
-            audit(request, '调整' if group_ids else '生成', f'完成排期操作：{fn.__name__}',
-                  group_ids=group_ids, version_ids=list(logged_versions), changes=request.data,
-                  before=before, after={str(v.id): self._version_result(v) for v in logged_versions.values()})
+            if fn.__name__ != 'publish':
+                audit(request, '调整' if group_ids else '生成', f'完成排期操作：{fn.__name__}',
+                      group_ids=group_ids, version_ids=list(logged_versions), changes=request.data,
+                      before=before, after={str(v.id): audit_version_summary(v) for v in logged_versions.values()})
             return response
     return wrapped
 

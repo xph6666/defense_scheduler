@@ -21,6 +21,32 @@ const isGeneratedResult = (result: ScheduleResult) => {
   return parseTime(result.generatedAt) > 0
 }
 
+export const mergeScheduleBatchResults = (
+  batches: (ScheduleResult | null | undefined)[],
+  canManageUser: boolean
+): ScheduleResult | undefined => {
+  const valid = batches.filter((item): item is ScheduleResult =>
+    !!item && Array.isArray(item.groups) && item.groups.length > 0 && (canManageUser || item.status === 'published')
+  )
+  if (!valid.length) return undefined
+  const unique: ScheduleResult[] = []
+  const seen = new Set<number | string>()
+  for (const item of valid) {
+    const key = item.versionId ?? `${item.campusScope || ''}-${item.generatedAt}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(item)
+  }
+  if (unique.length === 1) return unique[0]
+  return {
+    ...unique[0],
+    status: unique.every(item => item.status === 'published') ? 'published' : 'draft',
+    groups: unique.flatMap(item => item.groups),
+    conflicts: unique.flatMap(item => item.conflicts || []),
+    unassignedStudents: unique.flatMap(item => item.unassignedStudents || [])
+  }
+}
+
 export const summarizeScheduleOverview = (results: ScheduleResult[]) => {
   const generated = results.filter(isGeneratedResult)
   const latest = generated.reduce((max, result) => {

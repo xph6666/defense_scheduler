@@ -51,6 +51,7 @@ export function buildScheduleRules(defenseType: DefenseType, input: RuleConfig) 
     group_size: config.studentCount.target,
     group_min: config.studentCount.min,
     group_max: config.studentCount.max,
+    ...(defenseType === '中期答辩' && config.allowMidRemainderGroup === true ? { allow_mid_remainder_group: true } : {}),
     expert_count: config.expertCount.target,
     expert_min: config.expertCount.min,
     expert_count_includes_chair: true,

@@ -68,6 +68,10 @@
           <el-input-number v-else :model-value="5" disabled controls-position="right" class="w-full" />
         </el-form-item>
       </div>
+      <el-form-item v-if="form.defenseType === '中期答辩'" label="允许各校区安排尾组">
+        <el-switch v-model="form.allowMidRemainderGroup" />
+        <span class="ml-2 text-xs text-gray-500">凑不足 10 人时单独成组，并在结果中标记。</span>
+      </el-form-item>
       <template v-if="form.defenseType === '预答辩'">
         <el-form-item label="按校区设置专家人数"><el-switch v-model="campusCountsEnabled" /><span class="text-xs text-gray-500 ml-2">各校区共用教师日历，统一检查时间冲突。</span></el-form-item>
         <div v-if="campusCountsEnabled" class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -288,7 +292,7 @@ const handleExpertCountChange = (value: number | null | undefined) => {
   if (form.value.defenseType === '正式答辩' && (form.value.formalSoftwareMin || 0) > value) form.value.formalSoftwareMin = value
 }
 const expertGuidance = computed(() => form.value.defenseType === '中期答辩'
-  ? '中期答辩固定 5 位专家、10 名学生，导师不回避；不足 10 人的余数列为未安排'
+  ? `中期答辩每组 5 位专家，标准组 10 名学生，导师不回避。${form.value.allowMidRemainderGroup ? '各校区最多安排一个尾组' : '各校区不足 10 人的余数列为未安排'}`
   : form.value.defenseType === '正式答辩'
     ? '正式答辩固定 5 位专家，外院至多 1 位；主席优先教授或研究员，不足时按预答辩组长职称放宽并提示'
   : `${campusCountsEnabled.value ? Object.entries(form.value.campusExpertCounts || {}).map(([campus, count]) => `${campus} ${count} 位专家`).join('、') : `本阶段使用 ${form.value.expertCount.target} 位专家`}，组长须为正高；优先本院，尽量使外院少于本院。创新港与兴庆分开编排`)

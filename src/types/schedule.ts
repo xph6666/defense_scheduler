@@ -34,6 +34,7 @@ export interface ScheduleTeacher {
   isExternal?: boolean
   isActive?: boolean
   memberEligible?: boolean
+  expertOnly?: boolean
   isSoftwareTeacher?: boolean
 }
 

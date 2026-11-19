@@ -84,6 +84,7 @@ import type { Student } from '../types/student'
 import type { Teacher } from '../types/teacher'
 import { defenseLink, defenseTypes, isDefenseType } from '../utils/useDefenseType'
 import { useAdminGuard } from '../utils/adminGuard'
+import { mergeScheduleBatchResults } from '../utils/dashboardOverview'
 
 const route = useRoute()
 const router = useRouter()
@@ -192,14 +193,16 @@ async function load() {
     const [teacherRows, studentRows, ...scheduleRows] = await Promise.all([
       listTeachers(),
       listStudents(),
-      ...defenseTypes.map(type => getScheduleResults(type))
+      ...defenseTypes.flatMap(type => [
+        getScheduleResults(type, undefined, '创新港'),
+        getScheduleResults(type, undefined, '兴庆')
+      ])
     ])
     teachers.value = teacherRows as Teacher[]
     students.value = studentRows as Student[]
     results.value = Object.fromEntries(defenseTypes.flatMap((type, index) => {
-      const result = scheduleRows[index]
-      if (!result || (!canManage.value && result.status !== 'published')) return []
-      return [[type, result]]
+      const merged = mergeScheduleBatchResults([scheduleRows[index * 2], scheduleRows[index * 2 + 1]], canManage.value)
+      return merged ? [[type, merged]] : []
     }))
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '读取答辩进度失败，请重试。'

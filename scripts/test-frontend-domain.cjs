@@ -145,6 +145,8 @@ assert.ok(campusMetric(campusGroups.map(group => ({ ...group, campus: '' }))).un
 const { validateWizardRules } = load('src/utils/wizardValidation.ts')
 const midCampusConfig = { ...getDefaultRuleConfig('中期答辩'), startDate: '2026-10-12', endDate: '2026-10-20', campusStartDates: { '创新港': '2026-10-12', '兴庆': '2026-10-15' } }
 assert.deepEqual(buildScheduleRules('中期答辩', midCampusConfig).campus_start_dates, midCampusConfig.campusStartDates)
+assert.equal(buildScheduleRules('中期答辩', { ...midCampusConfig, allowMidRemainderGroup: true }).allow_mid_remainder_group, true)
+assert.equal(buildScheduleRules('预答辩', { ...midCampusConfig, allowMidRemainderGroup: true }).allow_mid_remainder_group, undefined)
 assert.equal(validateWizardRules(midCampusConfig).length, 0)
 assert.ok(validateWizardRules({ ...midCampusConfig, campusStartDates: { '兴庆': '2026-10-25' } }).some(error => error.includes('独立开始日期')))
 
@@ -235,13 +237,22 @@ repo.write([{ id: 2, name: '编辑后的资料' }])
 assert.equal(createMockRepository('demo_resources', []).read()[0].name, '编辑后的资料')
 localStorage.setItem('demo_resources', JSON.stringify([{ id: 1, name: '重置资料' }]))
 assert.equal(repo.read()[0].name, '重置资料', 'demo reset and CRUD read the same source')
-const { summarizeConflictOverview } = load('src/utils/dashboardOverview.ts')
+const { summarizeConflictOverview, mergeScheduleBatchResults } = load('src/utils/dashboardOverview.ts')
 const overview = summarizeConflictOverview([
   { defenseType: '预答辩', generatedAt: '2026-10-12', conflicts: [{ level: 'error' }] },
   { defenseType: '正式答辩', generatedAt: '2026-10-13', conflicts: [{ level: 'warning' }] }
 ])
 assert.equal(overview.errorCount, 1)
 assert.equal(overview.warningCount, 1, 'the dashboard counts conflicts from all current defense types')
+const combinedBatch = { versionId: 24, defenseType: '预答辩', generatedAt: '2026-11-13', status: 'draft', groups: [{ id: 1 }], conflicts: [{ id: 1, level: 'warning' }] }
+assert.equal(mergeScheduleBatchResults([combinedBatch, combinedBatch], true).groups.length, 1, 'combined batch queried per campus deduplicates by versionId')
+const cxgBatch = { versionId: 25, campusScope: '创新港', defenseType: '预答辩', generatedAt: '2026-11-19', status: 'published', groups: [{ id: 1 }], conflicts: [] }
+const xqBatch = { versionId: 26, campusScope: '兴庆', defenseType: '预答辩', generatedAt: '2026-11-19', status: 'draft', groups: [{ id: 2 }, { id: 3 }], conflicts: [{ id: 2, level: 'error' }] }
+const emptyBatch = { defenseType: '预答辩', generatedAt: '', groups: [], conflicts: [] }
+const mergedScoped = mergeScheduleBatchResults([cxgBatch, xqBatch], true)
+assert.equal(mergedScoped.groups.length, 3)
+assert.equal(mergedScoped.status, 'draft')
+assert.equal(mergeScheduleBatchResults([cxgBatch, emptyBatch], true).status, 'published', 'empty placeholder batch does not downgrade published status')
 console.log('Frontend domain checks passed: V2 policy, legacy migration, request isolation, safe PDF HTML, shared demo storage')
 
 const { summarizeParticipation } = load('src/utils/studentParticipation.ts')
@@ -285,11 +296,32 @@ assert.deepEqual(migratedCounts.studentCount, { target: 6, min: 5, max: 7 })
 assert(validateCommitteeRules({ ...getDefaultRuleConfig('预答辩'), studentCount: { target: 6, min: 4, max: 7 } }).some(message => message.includes('5～7')))
 console.log('Strict 5–7 student range and legacy configuration migration passed')
 
-const { isPreDefenseChairEligible } = load('src/domain/scheduleExperts.ts')
+const {
+  isPreDefenseChairEligible,
+  buildAdjustTimeOptions,
+  isChairOptionEligible,
+  isSecretaryOptionEligible
+} = load('src/domain/scheduleExperts.ts')
 for (const title of ['教授', '研究员', '正高', '正高级']) assert.equal(isPreDefenseChairEligible(title), true)
 for (const title of ['副教授', '副研究员', '讲师', '其他', '外院导师（职称待确认）']) assert.equal(isPreDefenseChairEligible(title), false)
 assert.equal(isPreDefenseChairEligible('副教授', 3), true)
 console.log('Pre-defense chair title eligibility passed')
+assert.deepEqual(buildAdjustTimeOptions(), ['09:00-12:00', '14:00-17:00'])
+assert.deepEqual(buildAdjustTimeOptions('09:00-12:00'), ['09:00-12:00', '14:00-17:00'])
+assert.deepEqual(buildAdjustTimeOptions('14:00-16:00'), ['09:00-12:00', '14:00-17:00', '14:00-16:00'])
+const researcher = { id: 1, title: '研究员', roles: ['组长', '普通专家'], isActive: true, expertOnly: false }
+const associateProf = { id: 2, title: '副教授', roles: ['组长', '普通专家'], isActive: true, expertOnly: false }
+const externalOnly = { id: 3, title: '教授', roles: ['普通专家'], isActive: true, expertOnly: true }
+const formalExpertResearcher = { id: 4, title: '研究员', roles: ['普通专家'], isActive: true, expertOnly: false }
+assert.equal(isChairOptionEligible(researcher, '中期答辩', 4), true)
+assert.equal(isChairOptionEligible(associateProf, '中期答辩', 4), false)
+assert.equal(isChairOptionEligible(associateProf, '中期答辩', 2), true)
+assert.equal(isChairOptionEligible(associateProf, '中期答辩', 4, 2), true, 'current chair always stays selectable for display')
+assert.equal(isChairOptionEligible(formalExpertResearcher, '正式答辩', 4), true)
+assert.equal(isChairOptionEligible(externalOnly, '正式答辩', 4), false)
+assert.equal(isSecretaryOptionEligible({ id: 5, title: '其他', roles: ['秘书'], isActive: true, expertOnly: false }), true)
+assert.equal(isSecretaryOptionEligible({ id: 6, title: '讲师', roles: ['秘书'], isActive: true, expertOnly: true }), false)
+console.log('Pre-defense chair title eligibility and adjust drawer option rules passed')
 
 const { buildMentorShares } = load('src/domain/mentorShares.ts')
 const { mentorColorSeparation } = load('src/domain/mentorColors.ts')

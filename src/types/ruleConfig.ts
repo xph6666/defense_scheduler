@@ -48,6 +48,7 @@ export interface RuleConfig {
   excludeDates?: string[]
   mentorAvoidance: boolean
   studentCount: StudentCountConfig
+  allowMidRemainderGroup?: boolean
   expertCount: ExpertCountConfig
   secretaryCount: number
   roleQualification: RoleQualificationConfig

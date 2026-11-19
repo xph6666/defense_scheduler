@@ -1,5 +1,6 @@
 """Schedule HTTP endpoints and frontend response presentation."""
 from django.db import transaction
+from django.db.models import F
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -7,9 +8,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
-from .models import Group, Room, ScheduleVersion, Student, Teacher
+from .models import Group, Room, ScheduleVersion, ScheduleWriteLock, Student, Teacher
 from .permissions import IsAdminUser, is_admin_user
-from .schedule_integrity import schedule_write, audit, capture_export_groups, export_groups
+from .schedule_integrity import schedule_write, audit, audit_version_summary, capture_export_groups, export_groups
 from .serializers import DEFENSE_TYPE_LABELS, ScheduleVersionSerializer
 from .services.schedules import ScheduleApplication
 from .services.time_data import validate_schedule_time_text
@@ -40,6 +41,7 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         'half_day_coverage': ('上午下午覆盖提示', 'warning'),
         'external_distribution': ('外院专家分布提示', 'warning'),
         'student_group_exception': ('学生分组人数提示', 'warning'),
+        'mid_remainder_group': ('中期答辩尾组', 'warning'),
         'mentor_student_imbalance': ('组内导师学生数不均衡', 'warning'),
         'mentor_share_exception': ('已解释的导师人数例外', 'info'),
         'chair_title_relaxed': ('主席职称放宽提示', 'warning'),
@@ -194,7 +196,6 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
 
     @action(detail=False, methods=['post'])
     @track_generation
-    @schedule_write
     def generate(self, request):
         rules = self._normalize_rules(request.data.get('rules', {}))
         try:
@@ -210,14 +211,33 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 if not self._rules_equivalent(previous.rules_snapshot, rules):
                     return Response({'error': '该请求标识已用于其他规则，请重新生成'}, status=409)
                 return Response(self._version_result(previous))
+        lock_before = ScheduleWriteLock.objects.filter(pk=1).values_list('revision', flat=True).first()
         try:
-            return Response(self._version_result(self.generate_version(rules, request_key or None)))
+            plan = self.compute_version_plan(rules)
         except ValueError as exc:
             return Response({'error': str(exc)}, status=400)
+        with transaction.atomic():
+            ScheduleWriteLock.objects.filter(pk=1).update(revision=F('revision') + 1)
+            if request_key:
+                previous = ScheduleVersion.objects.filter(request_key=request_key).first()
+                if previous:
+                    transaction.set_rollback(True)
+                    if not self._rules_equivalent(previous.rules_snapshot, rules):
+                        return Response({'error': '该请求标识已用于其他规则，请重新生成'}, status=409)
+                    return Response(self._version_result(previous))
+            lock_now = ScheduleWriteLock.objects.filter(pk=1).values_list('revision', flat=True).first()
+            if lock_before is not None and lock_now is not None and lock_now != lock_before + 1:
+                transaction.set_rollback(True)
+                return Response({'error': '排期生成期间基础资料或其他排期已变化，请重新生成'}, status=409)
+            version = self.persist_version_plan(plan, request_key or None)
+            payload = self._version_result(version)
+            audit(request, '生成', '完成排期操作：generate',
+                  group_ids=[], version_ids=[version.id], changes=request.data,
+                  before={}, after={str(version.id): audit_version_summary(version, payload)})
+            return Response(payload)
 
     @action(detail=False, methods=['post'], url_path='generate-linked')
     @track_generation
-    @schedule_write
     def generate_linked(self, request):
         """Generate both stages atomically, preserving the pre-defense grouping."""
         import hashlib
@@ -252,12 +272,42 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 ):
                     return Response({'error': '该请求标识已用于其他联合规则'}, status=409)
                 return Response({'pre': self._version_result(previous[0]), 'formal': self._version_result(previous[1])})
+        lock_before = ScheduleWriteLock.objects.filter(pk=1).values_list('revision', flat=True).first()
         try:
-            pre_version = self.generate_version(pre_rules, keys[0])
-            formal_version = self.generate_version(formal_rules, keys[1])
+            pre_plan = self.compute_version_plan(pre_rules)
         except ValueError as exc:
             return Response({'error': str(exc)}, status=400)
-        return Response({'pre': self._version_result(pre_version), 'formal': self._version_result(formal_version)})
+        with transaction.atomic():
+            ScheduleWriteLock.objects.filter(pk=1).update(revision=F('revision') + 1)
+            if key:
+                previous = [ScheduleVersion.objects.filter(request_key=k).first() for k in keys]
+                if any(previous):
+                    transaction.set_rollback(True)
+                    if not all(previous) or any(
+                        not self._rules_equivalent(v.rules_snapshot, r)
+                        for v, r in zip(previous, (pre_rules, formal_rules))
+                    ):
+                        return Response({'error': '该请求标识已用于其他联合规则'}, status=409)
+                    return Response({'pre': self._version_result(previous[0]), 'formal': self._version_result(previous[1])})
+            lock_now = ScheduleWriteLock.objects.filter(pk=1).values_list('revision', flat=True).first()
+            if lock_before is not None and lock_now is not None and lock_now != lock_before + 1:
+                transaction.set_rollback(True)
+                return Response({'error': '排期生成期间基础资料或其他排期已变化，请重新生成'}, status=409)
+            try:
+                pre_version = self.persist_version_plan(pre_plan, keys[0])
+                formal_version = self.generate_version(formal_rules, keys[1])
+            except ValueError as exc:
+                transaction.set_rollback(True)
+                return Response({'error': str(exc)}, status=400)
+            pre_payload = self._version_result(pre_version)
+            formal_payload = self._version_result(formal_version)
+            audit(request, '生成', '完成排期操作：generate_linked',
+                  group_ids=[], version_ids=[pre_version.id, formal_version.id], changes=request.data,
+                  before={}, after={
+                      str(pre_version.id): audit_version_summary(pre_version, pre_payload),
+                      str(formal_version.id): audit_version_summary(formal_version, formal_payload),
+                  })
+            return Response({'pre': pre_payload, 'formal': formal_payload})
 
     @action(detail=False, methods=['get'], url_path='generation-progress')
     def generation_progress(self, request):
@@ -304,7 +354,8 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
     def _selected_version(self, request, defense_type):
         from rest_framework.exceptions import ValidationError
         queryset = ScheduleVersion.objects.filter(defense_type=defense_type)
-        if not is_admin_user(request.user):
+        admin = is_admin_user(request.user)
+        if not admin:
             queryset = queryset.filter(status='published')
         version_id = request.query_params.get('version_id') or request.data.get('version_id')
         if version_id:
@@ -312,9 +363,19 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
                 return queryset.filter(pk=int(version_id)).first()
             except (ValueError, TypeError):
                 raise ValidationError('版本 ID 格式不正确')
-        if request.query_params.get('campus_scope'):
-            queryset = queryset.filter(campus_scope=request.query_params['campus_scope'])
-        return queryset.filter(is_current=True).first() if is_admin_user(request.user) else queryset.first()
+        campus_scope = request.query_params.get('campus_scope')
+        if campus_scope:
+            scoped = queryset.filter(campus_scope=campus_scope)
+            selected = scoped.filter(is_current=True).first() if admin else scoped.first()
+            if selected:
+                return selected
+            combined = queryset.filter(campus_scope='')
+            if admin:
+                return combined.filter(is_current=True).first()
+            if not queryset.exclude(campus_scope='').exists():
+                return combined.first()
+            return None
+        return queryset.filter(is_current=True).first() if admin else queryset.first()
 
     # [TASK-P09/P12 修改] 实时及冻结版本响应补足评分和版本化导出所需字段。
     def _version_result(self, schedule_version):
@@ -967,5 +1028,6 @@ class ScheduleViewSet(ScheduleApplication, GenericViewSet):
         version.revision += 1
         version.save(update_fields=['status', 'published_at', 'revision'])
         self._freeze_version(version)
-        audit(request, '发布', f'发布 {version.defense_type} v{version.version}', version_id=version.id)
+        audit(request, '发布', f'发布 {version.defense_type} v{version.version}',
+              version_id=version.id, version_ids=[version.id])
         return Response(self._version_result(version))

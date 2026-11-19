@@ -25,6 +25,9 @@ def normalize_schedule_rules(raw):
     version = rules.setdefault('policy_version', 1 if 'expert_count' in raw else 4)
     if isinstance(version, bool) or not isinstance(version, int) or version not in (1, 2, 3, 4):
         raise ValidationError('不支持的规则版本')
+    if 'allow_mid_remainder_group' in rules and (defense_type != 'mid' or version < 4
+            or not isinstance(rules['allow_mid_remainder_group'], bool)):
+        raise ValidationError('允许校区尾组仅适用于新版中期答辩，且必须为布尔值')
     from scheduling.policies import validate_campus_expert_counts
     try:
         campus_counts = validate_campus_expert_counts(rules.get('campus_expert_counts', {}), defense_type, version)

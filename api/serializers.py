@@ -117,6 +117,9 @@ def validate_rule_config(config):
     target = parse_non_negative_int(experts['target'], 'expertCount.target')
     minimum = parse_non_negative_int(experts['min'], 'expertCount.min')
     latest = config.get('policyVersion', 2) >= 4
+    if 'allowMidRemainderGroup' in config and (defense_type != 'mid' or not latest
+            or not isinstance(config['allowMidRemainderGroup'], bool)):
+        raise serializers.ValidationError({'allowMidRemainderGroup': ['允许校区尾组仅适用于新版中期答辩，且必须为布尔值']})
     try:
         validate_campus_expert_counts(config.get('campusExpertCounts', {}), defense_type, config.get('policyVersion', 2))
     except ValueError as exc:

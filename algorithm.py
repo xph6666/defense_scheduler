@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date
 from math import ceil
@@ -130,7 +131,8 @@ def generate_schedule(
     external_supervisor_ids = {teacher.id for teacher in parsed_teachers if teacher.is_external}
     grouped_students = build_student_groups(parsed_students, rules, external_supervisor_ids, parsed_teachers)
     unassigned_students = []
-    if rules.get('policy_version', 1) >= 4 and rules.get('defense_type') == 'mid':
+    mid_remainders = allows_mid_remainder_group(rules)
+    if is_policy4_mid(rules) and not mid_remainders:
         unassigned_students = [dict(id=s.id, name=s.name,
             reason=f'{s.campus or "未填校区"}剩余学生不足 10 人，无法组成中期答辩小组，请核对名单')
             for batch in grouped_students if len(batch) != 10 for s in batch]
@@ -208,7 +210,8 @@ def generate_schedule(
             campus=campus,
             student_ids=[s.id for s in student_batch],
         )
-        conflicts.extend(check_group_size(group.group_id, len(student_batch), rules))
+        if not mid_remainders:
+            conflicts.extend(check_group_size(group.group_id, len(student_batch), rules))
 
         # Build a reviewable personnel draft even before rooms/times exist.
         chair, experts, secretary, personnel_notices = assign_teachers(
@@ -422,6 +425,10 @@ def is_policy4_mid(rules: Dict[str, Any]) -> bool:
     return int(rules.get("policy_version", 1) or 1) >= 4 and rules.get("defense_type") == "mid"
 
 
+def allows_mid_remainder_group(rules: Dict[str, Any]) -> bool:
+    return is_policy4_mid(rules) and rules.get('allow_mid_remainder_group') is True
+
+
 def parse_excluded_dates(rules: Dict[str, Any]) -> set:
     """解析规则中的排除日期（法定节假日等），格式非法的条目忽略。"""
     excluded = set()
@@ -503,7 +510,9 @@ def build_student_groups(
         cohorts = {}
         for student in sorted(students, key=lambda s: (s.campus or '', s.id)):
             cohorts.setdefault(student.campus, []).append(student)
-        return [batch[i:i + 10] for batch in cohorts.values() for i in range(0, len(batch), 10)]
+        batches = [batch[i:i + target_size] for batch in cohorts.values() for i in range(0, len(batch), target_size)]
+        # Staff and time the standard groups first so tails don't move them.
+        return sorted(batches, key=lambda batch: len(batch) < target_size) if allows_mid_remainder_group(rules) else batches
     min_size = int(rules.get("group_min", 0) or 0)
     max_size = int(rules.get("group_max", 0) or 0)
     grouping = str(rules.get("grouping") or "")
@@ -729,7 +738,10 @@ def iter_slot_room_candidates(group, rooms, candidate_slots, room_busy, rules):
     preferred = sorted(rooms, key=lambda r: int(bool(group.campus and r.campus != group.campus)))
     campus_start = (rules.get('campus_start_dates') or {}).get(group.campus, rules['start_date'])
     first_allowed_day = datetime.strptime(campus_start, DATE_FMT).date()
+    same_campus_only = is_policy4_mid(rules)
     for room in preferred:
+        if same_campus_only and room.campus != group.campus:
+            continue
         if room.raw.get('capacity') is not None and int(room.raw['capacity']) < required_capacity:
             continue
         for slot in parse_room_available_slots(room, rules, candidate_slots):
@@ -1217,6 +1229,12 @@ def detect_global_conflicts(
     teacher_map = {t.id: t for t in teachers}
     student_map = {s.id: s for s in students}
     room_map = {r.id: r for r in rooms}
+    policy4_mid = is_policy4_mid(rules)
+    allow_remainders = allows_mid_remainder_group(rules)
+    if allow_remainders:
+        group_size = int(rules.get('group_size', 10) or 10)
+        campus_totals = Counter(s.campus for s in students)
+        short_groups = Counter(g.campus for g in drafts if len(g.student_ids) < group_size)
 
     # Shared by generation, manual-edit validation and publication.
     seen_students = {}
@@ -1224,7 +1242,19 @@ def detect_global_conflicts(
         def report(kind, message, **extra):
             conflicts.append(make_conflict(kind, f'{draft.group_id} {message}', [draft.group_id], **extra))
 
-        conflicts.extend(check_group_size(draft.group_id, len(draft.student_ids), rules))
+        size = len(draft.student_ids)
+        if (allow_remainders and 0 < size < group_size and short_groups[draft.campus] == 1
+                and size == campus_totals[draft.campus] % group_size):
+            report('mid_remainder_group', f'{draft.campus}中期尾组共有 {size} 名学生，标准组为 {group_size} 人')
+        else:
+            conflicts.extend(check_group_size(draft.group_id, size, rules))
+        if policy4_mid:
+            if not draft.campus or any(student_map[sid].campus != draft.campus
+                                       for sid in draft.student_ids if sid in student_map):
+                report('student_campus_mismatch', '中期答辩学生须在所属校区参加')
+            group_room = room_map.get(draft.room_id)
+            if group_room is not None and group_room.campus != draft.campus:
+                report('student_campus_mismatch', '中期答辩教室须位于本组校区')
         conflicts.extend(committee_violations(draft, teachers, rules))
         for sid in draft.student_ids:
             if sid not in student_map:
